@@ -1,5 +1,14 @@
+const TOKEN_KEY = "agent_access_token";
+
+function getAuthHeaders() {
+  const headers = {};
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
 async function fetchJson(path) {
-  const res = await fetch(path);
+  const res = await fetch(path, { headers: getAuthHeaders() });
   if (!res.ok) throw new Error(`${path} ${res.status}`);
   return res.json();
 }

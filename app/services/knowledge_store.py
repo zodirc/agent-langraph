@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.config.settings import settings
-from app.services.db import postgres_connection, uses_postgres
+from app.services.db import ensure_embedding_meta_table, postgres_connection, uses_postgres
 from app.services.embedding_service import embed_text
 
 logger = logging.getLogger(__name__)
@@ -214,6 +214,8 @@ class KnowledgeStore:
         self.vector_path = vector_path or settings.VECTORSTORE_PATH
         if not uses_postgres():
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        else:
+            ensure_embedding_meta_table()
         self._init_db()
         self._vector: Optional[Any] = None
         backend = settings.KNOWLEDGE_BACKEND.lower()
@@ -402,7 +404,14 @@ class KnowledgeStore:
         return self.keyword_search(query, top_k=top_k)
 
     def load_embedding_meta(self) -> Optional[dict[str, Any]]:
-        row = self._fetchone("SELECT * FROM embedding_meta WHERE id = 1")
+        try:
+            row = self._fetchone("SELECT * FROM embedding_meta WHERE id = 1")
+        except Exception as exc:
+            logger.warning(
+                "embedding_meta load failed (%s), skipping stored meta",
+                exc,
+            )
+            return None
         if not row:
             return None
         return {
@@ -428,53 +437,62 @@ class KnowledgeStore:
             payload["version"],
             payload.get("created_at") or "",
         )
-        if uses_postgres():
-            with postgres_connection() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO embedding_meta (id, model_name, dimension, distance_metric, version, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (id) DO UPDATE SET
-                        model_name = EXCLUDED.model_name,
-                        dimension = EXCLUDED.dimension,
-                        distance_metric = EXCLUDED.distance_metric,
-                        version = EXCLUDED.version,
-                        created_at = EXCLUDED.created_at
-                    """,
-                    params,
-                )
-        else:
-            with self._connect() as conn:
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO embedding_meta
-                    (id, model_name, dimension, distance_metric, version, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    params,
-                )
-                conn.commit()
+        try:
+            if uses_postgres():
+                with postgres_connection() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO embedding_meta (id, model_name, dimension, distance_metric, version, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (id) DO UPDATE SET
+                            model_name = EXCLUDED.model_name,
+                            dimension = EXCLUDED.dimension,
+                            distance_metric = EXCLUDED.distance_metric,
+                            version = EXCLUDED.version,
+                            created_at = EXCLUDED.created_at
+                        """,
+                        params,
+                    )
+            else:
+                with self._connect() as conn:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO embedding_meta
+                        (id, model_name, dimension, distance_metric, version, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        params,
+                    )
+                    conn.commit()
+        except Exception as exc:
+            logger.warning("embedding_meta save failed (%s)", exc)
 
     def _check_embedding_compatibility(self) -> None:
-        from app.services.embedding_meta import (
-            get_current_embedding_meta,
-            meta_from_dict,
-            record_incompatibility,
-            validate_index_compatibility,
-        )
+        try:
+            from app.services.embedding_meta import (
+                get_current_embedding_meta,
+                meta_from_dict,
+                record_incompatibility,
+                validate_index_compatibility,
+            )
 
-        current = get_current_embedding_meta()
-        stored_raw = self.load_embedding_meta()
-        if stored_raw is None:
-            self.save_embedding_meta(current)
-            return
-        stored = meta_from_dict(stored_raw)
-        if not validate_index_compatibility(stored, current):
-            record_incompatibility(stored, current)
-            if settings.EMBEDDING_AUTO_REINDEX:
-                from app.services.embedding_reindex import reindex_collection
+            current = get_current_embedding_meta()
+            stored_raw = self.load_embedding_meta()
+            if stored_raw is None:
+                self.save_embedding_meta(current)
+                return
+            stored = meta_from_dict(stored_raw)
+            if not validate_index_compatibility(stored, current):
+                record_incompatibility(stored, current)
+                if settings.EMBEDDING_AUTO_REINDEX:
+                    from app.services.embedding_reindex import reindex_collection
 
-                reindex_collection(self)
+                    reindex_collection(self)
+        except Exception as exc:
+            logger.warning(
+                "embedding compatibility check failed, continuing retrieval: %s",
+                exc,
+            )
 
     def _normalize_hits(self, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []

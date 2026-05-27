@@ -48,11 +48,14 @@ def test_outcome_required_after_write_outline(outline_state):
 
 
 def test_outcome_not_required_without_steer_watch(outline_state):
-    payload = dict(outline_state["input_payload"])
-    payload.pop("steer_applied_at", None)
-    payload.pop("steer_watch_outcome", None)
-    payload.pop("mission_intervention", None)
-    state = merge_state(outline_state, input_payload=payload)
+    state = merge_state(
+        outline_state,
+        input_payload={
+            "steer_applied_at": None,
+            "steer_watch_outcome": False,
+            "mission_intervention": None,
+        },
+    )
     item = {"id": "wi-1", "kind": "write_outline", "title": "write_outline"}
     assert steer_outcome_confirmation_required(state, item) is False
 
@@ -68,7 +71,7 @@ def test_apply_outcome_sets_pending(outline_state):
     item = {"id": "wi-1", "kind": "write_outline", "title": "write_outline"}
     updated = apply_outcome_confirmation_after_work_item(outline_state, item)
     assert steer_outcome_confirmation_pending(updated["input_payload"])
-    assert updated.get("final_answer")
+    assert not (updated.get("final_answer") or "").strip()
 
 
 def test_confirm_clears_pending(outline_state):

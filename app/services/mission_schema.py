@@ -336,6 +336,12 @@ def apply_mission_step_to_payload(state: AgentState) -> dict[str, Any]:
     intent = resolve_writing_intent_for_step(
         merge_state(state, input_payload=payload), mission=mission
     )
+    from app.services.mission.step_reconcile import reconcile_writing_intent
+
+    intent = reconcile_writing_intent(
+        merge_state(state, input_payload=payload, manuscript=state.get("manuscript")),
+        intent,
+    )
     payload["writing_intent"] = intent
     payload["novel_filename"] = policy.body_artifact
     payload["outline_filename"] = policy.outline_artifact

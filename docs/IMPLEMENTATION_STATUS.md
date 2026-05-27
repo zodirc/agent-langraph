@@ -160,7 +160,9 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 | 输出保留 `MISSION_PAUSED` | ✅ | `output_node._resolve_output_status` |
 | Web steer + 输入不禁用 | ✅ | `POST .../steer`；`web/static/app.js` |
 | Steer intent 确认（规划后、执行前） | ✅ | `mission_steer_confirm.py`；`planning_node` |
-| Steer outcome 确认（工作项后、节选） | ✅ | `mission_steer_outcome_confirm.py`；`mission_observe_node` |
+| Steer outcome 确认（工作项后、节选） | ✅ | `confirmation/` 预览策略 + `mission_steer_outcome_confirm.py`；见 [`CONFIRMATION_GATES.md`](CONFIRMATION_GATES.md) |
+| Steer replan / work_plan SSOT | ✅ | `mission/steer_replan.py`；planning `work_plan_patch` |
+| 预览策略（head/tail/diff/delta） | ✅ | `confirmation/preview_resolver.py`；`config.confirmation_gates` |
 | 结构化批准 `confirm:true` | ✅ | `resume` / `steer` API；`steer_confirmation_actions.py`；无 NL 短语表 |
 | Steer payload 持久化 | ✅ | `state_store._PAYLOAD_VOLATILE_KEYS` |
 | Steer 优先级 / 抢占提示 | ✅ | `POST /tasks/{id}/steer` 支持 `priority`/`preempt`；写作生成前 best-effort 收敛 |

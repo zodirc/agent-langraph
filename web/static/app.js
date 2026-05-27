@@ -26,6 +26,10 @@ let writingStreamFilename = "";
 /** @type {{ headerEl: HTMLElement, panelEl: HTMLElement, bodyEl: HTMLElement, filename: string } | null} */
 let activeWritingBlock = null;
 let contentBlockSeq = 0;
+/** Dedupe steer confirm panels within one stream or /confirm turn */
+const shownConfirmationKeys = new Set();
+/** Chars streamed via writing_delta this turn — skip redundant outcome artifact panel */
+let writingStreamCharsThisTurn = 0;
 const WRITING_STREAM_MAX_CHARS = 200000;
 const FILE_PREVIEW_BOX_MIN_CHARS = 64;
 const TRACE_MAX_LINES = 400;
@@ -130,6 +134,8 @@ function clearScreen() {
   resetThinkingStream();
   resetWritingStream();
   contentBlockSeq = 0;
+  shownConfirmationKeys.clear();
+  writingStreamCharsThisTurn = 0;
 }
 
 function getAuthHeaders() {
@@ -248,6 +254,7 @@ function resetWritingStream() {
   writingFlushScheduled = false;
   writingTraceHintShown = false;
   activeWritingBlock = null;
+  writingStreamCharsThisTurn = 0;
 }
 
 /**
@@ -415,6 +422,7 @@ function appendWritingDelta(text, payload = {}) {
   if (room <= 0) return;
   const slice = text.length > room ? text.slice(0, room) : text;
   writingPendingText += slice;
+  writingStreamCharsThisTurn += slice.length;
   scheduleWritingFlush();
 }
 
@@ -491,7 +499,6 @@ function setRunning(value) {
     startRunTimer();
   } else {
     stopRunTimer();
-    activeTaskId = null;
   }
 }
 
@@ -660,15 +667,9 @@ async function runAutonomousUi(autonomousUi, taskId) {
     return;
   }
   if (behavior === "auto_resume_step" || behavior === "resume_after_steer") {
-    const data = await resumeMissionOnce(taskId, {
+    await runResumeStream(taskId, {
       confirm: Boolean(autonomousUi.resume_confirm),
     });
-    if (data) {
-      appendLine(`autonomous resume → ${data.status}`, "system");
-      if (data.final_answer) {
-        appendFileContentBlock("── resume result ──", data.final_answer);
-      }
-    }
   }
 }
 
@@ -710,40 +711,125 @@ function formatStructuredConfirmHint(confirmation, confirmationActions) {
   );
 }
 
-function appendSteerIntentConfirmPanel(confirmation, confirmationActions) {
-  if (!confirmation || typeof confirmation !== "object") return;
-  const summary = String(confirmation.summary_text || "").trim();
-  if (!summary) return;
-
-  const panel = document.createElement("div");
-  panel.className = "steer-confirm-panel";
-  panel.setAttribute("data-steer-confirm", "1");
-
-  const title = document.createElement("h3");
-  const panelTitle = confirmation.display?.title || "steer_intent_confirmation";
-  title.textContent = `── ${panelTitle} ──`;
-  panel.appendChild(title);
-
-  const body = document.createElement("pre");
-  body.textContent = summary;
-  panel.appendChild(body);
-
-  const hint = document.createElement("p");
-  hint.className = "hint";
-  hint.textContent = formatStructuredConfirmHint(confirmation, confirmationActions);
-  panel.appendChild(hint);
-
-  outputEl.appendChild(panel);
+function renderConfirmationSection(section) {
+  if (!section || typeof section !== "object") return null;
+  switch (section.type) {
+    case "text":
+      return { kind: "pre", text: String(section.content || "") };
+    case "artifact": {
+      const fname = section.filename || "artifact";
+      const mode = section.preview_mode ? ` · ${section.preview_mode}` : "";
+      const trunc = section.truncated ? "（节选）" : "";
+      return {
+        kind: "file",
+        title: `── ${fname}${mode}${trunc} ──`,
+        text: String(section.content || ""),
+        panelClass: "steer-outcome-panel file-panel",
+      };
+    }
+    case "queue": {
+      const items = section.items || [];
+      if (!items.length) return null;
+      const lines = items.map(
+        (i) => `- [${i.status || "pending"}] ${i.title || i.kind || i.id || "?"}`
+      );
+      return { kind: "pre", text: `执行队列：\n${lines.join("\n")}` };
+    }
+    case "impact": {
+      const ops = section.operations || [];
+      if (!ops.length) return null;
+      const lines = ops.map((o) => {
+        let line = `- ${o.op || "?"}`;
+        if (o.artifact) line += `: ${o.artifact}`;
+        if (o.work_item_id) line += `: ${o.work_item_id}`;
+        if (o.kind) line += ` (${o.kind})`;
+        return line;
+      });
+      return { kind: "pre", text: `影响范围：\n${lines.join("\n")}` };
+    }
+    case "intervention": {
+      const parts = [];
+      if (section.action) parts.push(`动作: ${section.action}`);
+      if (section.force) parts.push("(强制覆盖 step_policy)");
+      if (section.reason) parts.push(String(section.reason));
+      if (!parts.length) return null;
+      return { kind: "pre", text: parts.join(" ") };
+    }
+    default:
+      return null;
+  }
 }
 
-function appendSteerOutcomeConfirmPanel(confirmation, confirmationActions) {
+function confirmationDedupeKey(confirmation) {
+  if (!confirmation || typeof confirmation !== "object") return "";
+  const phase = String(confirmation.phase || "unknown");
+  const wid = confirmation.work_item_id || confirmation.work_item_kind || "";
+  return `${phase}:${wid}`;
+}
+
+function gatePendingOnPayload(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  return Boolean(
+    payload.steer_intent_pending_confirm || payload.steer_outcome_pending_confirm
+  );
+}
+
+function renderSteerGateFromPayload(payload) {
+  if (!payload || typeof payload !== "object") return;
+  if (payload.steer_intent_pending_confirm && payload.steer_intent_confirmation) {
+    appendSteerIntentConfirmPanel(
+      payload.steer_intent_confirmation,
+      payload.confirmation_actions
+    );
+  }
+  if (
+    payload.steer_outcome_pending_confirm &&
+    payload.steer_outcome_confirmation &&
+    !payload.steer_review_only
+  ) {
+    appendSteerOutcomeConfirmPanel(
+      payload.steer_outcome_confirmation,
+      payload.confirmation_actions
+    );
+  }
+}
+
+function appendConfirmationBlock(confirmation, confirmationActions, panelClass) {
   if (!confirmation || typeof confirmation !== "object") return;
+  const dedupeKey = confirmationDedupeKey(confirmation);
+  if (dedupeKey && shownConfirmationKeys.has(dedupeKey)) return;
+  if (dedupeKey) shownConfirmationKeys.add(dedupeKey);
+
+  const sections = Array.isArray(confirmation.sections) ? confirmation.sections : [];
   const summary = String(confirmation.summary_text || "").trim();
   const excerpt = String(confirmation.artifact_excerpt || "").trim();
-  const fname = String(confirmation.artifact_filename || "outline.txt");
-  if (!summary && !excerpt) return;
+  if (!summary && !excerpt && !sections.length) return;
 
-  if (excerpt) {
+  const phase = String(confirmation.phase || "");
+  const skipArtifactPreview =
+    phase === "outcome" && writingStreamCharsThisTurn > 400;
+
+  for (const section of sections) {
+    if (skipArtifactPreview && section.type === "artifact") continue;
+    const rendered = renderConfirmationSection(section);
+    if (!rendered) continue;
+    if (rendered.kind === "file" && rendered.text) {
+      appendFileContentBlock(rendered.title, rendered.text, {
+        panelClass: rendered.panelClass || "file-panel",
+        bodyClass: "file-content",
+      });
+    } else if (rendered.kind === "pre" && rendered.text) {
+      const prePanel = document.createElement("div");
+      prePanel.className = panelClass;
+      const pre = document.createElement("pre");
+      pre.textContent = rendered.text;
+      prePanel.appendChild(pre);
+      outputEl.appendChild(prePanel);
+    }
+  }
+
+  if (!sections.length && excerpt && !skipArtifactPreview) {
+    const fname = String(confirmation.artifact_filename || "outline.txt");
     appendFileContentBlock(`── 执行结果 · ${fname}（待批准节选）──`, excerpt, {
       panelClass: "steer-outcome-panel file-panel",
       bodyClass: "file-content",
@@ -751,15 +837,15 @@ function appendSteerOutcomeConfirmPanel(confirmation, confirmationActions) {
   }
 
   const panel = document.createElement("div");
-  panel.className = "steer-outcome-panel";
-  panel.setAttribute("data-steer-outcome", "1");
+  panel.className = panelClass;
+  panel.setAttribute("data-steer-confirm", "1");
 
   const title = document.createElement("h3");
-  const panelTitle = confirmation.display?.title || "steer_outcome_confirmation";
+  const panelTitle = confirmation.display?.title || "steer_confirmation";
   title.textContent = `── ${panelTitle} ──`;
   panel.appendChild(title);
 
-  if (summary) {
+  if (summary && (!sections.length || sections.every((s) => s.type !== "text"))) {
     const body = document.createElement("pre");
     body.textContent = summary;
     panel.appendChild(body);
@@ -773,6 +859,14 @@ function appendSteerOutcomeConfirmPanel(confirmation, confirmationActions) {
   outputEl.appendChild(panel);
 }
 
+function appendSteerIntentConfirmPanel(confirmation, confirmationActions) {
+  appendConfirmationBlock(confirmation, confirmationActions, "steer-confirm-panel");
+}
+
+function appendSteerOutcomeConfirmPanel(confirmation, confirmationActions) {
+  appendConfirmationBlock(confirmation, confirmationActions, "steer-outcome-panel");
+}
+
 async function resumeMissionOnce(taskId, { confirm = false } = {}) {
   const res = await fetch(`/tasks/${taskId}/resume`, {
     method: "POST",
@@ -784,6 +878,38 @@ async function resumeMissionOnce(taskId, { confirm = false } = {}) {
     return null;
   }
   return res.json();
+}
+
+/** Resume mission with SSE (progress, writing_delta, gates) — preferred for Web CLI. */
+async function runResumeStream(taskId, { confirm = false } = {}) {
+  if (running) {
+    appendLine("已有任务在运行，请稍候", "error");
+    return null;
+  }
+  setRunning(true);
+  shownConfirmationKeys.clear();
+  writingStreamCharsThisTurn = 0;
+  appendLine(`> /resume${confirm ? " confirm" : ""}`, "user");
+  try {
+    const res = await fetch(`/tasks/${taskId}/resume/stream`, {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ confirm: Boolean(confirm) }),
+    });
+    if (!res.ok || !res.body) {
+      appendLine(`resume stream failed: ${res.status} ${await res.text()}`, "error");
+      return null;
+    }
+    const taskIdRef = { id: taskId };
+    activeTaskId = taskId;
+    await consumeSseStream(res, taskIdRef);
+    return { task_id: taskIdRef.id || taskId };
+  } catch (err) {
+    appendLine(`resume stream error: ${err}`, "error");
+    return null;
+  } finally {
+    setRunning(false);
+  }
 }
 
 function formatOrchestration(summary, detail) {
@@ -901,22 +1027,6 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
     appendLine(`reject:  /reject ${payload.task_id}`, "system");
   } else if (eventType === "mission_paused") {
     appendSystemLines(payload.system_lines);
-    if (payload.steer_intent_pending_confirm && payload.steer_intent_confirmation) {
-      appendSteerIntentConfirmPanel(
-        payload.steer_intent_confirmation,
-        payload.confirmation_actions
-      );
-    }
-    if (
-      payload.steer_outcome_pending_confirm &&
-      payload.steer_outcome_confirmation &&
-      !payload.steer_review_only
-    ) {
-      appendSteerOutcomeConfirmPanel(
-        payload.steer_outcome_confirmation,
-        payload.confirmation_actions
-      );
-    }
     if (
       payload.autonomous_ui?.enabled &&
       !payload.steer_outcome_pending_confirm &&
@@ -927,19 +1037,9 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
   } else if (eventType === "error") {
     appendLine(payload.detail, "error");
   } else if (eventType === "done") {
-    const showOutcomePanel =
-      payload.steer_outcome_pending_confirm &&
-      payload.steer_outcome_confirmation &&
-      !payload.steer_review_only;
-    const showIntentPanel =
-      payload.steer_intent_pending_confirm && payload.steer_intent_confirmation;
-    if (showIntentPanel) {
-      appendSteerIntentConfirmPanel(
-        payload.steer_intent_confirmation,
-        payload.confirmation_actions
-      );
-    }
-    if (payload.final_answer) {
+    const gatePending = gatePendingOnPayload(payload);
+    renderSteerGateFromPayload(payload);
+    if (payload.final_answer && !gatePending) {
       const finalText = String(payload.final_answer);
       if (answerStreamEl && finalText.length >= answerStreamText.length) {
         setAnswerStreamText(finalText);
@@ -950,14 +1050,16 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
           appendLine(finalText, "result");
         }
       }
-    } else if (!answerStreamEl) {
+    } else if (!gatePending && !answerStreamEl) {
       appendLine(`done: ${payload.status}`, "system");
-    }
-    if (showOutcomePanel) {
-      appendSteerOutcomeConfirmPanel(
-        payload.steer_outcome_confirmation,
-        payload.confirmation_actions
-      );
+    } else if (gatePending) {
+      appendLine(`done: ${payload.status} — 待批准（见上方确认面板，/confirm 继续）`, "system");
+      if (answerStreamEl && answerStreamText.trim()) {
+        appendLine(
+          "  （上方「回答（流式）」为预览，正式结果以确认面板为准；批准后继续执行）",
+          "system"
+        );
+      }
     }
   }
 }
@@ -1120,6 +1222,8 @@ function buildTaskRequestBody(goal, riskLevel = "LOW") {
 
 async function runTaskStream(goal, riskLevel = "LOW", endpoint = "/tasks/stream", body = null) {
   setRunning(true);
+  shownConfirmationKeys.clear();
+  writingStreamCharsThisTurn = 0;
   appendLine(`> ${goal}`, "user");
   const requestBody = body || buildTaskRequestBody(goal, riskLevel);
   if (!body && isLongformMissionEnabled()) {
@@ -1198,14 +1302,7 @@ async function handleCommand(raw) {
   }
   if (text === "/confirm") {
     const taskId = activeTaskId || getSessionId();
-    appendLine("> /confirm", "user");
-    const data = await resumeMissionOnce(taskId, { confirm: true });
-    if (data) {
-      appendLine(`resume(confirm) → ${data.status}`, "system");
-      if (data.final_answer) {
-        appendFileContentBlock("── 执行结果 ──", data.final_answer);
-      }
-    }
+    await runResumeStream(taskId, { confirm: true });
     return;
   }
   if (text === "/session") {

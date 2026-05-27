@@ -288,11 +288,11 @@ Runtime 只依赖 `ManuscriptService` 接口，不依赖中文正则。
 | 阶段 | 时机 | 状态字段 | 用户动作 |
 |------|------|----------|----------|
 | **Intent（理解）** | planning 解读 steer 之后、`mission_act` 重操作之前 | `steer_intent_pending_confirm`、`steer_intent_confirmation` | 结构化批准（§11.3） |
-| **Outcome（结果）** | 实质性工作项完成且无失败（如 `write_outline`、`edit_plot`）之后 | `steer_outcome_pending_confirm`、`steer_outcome_confirmation` | 同上；节选见 confirmation 块内 `artifact_excerpt` |
+| **Outcome（结果）** | 实质性工作项完成且无失败（如 `write_outline`、`edit_plot`、`append_*` 打断）之后 | `steer_outcome_pending_confirm`、`steer_outcome_confirmation` | 同上；预览见 `sections[]` / `artifact_excerpt`（策略见 [`CONFIRMATION_GATES.md`](CONFIRMATION_GATES.md)） |
 
 未批准前：`progress_evaluator` 返回 `MISSION_PAUSED`；`mission_act` 不继续写正文。`autonomous` 在任一门闸 pending 时 **不** 自动 `resume`。
 
-实现：`app/services/mission_steer_confirm.py`、`app/services/mission_steer_outcome_confirm.py`、`app/nodes/mission_observe_node.py`。
+实现：`app/services/confirmation/`（gate / preview / block_builder）、`mission_steer_confirm.py`、`mission_steer_outcome_confirm.py`、`mission/steer_replan.py`、`mission_observe_node.py`。
 
 ### 11.3 结构化批准 API（不用自然语言口令）
 

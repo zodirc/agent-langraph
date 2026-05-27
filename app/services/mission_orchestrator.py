@@ -297,6 +297,15 @@ def work_item_to_writing_intent(
             "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)),
             "chapter_index": int(params.get("chapter_index") or 1),
         }
+    if kind == "reset_body":
+        return {
+            **base,
+            "action": "reset_body",
+            "target_chars": int(params.get("target_chars") or policy.chars_per_step),
+            "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)),
+            "chapter_index": 1,
+            "require_read_first": bool(params.get("require_read_first", True)),
+        }
     if kind == "edit_plot":
         return {
             **base,

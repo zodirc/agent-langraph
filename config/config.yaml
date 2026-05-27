@@ -201,6 +201,51 @@ mission:
   orchestration_min_chars: 8000      # auto decompose long writing missions into work items
   llm_decide: ${MISSION_LLM_DECIDE:false}
 
+# Steer intent/outcome confirmation gates (see docs/CONFIRMATION_GATES.md)
+confirmation_gates:
+  enabled: true
+  excerpt_max_chars: 4500
+  delta_max_chars: 2000
+  material_intervention_actions:
+    - rewrite_outline
+    - reset_body
+    - edit_plot
+    - review_outline
+    - enqueue_work
+  outcome_work_item_kinds:
+    - write_outline
+    - edit_plot
+    - reset_body
+    - append_body
+    - append_chapter
+    - write_body
+  intervention_watch_actions:
+    - rewrite_outline
+    - reset_body
+    - edit_plot
+  preview_defaults:
+    write_outline:
+      mode: full
+      max_chars: 4500
+    edit_plot:
+      mode: range
+      max_chars: 4500
+    reset_body:
+      mode: delta
+      max_chars: 2000
+    append_body:
+      mode: delta
+      max_chars: 2000
+    append_chapter:
+      mode: delta
+      max_chars: 2000
+    write_body:
+      mode: tail
+      max_chars: 4500
+  cancel_on_intervention:
+    reset_body: [append_chapter, append_body, write_body]
+    rewrite_outline: [append_chapter, append_body]
+
 # Post-planning route alignment (see docs/ROUTE_AUDIT.md): kinds + conflicts, not per-user-string hacks
 route_audit:
   enabled: true

@@ -58,6 +58,14 @@ def verify_failure_user_message(structured: dict[str, Any] | None = None) -> str
     return default
 
 
+def should_emit_verify_failure_message(structured: dict[str, Any] | None) -> bool:
+    """True only when compile verify ran and failed for real code artifacts."""
+    structured = structured or {}
+    if not structured.get("code_verify_failed"):
+        return False
+    return bool(iter_code_artifact_items(structured))
+
+
 def should_include_code_artifacts(structured: dict[str, Any] | None) -> bool:
     structured = structured or {}
     if not iter_code_artifact_items(structured):
@@ -92,7 +100,7 @@ def compose_user_answer(summary: str, structured: dict[str, Any] | None) -> str:
     if lead:
         parts.append(lead)
 
-    if structured.get("code_verify_failed"):
+    if should_emit_verify_failure_message(structured):
         if structured.get("code_verify_degraded") or _hide_unverified_code(structured):
             parts.append(verify_failure_user_message(structured))
 

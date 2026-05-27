@@ -784,11 +784,6 @@ class GraphRunner:
         )
 
     def _stream_finalize(self, latest: AgentState, interrupted_for_review: bool) -> Iterator[str]:
-        from app.services.mission_steer_confirm import steer_confirmation_pending
-        from app.services.mission_steer_outcome_confirm import (
-            steer_outcome_confirmation_pending,
-        )
-
         if interrupted_for_review and latest.get("status") != TaskStatus.WAITING_REVIEW.value:
             latest = persist_turn_draft_answer(latest)
             latest = human_review_node(latest)
@@ -834,7 +829,10 @@ class GraphRunner:
             yield _format_stream_event("mission_paused", paused_body)
         done_payload_lp = latest.get("input_payload") or {}
         from app.services.mission_steer import review_outline_requested
-        from app.services.steer_confirmation_actions import confirmation_sse_fields
+        from app.services.confirmation.stream_display import (
+            build_gate_sse_fields,
+            client_final_answer,
+        )
 
         yield _format_stream_event(
             "done",
@@ -844,21 +842,13 @@ class GraphRunner:
                 "session_turn": latest.get("session_turn"),
                 "status": latest.get("status"),
                 "current_node": latest.get("current_node"),
-                "final_answer": latest.get("final_answer"),
+                "final_answer": client_final_answer(latest),
                 "structured_output": latest.get("structured_output"),
                 "review_required": latest.get("review_required"),
                 "worker_results": latest.get("worker_results"),
                 "subtasks": latest.get("subtasks"),
                 "steer_review_only": review_outline_requested(done_payload_lp),
-                "steer_intent_pending_confirm": steer_confirmation_pending(done_payload_lp),
-                "steer_intent_confirmation": done_payload_lp.get("steer_intent_confirmation"),
-                "steer_outcome_pending_confirm": steer_outcome_confirmation_pending(
-                    done_payload_lp
-                ),
-                "steer_outcome_confirmation": done_payload_lp.get(
-                    "steer_outcome_confirmation"
-                ),
-                **confirmation_sse_fields(latest["task_id"], done_payload_lp),
+                **build_gate_sse_fields(latest["task_id"], latest),
             },
         )
 
@@ -885,8 +875,8 @@ class GraphRunner:
         get_audit_store().append_events(task_id, updated.get("audit_log", []))
         return updated
 
-    def resume_mission(self, task_id: str, *, confirm: bool = False) -> AgentState:
-        """Continue an orchestrated mission from MISSION_PAUSED (one or more steps)."""
+    def prepare_resume_mission(self, task_id: str, *, confirm: bool = False) -> AgentState:
+        """Apply steer gate confirmations and set MISSION_RUNNING (no graph invoke)."""
         stored = get_state_store().load(task_id)
         if not stored:
             raise KeyError(f"Task not found: {task_id}")
@@ -931,6 +921,11 @@ class GraphRunner:
             mission_control=None,
         )
         get_state_store().save(resumed)
+        return resumed
+
+    def resume_mission(self, task_id: str, *, confirm: bool = False) -> AgentState:
+        """Continue an orchestrated mission from MISSION_PAUSED (one or more steps)."""
+        resumed = self.prepare_resume_mission(task_id, confirm=confirm)
         thread = graph_thread_id(resumed)
         final_state = self._run_with_slot(
             lambda: self._invoke_graph_safe(resumed, thread=thread, mode="mission")
@@ -939,6 +934,11 @@ class GraphRunner:
         get_state_store().save(final_state)
         get_audit_store().append_events(task_id, final_state.get("audit_log", []))
         return final_state
+
+    def stream_resume_mission(self, task_id: str, *, confirm: bool = False) -> Iterator[str]:
+        """SSE stream for mission resume (same events as /tasks/stream)."""
+        resumed = self.prepare_resume_mission(task_id, confirm=confirm)
+        yield from self._stream_single(resumed, created=False)
 
     def submit_review(
         self,

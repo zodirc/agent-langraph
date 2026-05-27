@@ -371,6 +371,11 @@ class Settings:
             else True
         )
 
+        confirmation_gates_cfg = raw.get("confirmation_gates", {})
+        self.CONFIRMATION_GATES_CONFIG = (
+            confirmation_gates_cfg if isinstance(confirmation_gates_cfg, dict) else {}
+        )
+
         reflection_cfg = raw.get("reflection", {})
         self.REFLECTION_ENABLED = _coerce_bool(reflection_cfg.get("enabled", True))
         self.REFLECTION_MAX_ROUNDS = int(reflection_cfg.get("max_rounds", 2))

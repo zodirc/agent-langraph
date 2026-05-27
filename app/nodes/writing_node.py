@@ -126,6 +126,35 @@ def writing_node(state: AgentState) -> AgentState:
 
         results: list[dict[str, Any]] = list(state.get("tool_results") or [])
 
+        work_item_id = str(
+            intent.get("work_item_id")
+            or (payload.get("current_work_item") or {}).get("id")
+            or f"wi-{state.get('mission_step')}"
+        )
+        from app.services.confirmation.snapshot import save_artifact_snapshot
+        from app.services.confirmation.writing_delta import (
+            finalize_writing_step_delta,
+            persist_writing_delta,
+            record_writing_step_start,
+        )
+
+        writing_delta: dict[str, Any] | None = None
+        if action in ("append_body", "write_body", "write_outline", "reset_body"):
+            if action in ("write_outline",):
+                delta_file = ms.outline_path or str(
+                    payload.get("outline_filename") or settings.MANUSCRIPT_DEFAULT_OUTLINE
+                )
+            else:
+                delta_file = ms.body_path or str(
+                    payload.get("novel_filename") or settings.MANUSCRIPT_DEFAULT_BODY
+                )
+            writing_delta = record_writing_step_start(
+                state,
+                filename=delta_file,
+                action=action,
+                work_item_id=work_item_id,
+            )
+
         if intent.get("require_read_first"):
             if action == "write_outline":
                 read_name = ms.outline_path or str(
@@ -152,6 +181,8 @@ def writing_node(state: AgentState) -> AgentState:
             filename = ms.body_path or str(
                 payload.get("novel_filename") or settings.MANUSCRIPT_DEFAULT_BODY
             )
+            save_artifact_snapshot(task_id, filename, work_item_id, state=state)
+            payload["last_snapshot_id"] = work_item_id
             art_dir = task_artifact_dir(task_id)
             src = art_dir / filename
             if src.exists() and src.stat().st_size > 0:
@@ -171,6 +202,8 @@ def writing_node(state: AgentState) -> AgentState:
             filename = ms.outline_path or str(
                 payload.get("outline_filename") or settings.MANUSCRIPT_DEFAULT_OUTLINE
             )
+            save_artifact_snapshot(task_id, filename, work_item_id, state=state)
+            payload["last_snapshot_id"] = work_item_id
             content = _generate_validated_content(
                 state=state,
                 tool_name="write_text_artifact",
@@ -357,10 +390,24 @@ def writing_node(state: AgentState) -> AgentState:
             payload.get("revision_intent") or force_reasoning
         )
 
+        progress_patch: dict[str, Any] = dict(state.get("progress") or {})
+        if writing_delta is not None:
+            delta_state = merge_state(
+                state,
+                input_payload=payload,
+                manuscript=resolve_manuscript(task_id, ms.to_dict()).to_dict(),
+            )
+            writing_delta = finalize_writing_step_delta(delta_state, writing_delta)
+            progress_patch = persist_writing_delta(
+                {**state, "progress": progress_patch},
+                writing_delta,
+            )
+
         updated = merge_state(
             state,
             input_payload=payload,
             tool_results=results,
+            progress=progress_patch,
             manuscript=resolve_manuscript(task_id, ms.to_dict()).to_dict(),
             status=TaskStatus.WRITTEN.value,
             current_node="writing",

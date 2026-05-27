@@ -539,17 +539,20 @@ def emit_final_artifact_fences(structured: dict[str, Any] | None) -> None:
         return
     from app.services.answer_compose import should_include_code_artifacts
 
-    if not should_include_code_artifacts(structured):
-        from app.services.answer_compose import verify_failure_user_message
+    from app.services.answer_compose import should_emit_verify_failure_message
 
-        msg = verify_failure_user_message(structured)
-        if msg:
-            report_answer_delta(
-                node="reasoning",
-                phase="reasoning_artifacts",
-                text="\n\n" + msg,
-                field="artifact_finalize",
-            )
+    if not should_include_code_artifacts(structured):
+        if should_emit_verify_failure_message(structured):
+            from app.services.answer_compose import verify_failure_user_message
+
+            msg = verify_failure_user_message(structured)
+            if msg:
+                report_answer_delta(
+                    node="reasoning",
+                    phase="reasoning_artifacts",
+                    text="\n\n" + msg,
+                    field="artifact_finalize",
+                )
         return
     from app.services.code_artifact_pipeline import load_code_artifact_config
 

@@ -7,6 +7,7 @@ from typing import Any
 
 from app.config.settings import settings
 from app.runtime.state import AgentState, TaskStatus, merge_state
+from app.services.confirmation.stream_display import is_gate_reasoning_result
 from app.services.context_compressor import (
     apply_semantic_context_compress,
     record_context_compress_metrics,
@@ -237,6 +238,9 @@ def resolve_turn_surface_answer(state: AgentState | dict[str, Any]) -> str:
         return ""
 
     reasoning = state.get("reasoning_result") or {}
+    if is_gate_reasoning_result(reasoning):
+        return ""
+
     summary = str(reasoning.get("summary") or "").strip()
     if summary and not is_system_surface_message(summary):
         return summary

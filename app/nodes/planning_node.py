@@ -200,6 +200,21 @@ def planning_node(state: AgentState) -> AgentState:
         payload = apply_planning_intervention(result, payload)
         if steer_planning_turn:
             payload = complete_steer_planning(payload)
+            from app.services.mission_intervention import intervention_from_payload
+            from app.services.mission.steer_replan import apply_work_plan_patch
+            from app.services.mission_orchestrator import ensure_work_plan, orchestration_enabled
+
+            replan_state = merge_state(state, input_payload=payload)
+            if orchestration_enabled(replan_state.get("mission") or {}):
+                replan_state = ensure_work_plan(replan_state)
+                replan_state = apply_work_plan_patch(
+                    replan_state,
+                    result.get("work_plan_patch"),
+                    intervention=intervention_from_payload(payload),
+                )
+                state = merge_state(state, progress=replan_state.get("progress"))
+                payload = dict(replan_state.get("input_payload") or payload)
+
             from app.services.mission_steer_confirm import (
                 apply_steer_confirmation_pending,
                 build_steer_intent_summary,
@@ -215,6 +230,8 @@ def planning_node(state: AgentState) -> AgentState:
                     result,
                     payload,
                     mission_before=mission_before_steer,
+                    state=merge_state(state, input_payload=payload),
+                    task_id=state["task_id"],
                 )
                 payload = apply_steer_confirmation_pending(
                     payload, summary, task_id=state["task_id"]
@@ -288,6 +305,8 @@ def planning_node(state: AgentState) -> AgentState:
                         result,
                         payload,
                         mission_before=mission_before_patch,
+                        state=merge_state(state, input_payload=payload),
+                        task_id=state["task_id"],
                     ),
                     task_id=state["task_id"],
                 )

@@ -62,7 +62,7 @@ def apply_steer_planning_gate(payload: dict[str, Any]) -> dict[str, Any]:
 def complete_steer_planning(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     out["steer_planning_done"] = True
-    out.pop("require_planning_after_steer", None)
+    out["require_planning_after_steer"] = False
     return out
 
 
@@ -313,7 +313,7 @@ def apply_steer_message(
         ),
     )
 
-    if norm and norm.get("work_item") and orchestration_enabled(updated.get("mission") or {}):
+    if norm and not norm.get("force") and norm.get("work_item") and orchestration_enabled(updated.get("mission") or {}):
         wi = norm["work_item"]
         updated = insert_work_item_after_current(
             updated,
@@ -325,7 +325,7 @@ def apply_steer_message(
                 "params": dict(wi.get("params") or {}),
             },
         )
-    elif norm and norm.get("action") == "edit_plot" and orchestration_enabled(
+    elif norm and not norm.get("force") and norm.get("action") == "edit_plot" and orchestration_enabled(
         updated.get("mission") or {}
     ):
         updated = insert_work_item_after_current(

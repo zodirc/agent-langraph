@@ -143,8 +143,9 @@ def test_prepare_keeps_work_plan_write_outline_under_steer_gate(base_state):
     payload = prepared.get("input_payload") or {}
     assert payload.get("skip_planning_llm") is False
     assert payload.get("current_work_item", {}).get("kind") == "write_outline"
-    assert (payload.get("writing_intent") or {}).get("action") == "write_outline"
-    assert (payload.get("writing_intent") or {}).get("enabled") is True
+    intent = payload.get("writing_intent") or {}
+    assert intent.get("source") == "await_steer_planning"
+    assert intent.get("enabled") is False
 
 
 def test_writing_phase_does_not_override_steer_planning_gate(base_state):

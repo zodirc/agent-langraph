@@ -222,6 +222,11 @@ class ResumeTaskResponse(BaseModel):
     status: str
     current_node: str
     final_answer: Optional[str] = None
+    steer_intent_pending_confirm: bool = False
+    steer_intent_confirmation: Optional[dict[str, Any]] = None
+    steer_outcome_pending_confirm: bool = False
+    steer_outcome_confirmation: Optional[dict[str, Any]] = None
+    confirmation_actions: Optional[dict[str, Any]] = None
 
 
 @router.post("/{task_id}/steer", response_model=SteerTaskResponse)
@@ -300,12 +305,39 @@ def resume_task(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    from app.services.confirmation.stream_display import (
+        build_gate_sse_fields,
+        client_final_answer,
+    )
+
+    gate_fields = build_gate_sse_fields(task_id, state)
     return ResumeTaskResponse(
         task_id=task_id,
         status=str(state["status"]),
         current_node=str(state["current_node"]),
-        final_answer=state.get("final_answer"),
+        final_answer=client_final_answer(state),
+        **gate_fields,
     )
+
+
+@router.post("/{task_id}/resume/stream")
+def stream_resume_task(
+    task_id: str,
+    request: ResumeTaskRequest = ResumeTaskRequest(),
+    _principal: AuthPrincipal = Depends(get_current_principal),
+) -> StreamingResponse:
+    """SSE stream for mission resume (progress, writing_delta, confirmation gates)."""
+    try:
+        generator = get_graph_runner().stream_resume_mission(
+            task_id, confirm=request.confirm
+        )
+        return StreamingResponse(generator, media_type="text/event-stream")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/{task_id}/status", response_model=TaskStatusResponse)

@@ -47,20 +47,33 @@ def iter_code_artifacts(structured: dict[str, Any] | None) -> list[dict[str, Any
 
 
 def should_process_code_artifacts(state: dict[str, Any] | None = None) -> bool:
+    """Run compile verify only for code-routed turns (not general QA / writing)."""
     cfg = load_code_artifact_config()
-    if not cfg.enabled:
+    if not cfg.enabled or not state:
         return False
-    if state:
-        payload = state.get("input_payload") or {}
-        audit = payload.get("route_audit") or {}
-        profile = str(
-            payload.get("artifact_profile") or audit.get("artifact_profile") or ""
-        ).lower()
-        if profile == "source_code":
-            return True
-        if str(audit.get("inferred_kind") or "") == "code":
-            return True
-    return True
+    payload = state.get("input_payload") or {}
+    audit = payload.get("route_audit") or {}
+    profile = str(
+        payload.get("artifact_profile") or audit.get("artifact_profile") or ""
+    ).lower()
+    kind = str(audit.get("inferred_kind") or "").lower()
+    planned = str(audit.get("planned_route") or "").lower()
+
+    if profile == "source_code" or kind == "code":
+        return True
+    if planned == "writing_code_artifact":
+        return True
+
+    if (payload.get("writing_intent") or {}).get("enabled"):
+        return False
+    if state.get("mission") or payload.get("mission"):
+        return False
+    if planned.startswith("writing") or planned.startswith("mission"):
+        return False
+    if kind in ("fiction", "manuscript", "writing"):
+        return False
+
+    return False
 
 
 def stream_artifact_incremental_enabled() -> bool:

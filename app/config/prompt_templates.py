@@ -22,6 +22,9 @@ Required fields:
 - "risk_level": LOW | MEDIUM | HIGH | CRITICAL
 - "skip_retrieval": boolean
 - "steer_intent_summary": optional string — after user steer, plain-language summary of how you interpreted their request and what you will do next (for human confirmation before heavy execution)
+- "work_plan_patch": optional — after steer on an active mission, structured queue update (NOT prose):
+  {"cancel_ids":["wi-..."], "prepend":[{"kind":"write_outline","title":"...","params":{}}]}
+  cancel_ids: pending work items to invalidate; prepend: next items to run first (in order).
 
 Decision guide (use capabilities; respect payload flags):
 - Pure Q&A / capabilities / limits → selected_tools may include get_runtime_info; writing_intent.enabled=false; omit mission; mission_recommended=false

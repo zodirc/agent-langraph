@@ -14,6 +14,17 @@ logger = logging.getLogger(__name__)
 _pool: Any | None = None
 _TENANT_SEARCH_PATH_LAST: dict[int, str] = {}
 
+EMBEDDING_META_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS embedding_meta (
+    id INTEGER PRIMARY KEY,
+    model_name TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    distance_metric TEXT NOT NULL,
+    version TEXT NOT NULL,
+    created_at TEXT NOT NULL
+)
+"""
+
 BUSINESS_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS task_states (
     task_id TEXT PRIMARY KEY,
@@ -67,7 +78,8 @@ CREATE TABLE IF NOT EXISTS knowledge_docs (
     metadata TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
-"""
+
+""" + EMBEDDING_META_TABLE_SQL.strip() + ";\n"
 
 
 def uses_postgres() -> bool:
@@ -163,7 +175,16 @@ def postgres_connection() -> Generator[Any, None, None]:
 
 POSTGRES_SCHEMA_MIGRATIONS = (
     "ALTER TABLE memories ADD COLUMN IF NOT EXISTS session_id TEXT NOT NULL DEFAULT ''",
+    EMBEDDING_META_TABLE_SQL.strip(),
 )
+
+
+def ensure_embedding_meta_table() -> None:
+    """Ensure embedding_meta exists (Postgres tenants / legacy schemas)."""
+    if not uses_postgres():
+        return
+    with postgres_connection() as conn:
+        conn.execute(EMBEDDING_META_TABLE_SQL.strip())
 
 
 def init_postgres_schema() -> None:
