@@ -49,7 +49,46 @@ def test_prepare_session_continues_same_task(test_settings, isolated_stores, mon
     assert "assistant" in roles
 
 
-def test_graph_thread_id_changes_per_turn():
+def test_mission_session_hello_isolates_writing_mission(test_settings, isolated_stores, monkeypatch):
+    import app.services.session_turn as st_mod
+
+    monkeypatch.setattr(st_mod, "settings", test_settings)
+    store = StateStore(test_settings.SQLITE_PATH)
+
+    state1, _ = prepare_session_turn(
+        session_id="sess-mission",
+        user_id="u1",
+        task_type="qa",
+        payload={
+            "goal": "写长篇",
+            "execution_mode": "mission",
+            "mission": {"kind": "writing", "objective": "写长篇", "autonomous": True},
+        },
+    )
+    from app.runtime.state import merge_state
+
+    state1 = merge_state(
+        state1,
+        mission={"kind": "writing", "objective": "写长篇"},
+        execution_mode="mission",
+        manuscript={"body_path": "novel.txt", "body_bytes": 12000},
+        status=TaskStatus.MISSION_PAUSED.value,
+    )
+    store.save(state1)
+
+    state2, created2 = prepare_session_turn(
+        session_id="sess-mission",
+        user_id="u1",
+        task_type="qa",
+        payload={"goal": "hello", "mission_auto": True},
+    )
+    assert created2 is False
+    assert state2.get("mission") is None
+    assert state2.get("execution_mode") == "single"
+    assert state2["input_payload"].get("mission_suspended") is True
+    assert state2["input_payload"]["writing_intent"]["enabled"] is False
+
+
     state = {
         "task_id": "sess-1",
         "session_turn": 3,

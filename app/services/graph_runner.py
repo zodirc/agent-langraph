@@ -392,8 +392,15 @@ class GraphRunner:
         if task_id and not session_key:
             state = merge_state(state, task_id=task_id)
         if should_use_mission_runtime(payload, mode):
-            mode = "mission"
-            state = _prepare_mission_for_turn(state, payload, created=created)
+            goal = str(payload.get("goal") or "").strip()
+            from app.services.session_goal import should_enter_mission_runtime
+
+            if should_enter_mission_runtime(state, payload, goal):
+                mode = "mission"
+                state = _prepare_mission_for_turn(state, payload, created=created)
+            else:
+                mode = "single"
+                state = merge_state(state, execution_mode="single", mission=None)
         state = merge_state(state, execution_mode=mode)
         get_state_store().save(state)
         if created:
@@ -461,9 +468,16 @@ class GraphRunner:
         if task_id and not session_key:
             state = merge_state(state, task_id=task_id)
         if should_use_mission_runtime(payload, mode):
-            state = _prepare_mission_for_turn(state, payload, created=created)
-            state = merge_state(state, execution_mode="mission")
+            goal = str(payload.get("goal") or "").strip()
+            from app.services.session_goal import should_enter_mission_runtime
+
+            if should_enter_mission_runtime(state, payload, goal):
+                state = _prepare_mission_for_turn(state, payload, created=created)
+                state = merge_state(state, execution_mode="mission")
+            else:
+                state = merge_state(state, execution_mode="single", mission=None)
         elif mode == "exploration":
+            state = merge_state(state, execution_mode="exploration")
             state = merge_state(state, execution_mode="exploration")
         get_state_store().save(state)
         yield from self._stream_single(state, created=created)

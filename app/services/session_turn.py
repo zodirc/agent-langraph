@@ -120,6 +120,22 @@ def prepare_session_turn(
             **payload,
             "conversation_history": history,
         }
+        from app.services.session.config import load_session_turn_policy_config
+        from app.services.session.turn_policy import (
+            apply_qa_turn_isolation,
+            resolve_session_turn,
+            restore_archived_mission,
+        )
+
+        if goal:
+            decision = resolve_session_turn(existing, merged, goal, incoming=payload)
+            if load_session_turn_policy_config().audit_decisions:
+                merged["turn_policy_decision"] = decision.to_dict()
+
+            if decision.intent == "resume_mission":
+                merged = restore_archived_mission(existing, merged)
+            elif existing.get("mission") and decision.intent == "isolate_qa":
+                merged = apply_qa_turn_isolation(merged, existing)
         if goal:
             from app.services.mission_steer import (
                 _append_steer_goal,
@@ -133,7 +149,10 @@ def prepare_session_turn(
             merged = clear_steer_outcome_flags(merged)
             merged.pop("steer_outcome_confirmed", None)
             merged.pop("steer_outcome_confirmed_for", None)
-            if existing.get("mission") and steer_needs_planning_llm(message=goal):
+            mission_active = bool(existing.get("mission")) and not merged.get(
+                "mission_suspended"
+            )
+            if mission_active and steer_needs_planning_llm(message=goal):
                 merged = apply_steer_planning_gate(merged)
                 merged["writing_intent"] = {
                     "enabled": False,
@@ -146,7 +165,7 @@ def prepare_session_turn(
                 goal_requests_outline_read,
             )
 
-            if existing.get("mission") and goal_requests_outline_read(goal):
+            if mission_active and goal_requests_outline_read(goal):
                 merged = apply_review_outline_mode(
                     merged, existing.get("mission") or {}
                 )
@@ -164,9 +183,24 @@ def prepare_session_turn(
 
         turn = int(existing.get("session_turn") or 0) + 1
         ms = resolve_manuscript(task_id, existing.get("manuscript"))
-        payload = enrich_payload(payload, task_id, session_turn=turn, manuscript=ms)
+        if payload.get("mission_suspended"):
+            payload = {
+                **payload,
+                "manuscript": ms.to_dict(),
+                "session_artifacts": ms.to_dict(),
+            }
+        else:
+            payload = enrich_payload(payload, task_id, session_turn=turn, manuscript=ms)
         state = _reset_execution_fields(existing, payload)
-        state = merge_state(state, manuscript=ms.to_dict())
+        if payload.get("mission_suspended"):
+            state = merge_state(
+                state,
+                mission=None,
+                execution_mode="single",
+                manuscript=ms.to_dict(),
+            )
+        else:
+            state = merge_state(state, manuscript=ms.to_dict())
         return state, False
 
     history = append_message([], "user", goal) if goal else []

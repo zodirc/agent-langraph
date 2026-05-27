@@ -429,6 +429,7 @@ def _max_tokens_for_purpose(purpose: str) -> int:
         "planning": settings.MODEL_MAX_TOKENS_PLANNING,
         "reasoning": settings.MODEL_MAX_TOKENS_REASONING,
         "routing": settings.MODEL_MAX_TOKENS_ROUTING,
+        "session_turn": settings.MODEL_MAX_TOKENS_ROUTING,
         "writing": settings.MODEL_MAX_TOKENS_WRITING,
     }
     return mapping.get(purpose, settings.MODEL_MAX_TOKENS)
@@ -760,6 +761,38 @@ def _local_structured_response(purpose: str, user_content: str) -> dict[str, Any
             "retry_reasoning": retry,
             "issues": warnings[:5],
             "suggested_fixes": ["reconcile with turn_facts"] if retry else [],
+        }
+
+    if purpose == "session_turn":
+        msg = str(
+            payload.get("user_message")
+            or payload.get("goal")
+            or payload.get("query")
+            or user_content
+        )
+        from app.services.route_audit.inference import infer_goal_kind_from_text
+        from app.services.session.config import load_session_turn_policy_config
+
+        turn_cfg = load_session_turn_policy_config()
+        inference = infer_goal_kind_from_text(msg)
+        primary = str(inference.get("primary_kind") or "general")
+        confidence = float(inference.get("confidence") or 0.0)
+        if confidence >= turn_cfg.min_kind_confidence and primary in turn_cfg.resume_on_kinds:
+            return {
+                "turn_intent": "resume_writing",
+                "confidence": confidence,
+                "reason": f"local pattern kind {primary}",
+            }
+        if confidence >= turn_cfg.min_kind_confidence and primary in turn_cfg.isolate_on_kinds:
+            return {
+                "turn_intent": "qa_side_turn",
+                "confidence": confidence,
+                "reason": f"local pattern kind {primary}",
+            }
+        return {
+            "turn_intent": "qa_side_turn",
+            "confidence": 0.0,
+            "reason": "local default suspend",
         }
 
     if purpose == "routing":

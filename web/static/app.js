@@ -68,6 +68,8 @@ const MISSION_LOOP_NODES = new Set([
 let healthBadgeBase = "";
 const TOKEN_KEY = "agent_access_token";
 const SESSION_KEY = "agent_session_id";
+/** Next stream submit uses new_session=true once (after /new). */
+let pendingNewSession = false;
 const LONGFORM_MISSION_KEY = "agent_longform_mission";
 const MISSION_TOTAL_CHARS_KEY = "agent_mission_total_chars";
 const MISSION_CHARS_PER_STEP_KEY = "agent_mission_chars_per_step";
@@ -121,9 +123,23 @@ function updateSessionBadge(sessionId) {
 function startNewSession() {
   const id = newSessionId();
   localStorage.setItem(SESSION_KEY, id);
+  pendingNewSession = true;
   updateSessionBadge(id);
-  appendLine(`new session: ${id.slice(0, 8)}…`, "system");
+  clearScreen();
+  appendLine(`new session: ${id.slice(0, 8)}… (server task isolated)`, "system");
   return id;
+}
+
+function attachSessionFlags(body) {
+  const out = body || {};
+  if (pendingNewSession) {
+    out.new_session = true;
+    pendingNewSession = false;
+  } else if (out.new_session === undefined) {
+    out.new_session = false;
+  }
+  out.session_id = getSessionId();
+  return out;
 }
 
 function clearScreen() {
@@ -1171,11 +1187,9 @@ function buildWritingMissionBody(goal, riskLevel = "LOW") {
   const stepRaw = missionCharsPerStepEl && missionCharsPerStepEl.value.trim();
   const totalTarget = totalRaw ? parseInt(totalRaw, 10) : DEFAULT_MISSION_TOTAL_CHARS;
   const charsPerStep = stepRaw ? parseInt(stepRaw, 10) : DEFAULT_MISSION_CHARS_PER_STEP;
-  return {
+  return attachSessionFlags({
     task_type: "qa",
     user_id: "web",
-    session_id: getSessionId(),
-    new_session: false,
     input_payload: {
       goal,
       risk_level: riskLevel,
@@ -1195,22 +1209,20 @@ function buildWritingMissionBody(goal, riskLevel = "LOW") {
         },
       },
     },
-  };
+  });
 }
 
 function buildDefaultTaskBody(goal, riskLevel = "LOW") {
-  return {
+  return attachSessionFlags({
     task_type: "qa",
     user_id: "web",
-    session_id: getSessionId(),
-    new_session: false,
     input_payload: {
       goal,
       risk_level: riskLevel,
       // Allow planning LLM to auto-enable mission when appropriate (UI toggle still overrides).
       mission_auto: true,
     },
-  };
+  });
 }
 
 function buildTaskRequestBody(goal, riskLevel = "LOW") {

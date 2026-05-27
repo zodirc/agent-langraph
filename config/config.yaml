@@ -81,6 +81,20 @@ session:
   max_history_chars: 48000
   compress_enabled: true      # 超出上限时自动裁剪较早消息
   memory_retrieval_enabled: true   # 多轮会话在 skip_retrieval 时仍检索 session memory
+  turn_policy:
+    enabled: true
+    default_suspend_when_mission_active: true
+    resume_on_kinds: [manuscript]
+    isolate_on_kinds: [qa]
+    min_kind_confidence: 0.35
+    isolate_when_empty_goal: true
+    audit_decisions: true
+    continue_goal_patterns:
+      - '(?i)(续写|继续写|继续|追加|下一章|接着写|写下去|append|continue)'
+    llm_intent:
+      enabled: true
+      min_confidence: 0.55
+      max_goal_chars: 2000
 
 performance:
   fast_reasoning_enabled: false

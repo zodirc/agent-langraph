@@ -61,3 +61,36 @@ def infer_task_kind(
         "confidence": confidence,
         "structural": structural,
     }
+
+
+def infer_goal_kind_from_text(
+    text: str,
+    *,
+    cfg: RouteAuditConfig | None = None,
+) -> dict[str, Any]:
+    """
+    Pattern-only kind inference for a single user goal (no structural signals).
+
+    Used by session turn policy so persisted mission state does not bias QA turns.
+    """
+    cfg = cfg or load_route_audit_config()
+    goal = (text or "").strip()
+    scores: dict[str, float] = {}
+    for rule in cfg.kinds:
+        pat = _pattern_score(goal, rule.patterns) * rule.weight
+        if pat > 0:
+            scores[rule.id] = round(pat, 4)
+
+    if not scores:
+        return {
+            "primary_kind": "general",
+            "kind_scores": {},
+            "confidence": 0.0,
+        }
+
+    primary = max(scores, key=scores.get)  # type: ignore[arg-type]
+    return {
+        "primary_kind": primary,
+        "kind_scores": scores,
+        "confidence": float(scores[primary]),
+    }

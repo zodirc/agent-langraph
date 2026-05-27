@@ -156,6 +156,11 @@ class Settings:
         self.SESSION_MEMORY_RETRIEVAL_ENABLED = _coerce_bool(
             session_cfg.get("memory_retrieval_enabled", True)
         )
+        self.SESSION_CONFIG = session_cfg if isinstance(session_cfg, dict) else {}
+        turn_policy_cfg = session_cfg.get("turn_policy") if isinstance(session_cfg, dict) else {}
+        self.SESSION_TURN_POLICY_CONFIG = (
+            turn_policy_cfg if isinstance(turn_policy_cfg, dict) else {}
+        )
 
         storage = raw.get("storage", {})
         self.STORAGE_BACKEND = (
