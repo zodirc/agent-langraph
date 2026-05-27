@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "tasks": {
+    "integration_single_qa_complete": { "passed": 1.0 },
+    "integration_low_risk_tools": { "passed": 1.0 },
+    "integration_high_risk_review": { "passed": 0.5 },
+    "integration_retrieval_search": { "passed": 1.0 },
+    "integration_medium_risk_complete": { "passed": 1.0 },
+    "integration_mission_single_turn": { "passed": 1.0 },
+    "integration_exploration_analysis": { "passed": 1.0 },
+    "integration_mission_planning_handoff": { "passed": 1.0 },
+    "integration_mission_three_steps": { "passed": 0.5 },
+    "integration_supervisor_dual_worker": { "passed": 1.0 }
+  }
+}

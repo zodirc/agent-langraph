@@ -1,0 +1,50 @@
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+  background: #0f1419;
+  color: #e6edf3;
+}
+header {
+  padding: 1rem 2rem;
+  border-bottom: 1px solid #30363d;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+nav a {
+  color: #58a6ff;
+  margin-left: 1rem;
+  text-decoration: none;
+}
+main {
+  padding: 1.5rem 2rem;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+.card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 1rem;
+}
+.card .value {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 2rem;
+}
+th, td {
+  border: 1px solid #30363d;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+th {
+  background: #161b22;
+}

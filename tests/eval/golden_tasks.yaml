@@ -1,0 +1,60 @@
+# Offline evaluation golden tasks (Ch19)
+# Run: pytest tests/eval/test_golden_eval.py -v
+
+tasks:
+  - id: policy_escalate_route
+    kind: unit
+    description: ESCALATE routes to human_review
+    policy_result: ESCALATE
+    expect_route: human_review
+
+  - id: policy_reject_route
+    kind: unit
+    description: REJECT routes to rejected
+    policy_result: REJECT
+    expect_route: rejected
+
+  - id: output_guard_pii
+    kind: unit
+    description: Email in summary is blocked
+    text: "Contact me at user@example.com for details"
+    expect_passed: false
+
+  - id: output_guard_clean
+    kind: unit
+    description: Safe summary passes
+    text: "The calculation result is 579."
+    expect_passed: true
+
+  - id: budget_exceeded
+    kind: unit
+    description: Token budget blocks invoke
+    token_limit: 10
+    prompt_size: 500
+    expect_exceeded: true
+
+  - id: reasoning_mode_cot
+    kind: unit
+    description: CoT prompt includes chain-of-thought instruction
+    reasoning_mode: cot
+    expect_substring: chain-of-thought
+
+  - id: judge_completed_task
+    kind: unit
+    description: Rule-based judge scores completed task
+    task_state:
+      final_answer: "The answer explains the concept clearly."
+      reasoning_result:
+        confidence: 0.85
+      errors: []
+      status: COMPLETED
+      input_payload:
+        goal: explain
+    expect_min_overall: 3.0
+
+  - id: memory_compress_short
+    kind: unit
+    description: Short text not compressed
+    text: "short"
+    min_chars: 2000
+    expect_compressed: false

@@ -1,0 +1,2 @@
+# 已合并进 docker-compose.yml（内置 postgres 服务）。
+# 保留本文件仅为兼容旧命令，无需再 -f docker-compose.postgres.yml

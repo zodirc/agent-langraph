@@ -1,0 +1,28 @@
+# 本地开发：挂载源码 + uvicorn --reload（改代码自动重启）
+# PostgreSQL 已内置在 docker-compose.yml，与本文件叠加即可。
+#
+# 先停掉旧容器再启动：
+#   docker compose down
+#   HOST_PORT=8001 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# 注意：改的是「宿主机端口」HOST_PORT，不是下面 uvicorn 的 --port（容器内固定 8000）
+
+services:
+  agent:
+    environment:
+      APP_ENV: development
+    volumes:
+      - agent_data:/data
+      - ./app:/app/app:ro
+      - ./config:/app/config:ro
+      - ./web:/app/web:ro
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/app

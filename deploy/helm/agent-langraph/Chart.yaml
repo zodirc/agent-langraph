@@ -1,0 +1,6 @@
+apiVersion: v2
+name: agent-langraph
+description: Multi-domain LangGraph agent runtime
+type: application
+version: 0.9.0
+appVersion: "0.9.0"

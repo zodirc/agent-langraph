@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "tasks": {
+    "rag_recall_exact": { "passed": 1.0 },
+    "rag_recall_keyword": { "passed": 1.0 },
+    "rag_mrr_first_rank": { "passed": 1.0 },
+    "rag_rerank_order": { "passed": 1.0 },
+    "rag_faithful_answer": { "passed": 1.0 },
+    "rag_unfaithful_answer": { "passed": 1.0 },
+    "rag_citation_parse": { "passed": 1.0 },
+    "rag_empty_relevant": { "passed": 0.0 },
+    "rag_recall_proxy": { "passed": 1.0 },
+    "rag_llm_faithfulness_good": { "score": 0.92 },
+    "rag_llm_faithfulness_bad": { "score": 0.2 }
+  }
+}

@@ -1,0 +1,140 @@
+{
+  "version": 2,
+  "cases": [
+    {
+      "id": "integration_single_qa_complete",
+      "execution_mode": "single",
+      "input": {
+        "goal": "What is a LangGraph agent runtime?",
+        "risk_level": "LOW",
+        "needs_search": false,
+        "use_tools": false
+      },
+      "expected_status": ["COMPLETED", "WAITING_REVIEW"],
+      "expected_nodes": ["planning", "reasoning"]
+    },
+    {
+      "id": "integration_low_risk_tools",
+      "execution_mode": "single",
+      "input": {
+        "goal": "Echo hello",
+        "risk_level": "LOW",
+        "use_tools": true,
+        "needs_search": false
+      },
+      "expected_status": ["COMPLETED", "WAITING_REVIEW"],
+      "expected_nodes": ["planning"]
+    },
+    {
+      "id": "integration_high_risk_review",
+      "execution_mode": "single",
+      "input": {
+        "goal": "Dangerous operation",
+        "risk_level": "HIGH",
+        "needs_search": false,
+        "use_tools": false
+      },
+      "expected_status": ["WAITING_REVIEW"],
+      "expected_nodes": ["policy"]
+    },
+    {
+      "id": "integration_retrieval_search",
+      "execution_mode": "single",
+      "input": {
+        "goal": "LangGraph agent architecture",
+        "risk_level": "LOW",
+        "needs_search": true,
+        "use_tools": false
+      },
+      "expected_status": ["COMPLETED", "WAITING_REVIEW"],
+      "expected_nodes": ["retrieval"]
+    },
+    {
+      "id": "integration_medium_risk_complete",
+      "execution_mode": "single",
+      "input": {
+        "goal": "Summarize agent runtime in one sentence",
+        "risk_level": "MEDIUM",
+        "needs_search": false,
+        "use_tools": false
+      },
+      "expected_status": ["COMPLETED", "WAITING_REVIEW"],
+      "expected_nodes": ["planning", "reasoning"]
+    },
+    {
+      "id": "integration_mission_single_turn",
+      "execution_mode": "mission",
+      "input": {
+        "goal": "123+456是多少",
+        "risk_level": "LOW",
+        "skip_retrieval": true,
+        "mission": { "kind": "single_turn" },
+        "tool_params": { "calculator": { "expression": "123+456" } }
+      },
+      "expected_status": ["COMPLETED", "WAITING_REVIEW"],
+      "expected_nodes": ["mission_init"]
+    },
+    {
+      "id": "integration_exploration_analysis",
+      "execution_mode": "exploration",
+      "input": {
+        "goal": "探索三种方案的可行性",
+        "domain": "analysis",
+        "risk_level": "LOW"
+      },
+      "expected_status": ["COMPLETED", "WAITING_REVIEW", "REJECTED"]
+    },
+    {
+      "id": "integration_mission_planning_handoff",
+      "execution_mode": "single",
+      "mock_planning_mission": true,
+      "input": {
+        "goal": "Plan a long writing task",
+        "risk_level": "LOW",
+        "needs_search": false,
+        "use_tools": false,
+        "enable_planning_mission_handoff": true
+      },
+      "expect_mission_handoff": true,
+      "expected_status": ["COMPLETED", "WAITING_REVIEW"]
+    },
+    {
+      "id": "integration_mission_three_steps",
+      "execution_mode": "mission",
+      "mock_mission_writing": true,
+      "input": {
+        "goal": "写三段科幻内容",
+        "risk_level": "LOW",
+        "mission": {
+          "kind": "writing",
+          "total_target_chars": 999999,
+          "max_steps": 3,
+          "autonomous": true,
+          "step_policy": { "chars_per_step": 50, "first_step": "write_body" }
+        },
+        "writing_intent": {
+          "enabled": true,
+          "action": "write_body",
+          "target_chars": 50,
+          "min_chars": 20
+        }
+      },
+      "expect_min_mission_steps": 2,
+      "expected_status": ["COMPLETED", "WAITING_REVIEW", "MISSION_PAUSED"],
+      "expected_nodes": ["mission_init", "mission_act"]
+    },
+    {
+      "id": "integration_supervisor_dual_worker",
+      "execution_mode": "supervisor",
+      "task_type": "supervisor",
+      "mock_supervisor_workers": true,
+      "input": {
+        "goal": "analyze document and review code quality",
+        "domains": ["document", "code"],
+        "risk_level": "LOW"
+      },
+      "expected_status": ["COMPLETED", "WAITING_REVIEW"],
+      "expected_nodes": ["supervisor_decompose", "supervisor_merge"]
+    }
+  ]
+}

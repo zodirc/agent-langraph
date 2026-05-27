@@ -1,0 +1,66 @@
+# Agent + 内置 PostgreSQL（业务状态 + LangGraph checkpoint）
+#
+# 启动：
+#   cp .env.example .env   # 填写 ANTHROPIC_API_KEY 等
+#   docker compose up -d --build
+#
+# 开发热更新：
+#   HOST_PORT=8001 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agent-langraph-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent}
+      POSTGRES_DB: ${POSTGRES_DB:-agent}
+    volumes:
+      - agent_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent} -d ${POSTGRES_DB:-agent}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  agent:
+    build: .
+    image: agent-langraph:latest
+    container_name: agent-langraph
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${HOST_PORT:-8000}:8000"   # 若 8000 被占用：HOST_PORT=8001 docker compose up -d
+      - "${LANGGRAPHICS_PORT:-8764}:8764"   # LangGraphics UI（需 LANGGRAPHICS_ENABLED=true）
+      - "${LANGGRAPHICS_WS_PORT:-8765}:8765"
+    environment:
+      CONFIG_PATH: /app/config/config.docker.yaml
+      APP_ENV: production
+      # 存储：容器内 PostgreSQL（服务名 postgres）
+      STORAGE_BACKEND: postgres
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/${POSTGRES_DB:-agent}
+      CHECKPOINT_BACKEND: postgres
+      # 模型（也可写在 .env）
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      MODEL_NAME: ${MODEL_NAME:-claude-sonnet-4-5}
+      MODEL_ENABLED: ${MODEL_ENABLED:-true}
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-change-me}
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      LANGGRAPHICS_ENABLED: ${LANGGRAPHICS_ENABLED:-false}
+    volumes:
+      - agent_data:/data   # Chroma 向量库、artifact、日志（不含 SQLite 业务库）
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  agent_data:
+  agent_pg_data:

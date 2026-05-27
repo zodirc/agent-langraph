@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "tasks": {
+    "policy_escalate_route": {
+      "passed": 1.0
+    },
+    "policy_reject_route": {
+      "passed": 1.0
+    },
+    "output_guard_pii": {
+      "passed": 1.0
+    },
+    "output_guard_clean": {
+      "passed": 1.0
+    },
+    "budget_exceeded": {
+      "passed": 1.0
+    },
+    "reasoning_mode_cot": {
+      "passed": 1.0
+    },
+    "judge_completed_task": {
+      "overall": 3.5
+    },
+    "memory_compress_short": {
+      "passed": 1.0
+    }
+  }
+}

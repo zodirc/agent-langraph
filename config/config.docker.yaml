@@ -1,0 +1,294 @@
+# Docker 单容器部署配置（数据目录挂载到 /data）
+
+model:
+  provider: anthropic
+  name: ${MODEL_NAME:claude-sonnet-4-5}
+  base_url: ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
+  api_key: ${ANTHROPIC_API_KEY}
+  enabled: ${MODEL_ENABLED:true}
+  temperature: 0
+  max_tokens: 8192
+  max_tokens_by_purpose:
+    planning: 4096
+    reasoning: 8192
+    writing: 16384
+    routing: 1024
+  timeout: 120
+  max_retries: 2
+
+storage:
+  # Docker 默认走 compose 内 PostgreSQL；本地无 Docker 时可设 STORAGE_BACKEND=sqlite
+  backend: ${STORAGE_BACKEND:postgres}
+  postgres_url: ${DATABASE_URL:postgresql://agent:agent@postgres:5432/agent}
+  postgres_pool_max_size: 10
+  checkpoint_backend: ${CHECKPOINT_BACKEND:postgres}
+  sqlite_path: /data/db/agent.db
+  checkpoint_sqlite_path: /data/db/agent_checkpoints.db
+  vectorstore_path: /data/vectorstore
+  log_path: /data/logs/agent.log
+
+app:
+  env: production
+  port: 8000
+  debug: false
+  secret_key: ${APP_SECRET_KEY:change-me-in-production}
+
+knowledge:
+  backend: chroma
+  embedding_model: default
+  embedding_api_key: ${VOYAGE_API_KEY:}
+  top_k: 3
+  similarity_threshold: 0.3
+  collection_name: agent_knowledge
+  qdrant_path: /data/vectorstore/qdrant
+
+auth:
+  enabled: ${AUTH_ENABLED:false}
+  jwt_expire_minutes: 480
+  api_keys:
+    - key: ${SERVICE_API_KEY:}
+      user_id: service-bot
+      role: admin
+  users:
+    - username: admin
+      password: ${ADMIN_PASSWORD:admin}
+      user_id: admin
+      role: admin
+
+supervisor:
+  max_workers: 4
+  worker_retries: 2
+
+batch:
+  max_workers: 4
+
+scheduler:
+  enabled: true
+
+agent:
+  prompt_extra: ""
+
+session:
+  enabled: true
+  one_task_per_window: true
+  max_history_turns: 40
+  max_history_chars: 48000
+  compress_enabled: true
+  memory_retrieval_enabled: true
+
+performance:
+  fast_reasoning_enabled: false
+  skip_retrieval_when_no_tools: true
+  stream_save_every_node: false
+  reasoning_trace_enabled: true
+  reasoning_trace_verbose: true
+  reasoning_trace_max_chars: 48000
+  reasoning_trace_progress_interval: 200
+  reasoning_trace_show_thinking: true
+  thinking_stream_enabled: true
+  answer_stream_enabled: true
+  writing_stream_enabled: true
+  writing_stream_max_chars: 200000
+
+langgraphics:
+  enabled: ${LANGGRAPHICS_ENABLED:false}
+  host: 0.0.0.0
+  public_host: ${LANGGRAPHICS_PUBLIC_HOST:localhost}
+  port: 8764
+  ws_port: 8765
+  open_browser: false
+  direction: TB
+  mode: auto
+  inspect: tree
+
+mission:
+  auto_from_planning: true
+  auto_min_total_chars: 50000
+  chars_per_step: 4000
+  db_save_max_retries: 3
+  db_save_retry_base_delay: 0.05
+  llm_retry_base_delay: 0.5
+  llm_streaming_enabled: true
+  result_cache_ttl_seconds: 300
+  prefetch_retrieval: true
+
+mission:
+  steps_hard_cap: 500
+  max_steps: 500
+  max_wall_sec: 7200
+  max_failures: 5
+  writing_max_steps: 500
+  outline_max_chars: 12000
+
+# Must mirror config.yaml route_audit (kinds + conflicts); enabled-only is a no-op
+route_audit:
+  enabled: true
+  min_kind_score: 0.35
+  reflection_on_misroute: true
+  max_planning_revisions: 1
+  code_extensions: [".cpp", ".cc", ".cxx", ".hpp", ".h", ".c", ".py", ".rs", ".go", ".java", ".js", ".ts"]
+  manuscript_body_names: ["novel.txt", "body.txt"]
+  kinds:
+    code:
+      weight: 1.0
+      patterns:
+        - '(?i)\b(c\+\+|cpp|python|java|javascript|typescript|golang|rust|algorithm)\b'
+        - '(?i)\b(source\s*code|compile|executable|indentation|linked\s*list)\b'
+        - '(?i)\.(cpp|hpp|cc|py|rs|go)\b'
+        - '(?i)(代码|缩进|源码)'
+      structural:
+        - code_filename_in_tools
+    manuscript:
+      weight: 1.0
+      patterns:
+        - '(?i)\b(novel|chapter|outline|manuscript|fiction|prose)\b'
+        - '(?i)(小说|章节|大纲|续写|万字)'
+      structural:
+        - mission_writing
+        - long_form_chars_requested
+    qa:
+      weight: 0.8
+      patterns:
+        - '(?i)^(what|who|how|why|explain|describe)\b'
+        - '(?i)(什么|为何|怎么|是否|为什么)'
+      structural:
+        - planning_skip_retrieval_no_tools
+    retry_recovery:
+      weight: 1.1
+      patterns:
+        - '(?i)\b(retry|again|redo|previous\s+failed)\b'
+        - '(重新|再试|未成功|之前.*失败)'
+      structural:
+        - session_outcomes_rejected_recent
+  conflicts:
+    - when_kind: code
+      planned_route: writing_manuscript
+      action: disable_writing_force_reasoning
+    - when_kind: code
+      planned_route: writing_artifact
+      action: disable_writing_force_reasoning
+    - when_kind: code
+      planned_route: writing_tools_only
+      action: disable_writing_force_reasoning
+    - when_kind: retry_recovery
+      planned_route: writing_manuscript
+      unless_kind: manuscript
+      action: disable_writing_force_reasoning
+    - when_kind: qa
+      planned_route: writing_manuscript
+      action: disable_writing_force_reasoning
+
+memory:
+  task_boost: 0.35
+  session_boost: 0.25
+  writeback:
+    skip_when:
+      - status: REJECTED
+      - structured_key: parser_fallback
+    index_kinds: [qa, manuscript, code, retry_recovery, general]
+
+display:
+  compose:
+    preserve_code_whitespace: true
+    preview_max_chars: 8000
+  stream:
+    include_artifact_code: true
+    max_artifact_stream_chars: 32000
+
+# See docs/CODE_ARTIFACT_PIPELINE.md (stderr-only repair; no indent/style hardcoding)
+code_artifact:
+  enabled: true
+  output:
+    hide_unverified_code: true
+    failure_message: >
+      代码未通过编译校验，本次不展示可能错误的源码。
+      请重试；技术细节见推理 trace（code_verify_reports）。
+  repair:
+    enabled: true
+    llm_purpose: reasoning
+  stream:
+    mode: composed_at_end
+  verify:
+    enabled: true
+    on_failure: repair
+    max_attempts: 3
+    timeout_sec: 15
+    workspace_root: /data/code_verify
+  backends:
+    cpp:
+      enabled: true
+      source_extension: .cpp
+      compile_cmd: [g++, -std=c++17, -Wall, -Wextra, -c, "{file}"]
+    python:
+      enabled: true
+      source_extension: .py
+      compile_cmd: [python3, -m, py_compile, "{file}"]
+  default_backend_by_language:
+    cpp: cpp
+    c++: cpp
+    python: python
+    py: python
+  default_backend_by_extension:
+    .cpp: cpp
+    .cc: cpp
+    .py: python
+
+delivery:
+  by_kind:
+    code:
+      primary: reasoning_artifacts
+      secondary: tool_write
+      default_extension: ".cpp"
+      preserve_whitespace: true
+      rewrite_manuscript_filenames: true
+      forbid_routes: [writing_manuscript, writing_artifact, mission_writing]
+    manuscript:
+      primary: writing_gateway
+      secondary: mission_steps
+    qa:
+      primary: reasoning_summary
+
+output_guard:
+  enabled: true
+  llm_review: false
+  pii_prose_only: true
+
+llm_purpose:
+  writing:
+    structured_output: tool
+    fallback: json_text
+    thinking_may_appear: true
+
+artifacts:
+  base_path: /data/artifacts
+  max_write_bytes: 1048576
+  max_file_bytes: 20971520
+  chunk_chars: 6000
+  max_chunks_per_turn: 8
+  max_chars_per_turn: 32000
+
+tools:
+  http_timeout: 30
+  http: []
+
+mcp:
+  enabled: false
+
+policy:
+  auto_reject_risk_level: CRITICAL
+  require_review_risk_level: HIGH
+  max_retry_count: 3
+  review_timeout_enabled: true
+  review_timeout_minutes: 60
+  review_timeout_action: reject
+  review_timeout_poll_seconds: 30
+
+queue:
+  backend: memory
+
+cli:
+  api_base_url: http://127.0.0.1:8000
+
+observability:
+  langsmith_enabled: false
+  metrics_enabled: true

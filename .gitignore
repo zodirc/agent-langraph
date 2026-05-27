@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+htmlcov/
+.coverage
+data/
+.env
+.env.local
+.env.*.local
+*.db
+*.log
+answer.log
+.mypy_cache/
+
+# Private / internal notes (local only; not pushed to GitHub)
+docs-private/

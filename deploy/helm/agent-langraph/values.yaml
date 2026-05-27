@@ -1,0 +1,52 @@
+replicaCount: 2
+
+image:
+  repository: agent-langraph
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: false
+
+resources:
+  limits:
+    cpu: "2"
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+env:
+  APP_ENV: production
+  STORAGE_BACKEND: postgres
+  CHECKPOINT_BACKEND: postgres
+  RATE_LIMIT_ENABLED: "true"
+  SECRETS_BACKEND: k8s
+
+postgres:
+  enabled: true
+  url: postgresql://agent:agent@postgres:5432/agent
+
+livenessProbe:
+  path: /health/live
+  initialDelaySeconds: 30
+  periodSeconds: 15
+
+readinessProbe:
+  path: /health/ready
+  initialDelaySeconds: 20
+  periodSeconds: 10
+
+pdb:
+  enabled: true
+  minAvailable: 1

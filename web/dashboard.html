@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Monitor</title>
+  <link rel="stylesheet" href="/static/dashboard.css" />
+</head>
+<body>
+  <header>
+    <h1>Agent 任务监控面板</h1>
+    <nav>
+      <a href="/">Web CLI</a>
+      <a href="/dashboard">监控面板</a>
+      <a href="/metrics" target="_blank">Prometheus</a>
+    </nav>
+  </header>
+  <main>
+    <section id="metrics-cards" class="cards"></section>
+    <section>
+      <h2>最近任务</h2>
+      <table id="tasks-table">
+        <thead><tr><th>ID</th><th>状态</th><th>节点</th><th>目标</th><th>更新</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>死信队列 (DLQ)</h2>
+      <table id="dlq-table">
+        <thead><tr><th>ID</th><th>重试</th><th>错误</th><th>入队时间</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

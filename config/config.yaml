@@ -1,0 +1,438 @@
+model:
+  provider: anthropic
+  name: ${MODEL_NAME:claude-sonnet-4-5}
+  # LangChain 会自动拼 /v1/messages；勿重复写后缀（代码也会自动剥离）
+  base_url: ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
+  api_key: ${ANTHROPIC_API_KEY:}
+  enabled: ${MODEL_ENABLED:true}
+  temperature: 0
+  max_tokens: 8192
+  max_tokens_by_purpose:
+    planning: 4096
+    reasoning: 8192
+    writing: 16384
+    routing: 1024
+  timeout: 120
+  max_retries: 2
+
+storage:
+  backend: sqlite   # sqlite | postgres
+  postgres_url: ${DATABASE_URL:}
+  postgres_pool_max_size: 10
+  checkpoint_backend: sqlite
+  sqlite_path: ./data/db/agent.db
+  checkpoint_sqlite_path: ./data/db/agent_checkpoints.db
+  vectorstore_path: ./data/vectorstore
+  log_path: ./data/logs/agent.log
+
+app:
+  env: development
+  port: 8000
+  debug: true
+  secret_key: ${APP_SECRET_KEY:dev-secret}
+
+knowledge:
+  backend: chroma   # chroma | qdrant
+  embedding_model: voyage-3   # voyage-3 | default (local hash fallback)
+  embedding_api_key: ${VOYAGE_API_KEY}
+  top_k: 3
+  similarity_threshold: 0.3
+  collection_name: agent_knowledge
+  qdrant_url: ${QDRANT_URL:}
+  qdrant_path: ./data/vectorstore/qdrant
+
+auth:
+  enabled: ${AUTH_ENABLED:false}
+  jwt_expire_minutes: 480
+  api_keys:
+    - key: ${SERVICE_API_KEY:}
+      user_id: service-bot
+      role: admin
+  users:
+    - username: admin
+      password: ${ADMIN_PASSWORD:admin}
+      user_id: admin
+      role: admin
+
+supervisor:
+  max_workers: 4
+  worker_retries: 2
+
+batch:
+  max_workers: 4
+
+scheduler:
+  enabled: true
+
+task_queue:
+  poll_seconds: 10
+  max_per_tick: 4
+  starvation_sec: 300
+  starvation_max_boost: 3
+
+agent:
+  # Optional extra instructions appended to built-in system prompt (not shown in Web CLI)
+  prompt_extra: ""
+
+session:
+  enabled: true
+  one_task_per_window: true   # 同一会话窗 = 一个 task_id（与 session_id 相同）
+  max_history_turns: 40
+  max_history_chars: 48000
+  compress_enabled: true      # 超出上限时自动裁剪较早消息
+  memory_retrieval_enabled: true   # 多轮会话在 skip_retrieval 时仍检索 session memory
+
+performance:
+  fast_reasoning_enabled: false
+  skip_retrieval_when_no_tools: true
+  stream_save_every_node: false
+  reasoning_trace_enabled: true
+  reasoning_trace_verbose: true    # 节点上下文、检索/工具详情、更小流式增量
+  reasoning_trace_max_chars: 48000
+  reasoning_trace_progress_interval: 200
+  reasoning_trace_show_thinking: true   # 兼容旧键；与 thinking_stream_enabled 等效时可二选一
+  thinking_stream_enabled: true         # 推送代理 thinking 块 → SSE thinking_delta（独立于 verbose trace）
+  answer_stream_enabled: true           # reasoning summary 增量推到 SSE answer_delta
+  writing_stream_enabled: true          # 手稿正文增量 → SSE writing_delta（独立于 thinking / answer）
+  writing_stream_max_chars: 200000
+
+# LangGraphics — live LangGraph graph UI (https://github.com/proactive-agent/langgraphics)
+# Requires Python >=3.10 and: pip install "langgraphics>=0.1.0b3"
+langgraphics:
+  enabled: false
+  host: 127.0.0.1
+  public_host: localhost
+  port: 8764
+  ws_port: 8765
+  open_browser: true
+  direction: TB   # TB | LR
+  mode: auto      # auto | manual
+  inspect: tree   # off | tree | full
+
+mission:
+  auto_from_planning: true              # 规划 LLM 可自动写入 mission 合同（可被显式覆盖）
+  auto_min_total_chars: 50000           # 自动启用时 total_target_chars 下限
+  chars_per_step: 4000
+  db_save_max_retries: 3
+  db_save_retry_base_delay: 0.05
+  llm_retry_base_delay: 0.5
+
+memory:
+  task_boost: 0.35
+  session_boost: 0.25
+  writeback:
+    skip_when:
+      - status: REJECTED
+      - structured_key: parser_fallback
+    index_kinds: [qa, manuscript, code, retry_recovery, general]
+
+display:
+  compose:
+    preserve_code_whitespace: true
+    preview_max_chars: 8000
+  stream:
+    include_artifact_code: true   # used when code_artifact.enabled=false
+    max_artifact_stream_chars: 32000
+
+# Code artifact pipeline: compile verify + LLM repair (compiler stderr only; no style/indent hardcoding).
+# See docs/CODE_ARTIFACT_PIPELINE.md
+code_artifact:
+  enabled: true
+  output:
+    hide_unverified_code: true
+    failure_message: >
+      代码未通过编译校验，本次不展示可能错误的源码。
+      请重试；技术细节见推理 trace（code_verify_reports）。
+  repair:
+    enabled: true
+    llm_purpose: reasoning   # LLM purpose for compile-error repair
+  stream:
+    mode: composed_at_end   # composed_at_end | artifact_incremental
+  verify:
+    enabled: true
+    on_failure: repair      # repair | mark_failed — only LLM + compiler stderr
+    max_attempts: 3
+    timeout_sec: 15
+    workspace_root: ./data/code_verify
+  backends:
+    cpp:
+      enabled: true
+      source_extension: .cpp
+      compile_cmd: [g++, -std=c++17, -Wall, -Wextra, -c, "{file}"]
+    python:
+      enabled: true
+      source_extension: .py
+      compile_cmd: [python3, -m, py_compile, "{file}"]
+  default_backend_by_language:
+    cpp: cpp
+    c++: cpp
+    python: python
+    py: python
+  default_backend_by_extension:
+    .cpp: cpp
+    .cc: cpp
+    .cxx: cpp
+    .py: python
+
+delivery:
+  by_kind:
+    code:
+      primary: reasoning_artifacts
+      secondary: tool_write
+      default_extension: ".cpp"
+      preserve_whitespace: true
+      rewrite_manuscript_filenames: true
+      forbid_routes: [writing_manuscript, writing_artifact, mission_writing]
+    manuscript:
+      primary: writing_gateway
+      secondary: mission_steps
+    qa:
+      primary: reasoning_summary
+
+mission:
+  steps_hard_cap: 500        # absolute ceiling for budget.max_steps
+  max_steps: 500              # fallback when planner omits budget (non-writing)
+  max_wall_sec: 3600
+  max_failures: 3
+  writing_max_steps: 500      # legacy alias; writing uses estimate or planner budget
+  writing_llm_decide: true    # model picks write/review/polish/summary per mission step
+  outline_max_chars: 12000
+  writing_review_every_chapters: 5   # 0 = disabled; rule fallback may pause every N chapters
+  orchestration_min_chars: 8000      # auto decompose long writing missions into work items
+  llm_decide: ${MISSION_LLM_DECIDE:false}
+
+# Post-planning route alignment (see docs/ROUTE_AUDIT.md): kinds + conflicts, not per-user-string hacks
+route_audit:
+  enabled: true
+  min_kind_score: 0.35
+  reflection_on_misroute: true
+  max_planning_revisions: 1
+  code_extensions: [".cpp", ".cc", ".cxx", ".hpp", ".h", ".c", ".py", ".rs", ".go", ".java", ".js", ".ts"]
+  manuscript_body_names: ["novel.txt", "body.txt"]
+  kinds:
+    code:
+      weight: 1.0
+      patterns:
+        - '(?i)\b(c\+\+|cpp|python|java|javascript|typescript|golang|rust|algorithm)\b'
+        - '(?i)\b(source\s*code|compile|executable|indentation|linked\s*list)\b'
+        - '(?i)\.(cpp|hpp|cc|py|rs|go)\b'
+        - '(?i)(代码|缩进|源码)'
+      structural:
+        - code_filename_in_tools
+    manuscript:
+      weight: 1.0
+      patterns:
+        - '(?i)\b(novel|chapter|outline|manuscript|fiction|prose)\b'
+        - '(?i)(小说|章节|大纲|续写|万字)'
+      structural:
+        - mission_writing
+        - long_form_chars_requested
+    qa:
+      weight: 0.8
+      patterns:
+        - '(?i)^(what|who|how|why|explain|describe)\b'
+        - '(?i)(什么|为何|怎么|是否|为什么)'
+      structural:
+        - planning_skip_retrieval_no_tools
+    retry_recovery:
+      weight: 1.1
+      patterns:
+        - '(?i)\b(retry|again|redo|previous\s+failed)\b'
+        - '(重新|再试|未成功|之前.*失败)'
+      structural:
+        - session_outcomes_rejected_recent
+  conflicts:
+    - when_kind: code
+      planned_route: writing_manuscript
+      action: disable_writing_force_reasoning
+    - when_kind: code
+      planned_route: writing_artifact
+      action: disable_writing_force_reasoning
+    - when_kind: code
+      planned_route: writing_tools_only
+      action: disable_writing_force_reasoning
+    - when_kind: retry_recovery
+      planned_route: writing_manuscript
+      unless_kind: manuscript
+      action: disable_writing_force_reasoning
+    - when_kind: qa
+      planned_route: writing_manuscript
+      action: disable_writing_force_reasoning
+
+reflection:
+  enabled: true
+  max_rounds: 2
+  writing_only: false
+  route_audit_on_misroute: true
+
+reasoning:
+  mode: direct   # direct | cot | react
+
+resource:
+  default_token_budget: ${DEFAULT_TOKEN_BUDGET:0}
+  default_cost_budget: ${DEFAULT_COST_BUDGET:0}
+  cost_per_1k_tokens: 0
+  downgrade_ratio: 0.8
+  downgrade_max_tokens: 2048
+  fallback_model: ${MODEL_FALLBACK_NAME:}
+
+output_guard:
+  enabled: true
+  llm_review: false
+  pii_prose_only: true   # PII regex only on prose; fenced/inline code excluded
+
+llm_purpose:
+  writing:
+    structured_output: tool
+    fallback: json_text
+    thinking_may_appear: true
+
+agent:
+  tool_exec_max_workers: 4
+
+manuscript:
+  default_body: novel.txt
+  default_outline: outline.txt
+  min_body_chars: 200
+  min_outline_chars: 80
+  tail_excerpt_chars: 2400
+  head_excerpt_chars: 1200
+  append_dedup_ratio: 0.82
+  placeholder_patterns:
+    - 待续写
+    - 待填充
+    - 本回合内容
+    - 占位
+
+artifacts:
+  base_path: ./data/artifacts
+  max_write_bytes: 524288
+  max_file_bytes: 5242880
+  chunk_chars: 3500
+  max_chunks_per_turn: 4
+  max_chars_per_turn: 14000
+
+tools:
+  http_timeout: 30
+  http: []
+
+mcp:
+  enabled: ${MCP_ENABLED:false}
+  timeout: 30
+  max_failures_before_evict: 3
+  auto_evict: true
+  register_resources: true
+  register_prompts: false
+  servers:
+    - name: stub
+      transport: stdio
+      command: python3
+      args: ["-m", "app.mcp_stubs.stdio_server"]
+      prefix: mcp
+      required_role: user
+      risk_level: LOW
+
+policy:
+  auto_reject_risk_level: CRITICAL
+  require_review_risk_level: HIGH
+  max_retry_count: 3
+  review_timeout_enabled: true
+  review_timeout_minutes: 60
+  review_timeout_action: reject   # reject | escalate
+  review_timeout_poll_seconds: 30
+
+queue:
+  backend: memory   # memory | celery (celery 需 Redis + worker: celery -A app.services.celery_tasks worker)
+  redis_url: ${REDIS_URL:redis://localhost:6379/0}
+
+cli:
+  api_base_url: http://127.0.0.1:8000
+  api_key: ${SERVICE_API_KEY:}
+
+observability:
+  langsmith_enabled: false
+  langsmith_api_key: ${LANGCHAIN_API_KEY}
+  langsmith_project: agent-langraph
+  metrics_enabled: true
+
+secrets:
+  backend: ${SECRETS_BACKEND:env}   # env | k8s | vault
+
+rate_limit:
+  enabled: ${RATE_LIMIT_ENABLED:true}
+  user_per_minute: 10
+  ip_per_minute: 100
+  window_sec: 60
+  use_redis: ${RATE_LIMIT_REDIS:false}
+
+checkpoint:
+  retention_days: 30
+  cleanup_enabled: true
+  corruption_detection_enabled: true
+  auto_reset_on_corrupt: false
+  max_node_repeat: 10
+
+graph_runner:
+  backpressure_enabled: true
+  max_concurrent: 8
+  queue_timeout_sec: 30
+
+llm:
+  circuit_breaker_enabled: false
+  failure_threshold: 5
+  recovery_timeout_seconds: 60
+
+context_compress:
+  semantic_enabled: false
+  min_chars_for_semantic: 4000
+  keep_recent_turns: 6
+  summary_max_chars: 1200
+  min_ratio: 0.5   # CI gate: mean compression ratio must be >= this for long histories
+
+rag:
+  rerank_enabled: false
+  rerank_backend: lexical          # lexical | cross_encoder | cohere
+  rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+  rerank_candidate_k: 15
+  cohere_api_key: ${COHERE_API_KEY:}
+  cohere_rerank_model: rerank-english-v3.0
+  citation_enabled: false
+  faithfulness_check_enabled: false
+  faithfulness_llm_enabled: false
+  faithfulness_threshold: 0.7
+  eval_recall_at_k: 5
+  eval_min_recall: 0.8
+  eval_min_mrr: 0.5
+  eval_min_faithfulness: 0.75
+
+embedding:
+  dimension: 0          # 0 = probe at runtime
+  distance_metric: cosine
+  version: v1
+  auto_reindex_on_incompatibility: false
+
+skill:
+  enabled: false
+  config_dir: config/skills
+
+memory_compress:
+  enabled: true
+  min_chars: 2000
+
+a2a:
+  http_forward_enabled: true
+  registry_ttl_sec: 300
+  self_url: ${A2A_SELF_URL:}
+
+mission_micro_reflect:
+  enabled: true
+  confidence_threshold: 0.5
+
+exploration:
+  llm_score_enabled: true
+
+tenant:
+  enabled: ${MULTI_TENANT_ENABLED:false}
+  max_tasks_per_day: 0          # 0 = unlimited
+  max_tokens_per_day: 0
+  max_concurrent_tasks: 0

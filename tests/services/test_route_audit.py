@@ -1,0 +1,115 @@
+from app.runtime.state import merge_state
+from app.services.route_audit.apply import apply_route_corrections, writing_gate_allowed
+from app.services.route_audit.audit import audit_planned_route, detect_planned_route
+from app.services.route_audit.inference import infer_task_kind
+from app.services.route_audit.pipeline import run_route_audit_pipeline
+
+
+def _base_state(**overrides):
+    state = {
+        "task_id": "t-route-audit",
+        "session_id": "s-route-audit",
+        "session_turn": 13,
+        "skip_retrieval": True,
+        "input_payload": {
+            "goal": "你重新试试之前未成功的操作：用 C++ 链表实现大数相加",
+            "conversation_history": [
+                {"role": "user", "content": "用 C++ 写大数相加"},
+            ],
+            "session_outcomes": [
+                {"turn": 11, "outcome": "rejected", "reason": "output_guard pii"},
+            ],
+        },
+        "selected_tools": ["echo", "write_text_artifact"],
+        "plan": ["write code to artifact"],
+    }
+    state.update(overrides)
+    return state
+
+
+def test_infer_task_kind_code_or_retry():
+    state = _base_state()
+    result = infer_task_kind(state)
+    assert result["primary_kind"] in ("code", "retry_recovery")
+    assert float(result["confidence"]) > 0
+
+
+def test_audit_blocks_writing_manuscript_for_code_goal():
+    state = merge_state(
+        _base_state(),
+        input_payload={
+            **_base_state()["input_payload"],
+            "writing_intent": {"enabled": True, "action": "write_body"},
+            "manuscript": {"body_path": "novel.txt", "body_bytes": 100},
+        },
+    )
+    audit = audit_planned_route(state)
+    assert audit["planned_route"] == "writing_manuscript"
+    assert audit["aligned"] is False
+    assert "disable_writing_intent" in audit["corrections"]
+
+
+def test_apply_corrections_disables_writing_gate():
+    state = merge_state(
+        _base_state(),
+        input_payload={
+            **_base_state()["input_payload"],
+            "writing_intent": {"enabled": True, "action": "write_body"},
+        },
+    )
+    audit = audit_planned_route(state)
+    updated = apply_route_corrections(state, audit)
+    assert writing_gate_allowed(updated) is False
+    assert (updated.get("input_payload") or {}).get("force_slow_reasoning") is True
+    assert "write_text_artifact" not in (updated.get("selected_tools") or [])
+
+
+def test_pipeline_stores_route_audit_on_payload():
+    state = merge_state(
+        _base_state(),
+        input_payload={
+            **_base_state()["input_payload"],
+            "writing_intent": {"enabled": True, "action": "write_body"},
+        },
+    )
+    updated = run_route_audit_pipeline(state)
+    audit = (updated.get("input_payload") or {}).get("route_audit") or {}
+    assert audit.get("writing_blocked") is True or audit.get("prior_issues")
+    assert writing_gate_allowed(updated) is False
+
+
+def test_code_tools_only_rewrite_keeps_write_tool():
+    state = merge_state(
+        _base_state(),
+        input_payload={
+            **_base_state()["input_payload"],
+            "writing_intent": {"enabled": False},
+            "tool_params": {
+                "write_text_artifact": {"filename": "novel.txt", "task_id": "t-route-audit"},
+            },
+        },
+        selected_tools=["write_text_artifact"],
+    )
+    audit = audit_planned_route(state)
+    assert audit["planned_route"] == "writing_tools_only"
+    if audit.get("aligned"):
+        return
+    updated = apply_route_corrections(state, audit)
+    assert "write_text_artifact" in (updated.get("selected_tools") or [])
+    wt = (updated.get("input_payload") or {})["tool_params"]["write_text_artifact"]
+    assert str(wt["filename"]).endswith(".cpp")
+
+
+def test_detect_planned_route_code_filename():
+    state = merge_state(
+        _base_state(),
+        input_payload={
+            **_base_state()["input_payload"],
+            "writing_intent": {"enabled": True, "action": "write_body"},
+            "tool_params": {
+                "write_text_artifact": {"filename": "bignum.cpp", "task_id": "t-route-audit"},
+            },
+            "manuscript": {"body_path": "bignum.cpp", "body_bytes": 0},
+        },
+    )
+    assert detect_planned_route(state) == "writing_code_artifact"

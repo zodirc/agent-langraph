@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Runtime CLI</title>
+  <link rel="stylesheet" href="/static/terminal.css?v=steer-outcome-1" />
+</head>
+<body>
+  <div class="terminal">
+    <header class="terminal-header">
+      <span class="dot red"></span>
+      <span class="dot yellow"></span>
+      <span class="dot green"></span>
+      <span class="title">agent-langraph — runtime cli</span>
+      <div class="header-badges">
+        <span id="env-badge" class="badge badge-env">loading</span>
+        <span id="session-badge" class="badge badge-session" title="当前会话 ID">session …</span>
+      </div>
+    </header>
+    <main id="output" class="terminal-output"></main>
+    <div class="mission-bar" id="mission-bar">
+      <label class="mission-toggle" title="显式 mission 合同，不经由目标文案推断">
+        <input type="checkbox" id="longform-mission-toggle" />
+        <span>长篇 Mission</span>
+      </label>
+      <div class="mission-fields" id="mission-fields" hidden>
+        <label class="mission-field">
+          <span>总字数</span>
+          <input
+            type="number"
+            id="mission-total-chars"
+            min="1000"
+            step="1000"
+            placeholder="600000"
+            aria-label="mission total target chars"
+          />
+        </label>
+        <label class="mission-field">
+          <span>每步字数</span>
+          <input
+            type="number"
+            id="mission-chars-per-step"
+            min="500"
+            step="500"
+            value="4000"
+            aria-label="mission chars per step"
+          />
+        </label>
+      </div>
+    </div>
+    <form id="command-form" class="terminal-input-row" autocomplete="off">
+      <label for="command-input" class="prompt">&gt;</label>
+      <input
+        id="command-input"
+        type="text"
+        placeholder="输入任务目标，或 /help 查看命令"
+        autofocus
+      />
+    </form>
+  </div>
+  <script src="/static/app.js?v=steer-gate-fix-1"></script>
+</body>
+</html>

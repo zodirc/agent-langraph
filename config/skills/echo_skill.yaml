@@ -1,0 +1,19 @@
+skill_id: echo_helper
+name: Echo Helper
+version: "1.0.0"
+description: Wraps the built-in echo tool as a declarative skill.
+required_role: user
+risk_level: LOW
+tags:
+  - general
+  - qa
+enabled: true
+deprecated: false
+tool_name: echo
+input_schema:
+  type: object
+  properties:
+    message:
+      type: string
+  required:
+    - message

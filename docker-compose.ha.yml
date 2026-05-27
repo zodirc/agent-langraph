@@ -1,0 +1,45 @@
+# PostgreSQL primary + read replica (v0.10 HA)
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha up -d
+#
+# Read traffic uses DATABASE_READ_URL when set (state list/load GET paths).
+
+services:
+  postgres-replica:
+    image: postgres:16-alpine
+    container_name: agent-langraph-postgres-replica
+    profiles: [ha]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent}
+      POSTGRES_DB: ${POSTGRES_DB:-agent}
+    ports:
+      - "${POSTGRES_REPLICA_PORT:-5433}:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  agent:
+    environment:
+      DATABASE_READ_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres-replica:5432/${POSTGRES_DB:-agent}
+
+  celery-worker:
+    image: agent-langraph:latest
+    profiles: [ha]
+    depends_on:
+      - redis
+    command: celery -A app.services.celery_tasks worker -Q agent -l info
+    environment:
+      CONFIG_PATH: /app/config/config.docker.yaml
+      QUEUE_BACKEND: celery
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/${POSTGRES_DB:-agent}
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    profiles: [ha]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    restart: unless-stopped

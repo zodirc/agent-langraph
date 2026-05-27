@@ -1,0 +1,53 @@
+# RAG golden eval tasks (Ch19+) — run: pytest tests/eval/test_rag_golden.py -v
+
+tasks:
+  - id: rag_recall_exact
+    query: LangGraph stateful workflows
+    title: LangGraph Runtime
+    content: LangGraph is a framework for building stateful agent workflows with checkpoints.
+    relevant_doc_ids: []
+    expect_recall_min: 1.0
+
+  - id: rag_recall_keyword
+    query: vector database hybrid search
+    title: Hybrid RAG
+    content: Hybrid search combines vector database retrieval with keyword BM25 scoring.
+    expect_recall_min: 1.0
+
+  - id: rag_mrr_first_rank
+    query: Python asyncio event loop
+    title: Async Python
+    content: Python asyncio provides an event loop for concurrent coroutines.
+    decoy_title: Unrelated Cooking
+    decoy_content: Baking bread requires yeast and time.
+    expect_mrr_min: 1.0
+
+  - id: rag_rerank_order
+    query: neural reranking cross encoder
+    title: Reranking
+    content: Neural reranking uses a cross encoder to score query document pairs.
+    decoy_title: Weather
+    decoy_content: Today is sunny with light clouds.
+    expect_top_doc_contains: reranking
+
+  - id: rag_faithful_answer
+    answer: The capital of France is Paris.
+    doc_content: The capital of France is Paris.
+    expect_faithful: true
+
+  - id: rag_unfaithful_answer
+    answer: The capital of France is Berlin.
+    doc_content: The capital of France is Paris.
+    expect_faithful: false
+
+  - id: rag_citation_parse
+    answer: See [doc-abc-999] for details.
+    doc_id: doc-abc-999
+    expect_citation_id: doc-abc-999
+
+  - id: rag_empty_relevant
+    query: xyznonexistentterm12345
+    title: Something else
+    content: Completely unrelated content about gardening tools.
+    relevant_doc_ids: []
+    expect_recall_min: 0.0

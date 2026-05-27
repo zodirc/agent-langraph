@@ -1,0 +1,30 @@
+name: Golden Eval
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      - name: Unit + integration golden eval
+        run: |
+          SUITE=unit bash scripts/ci_eval.sh -q
+          SUITE=integration bash scripts/ci_eval.sh -q
+      - name: RAG golden eval (recall / MRR / faithfulness gates)
+        run: SUITE=rag bash scripts/ci_eval.sh -q
+      - name: MCP HTTP E2E
+        run: python3 -m pytest tests/integration/test_mcp_http_e2e.py -q
+      - name: Context compress E2E + ratio gate
+        run: python3 -m pytest tests/integration/test_context_compress_e2e.py tests/eval/test_context_compress_gate.py -q
+      - name: mypy strict (app/runtime)
+        run: bash scripts/ci_mypy.sh
