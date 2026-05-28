@@ -129,10 +129,18 @@ def apply_review_outline_mode(
     return out
 
 
-def _append_steer_goal(payload: dict[str, Any], text: str) -> dict[str, Any]:
-    """Append steer text to goal instead of replacing prior instructions."""
+def _append_steer_goal(
+    payload: dict[str, Any],
+    text: str,
+    *,
+    replace_goal: bool = False,
+) -> dict[str, Any]:
+    """Append steer text by default; optionally replace current goal."""
     text = (text or "").strip()
     if not text:
+        return payload
+    if replace_goal:
+        payload["goal"] = text
         return payload
     prev = str(payload.get("goal") or "").strip()
     if not prev:
@@ -178,6 +186,7 @@ def build_pending_queue(
     intervention: Optional[dict[str, Any]] = None,
     priority: int = 0,
     preempt: bool = False,
+    replace_goal: bool = False,
 ) -> dict[str, Any]:
     """Merge a new steer into the pending queue (preserves prior queued messages)."""
     entries = list(normalize_pending_entries(existing))
@@ -190,6 +199,8 @@ def build_pending_queue(
         entry["priority"] = int(priority)
     if preempt:
         entry["preempt"] = True
+    if replace_goal:
+        entry["replace_goal"] = True
     if entry.get("message") or entry.get("intervention"):
         entries.append(entry)
     combined = "\n\n".join(
@@ -221,6 +232,20 @@ def pending_steer_preempt(pending: Any) -> bool:
     return any(bool(e.get("preempt")) for e in normalize_pending_entries(pending))
 
 
+def pending_has_forced_action(pending: Any, action: str) -> bool:
+    """Check queued entries for a forced intervention action."""
+    target = str(action or "").strip()
+    if not target:
+        return False
+    for entry in normalize_pending_entries(pending):
+        itv = entry.get("intervention")
+        if not isinstance(itv, dict):
+            continue
+        if str(itv.get("action") or "") == target and bool(itv.get("force")):
+            return True
+    return False
+
+
 def apply_steer_message(
     state: AgentState,
     message: str = "",
@@ -229,6 +254,7 @@ def apply_steer_message(
     intervention: Optional[dict[str, Any]] = None,
     source: str = "user",
     confirm: bool = False,
+    replace_goal: bool = False,
 ) -> AgentState:
     """
     Merge steer input. Structured intervention with force=true overrides the loop;
@@ -251,7 +277,7 @@ def apply_steer_message(
 
     for text in texts:
         history.append({"role": "user", "content": text, "steer": True, "at": _now_iso()})
-        payload = _append_steer_goal(payload, text)
+        payload = _append_steer_goal(payload, text, replace_goal=replace_goal)
 
     if norm:
         payload = apply_intervention_to_payload(payload, norm)
@@ -276,7 +302,11 @@ def apply_steer_message(
                 "(intent or outcome gate)"
             )
 
-    if steer_needs_planning_llm(message=combined, intervention=norm):
+    from app.services.mission_execution import has_execution_grant
+
+    if steer_needs_planning_llm(message=combined, intervention=norm) and not (
+        has_execution_grant(payload) and not norm
+    ):
         payload = apply_steer_planning_gate(payload)
 
     payload.pop("steer_intent_confirmed", None)
@@ -313,7 +343,7 @@ def apply_steer_message(
         ),
     )
 
-    if norm and not norm.get("force") and norm.get("work_item") and orchestration_enabled(updated.get("mission") or {}):
+    if norm and norm.get("work_item") and orchestration_enabled(updated.get("mission") or {}):
         wi = norm["work_item"]
         updated = insert_work_item_after_current(
             updated,
@@ -325,7 +355,7 @@ def apply_steer_message(
                 "params": dict(wi.get("params") or {}),
             },
         )
-    elif norm and not norm.get("force") and norm.get("action") == "edit_plot" and orchestration_enabled(
+    elif norm and norm.get("action") == "edit_plot" and orchestration_enabled(
         updated.get("mission") or {}
     ):
         updated = insert_work_item_after_current(
@@ -361,9 +391,14 @@ def consume_pending_steer(state: AgentState) -> AgentState:
 
     texts = [str(e.get("message") or "").strip() for e in entries if e.get("message")]
     intervention: Optional[dict[str, Any]] = None
+    replace_goal = False
     for entry in reversed(entries):
         if entry.get("intervention"):
             intervention = entry.get("intervention")
+            break
+    for entry in reversed(entries):
+        if entry.get("replace_goal"):
+            replace_goal = True
             break
 
     return apply_steer_message(
@@ -371,6 +406,7 @@ def consume_pending_steer(state: AgentState) -> AgentState:
         messages=texts,
         intervention=intervention,
         source="pending",
+        replace_goal=replace_goal,
     )
 
 
@@ -382,6 +418,7 @@ def queue_steer_message(
     confirm: bool = False,
     priority: int = 0,
     preempt: bool = False,
+    replace_goal: bool = False,
 ) -> AgentState:
     if not (message or "").strip() and not intervention and not confirm:
         raise ValueError("steer requires message, intervention, and/or confirm=true")
@@ -397,6 +434,7 @@ def queue_steer_message(
             message,
             intervention=intervention,
             confirm=confirm,
+            replace_goal=replace_goal,
         )
 
     if status not in (
@@ -415,13 +453,30 @@ def queue_steer_message(
             if status in (TaskStatus.COMPLETED.value, TaskStatus.NEW.value):
                 raise ValueError(f"Task {task_id} cannot accept steer in status {status}")
 
-    pending = build_pending_queue(
-        stored.get("pending_user_message"),
-        message=message,
-        intervention=intervention,
-        priority=priority,
-        preempt=preempt,
+    is_forced_pause = bool(
+        intervention
+        and str(intervention.get("action") or "") == "pause"
+        and bool(intervention.get("force"))
     )
+    if is_forced_pause:
+        # Emergency stop lane: replace queued steers to avoid starvation behind queue tail.
+        pending = build_pending_queue(
+            None,
+            message=message,
+            intervention=intervention,
+            priority=max(100, int(priority or 0)),
+            preempt=True,
+            replace_goal=False,
+        )
+    else:
+        pending = build_pending_queue(
+            stored.get("pending_user_message"),
+            message=message,
+            intervention=intervention,
+            priority=priority,
+            preempt=preempt,
+            replace_goal=replace_goal,
+        )
 
     updated = merge_state(
         stored,

@@ -11,7 +11,7 @@ from app.nodes.reasoning_node import reasoning_node
 from app.nodes.retrieval_node import retrieval_node
 from app.nodes.tool_node import tool_execution_node
 from app.runtime.router import route_after_retrieval, route_after_tool
-from app.runtime.state import AgentState, append_node_history, ensure_agent_state
+from app.runtime.state import AgentState, append_node_history, ensure_agent_state, merge_state
 
 
 def build_worker_graph() -> StateGraph:
@@ -59,6 +59,6 @@ def run_worker_graph(state: AgentState) -> AgentState:
             continue
         for node_name, update in chunk.items():
             if isinstance(update, dict):
-                latest = ensure_agent_state({**latest, **update})
+                latest = merge_state(latest, **update)
             latest = append_node_history(latest, node_name)
     return latest

@@ -203,6 +203,13 @@ class SteerTaskRequest(BaseModel):
             "Best-effort preemption hint. When true, long writing steps will stop earlier when safe."
         ),
     )
+    replace_goal: bool = Field(
+        default=False,
+        description=(
+            "When true, replace current mission goal with new message "
+            "(takeover mode), instead of appending steer text."
+        ),
+    )
     confirm: bool = Field(
         default=False,
         description="Structured approval for pending steer intent/outcome gate",
@@ -227,6 +234,13 @@ class ResumeTaskResponse(BaseModel):
     steer_outcome_pending_confirm: bool = False
     steer_outcome_confirmation: Optional[dict[str, Any]] = None
     confirmation_actions: Optional[dict[str, Any]] = None
+
+
+class StopTaskResponse(BaseModel):
+    task_id: str
+    status: str
+    message: str
+    client_display: Optional[dict[str, Any]] = None
 
 
 @router.post("/{task_id}/steer", response_model=SteerTaskResponse)
@@ -259,6 +273,7 @@ def steer_task(
             confirm=request.confirm,
             priority=int(request.priority or 0),
             preempt=bool(request.preempt),
+            replace_goal=bool(request.replace_goal),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -277,6 +292,44 @@ def steer_task(
         revision_intent=payload.get("revision_intent"),
         message=str(client_display.get("kind") or ("queued" if queued else "applied")),
         client_display=client_display,
+    )
+
+
+@router.post("/{task_id}/stop", response_model=StopTaskResponse)
+def stop_task(
+    task_id: str,
+    _principal: AuthPrincipal = Depends(get_current_principal),
+) -> StopTaskResponse:
+    """
+    Best-effort immediate stop for running mission (especially long writing steps).
+    """
+    try:
+        state = get_graph_runner().steer_mission(
+            task_id,
+            "",
+            intervention={
+                "action": "pause",
+                "force": True,
+                "reason": "user requested stop",
+            },
+            priority=100,
+            preempt=True,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    from app.services.client_display import build_steer_task_client_display
+    from app.services.mission_steer import pending_steer_is_set
+
+    queued = pending_steer_is_set(state.get("pending_user_message"))
+    display = build_steer_task_client_display(state, queued=queued)
+    return StopTaskResponse(
+        task_id=task_id,
+        status=str(state.get("status")),
+        message="stop_queued",
+        client_display=display,
     )
 
 

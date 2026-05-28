@@ -215,6 +215,12 @@ def resolve_writing_intent_for_step(
     step = int(state.get("mission_step") or 1)
     payload = state.get("input_payload") or {}
 
+    from app.services.turn_contract import contract_from_payload, materialize_writing_intent_from_contract
+
+    contract = contract_from_payload(payload)
+    if contract and contract.get("override_step_policy"):
+        return materialize_writing_intent_from_contract(contract, state, mission=mission)
+
     intervention = intervention_from_payload(payload)
     if intervention and is_forced(intervention):
         intent = intervention_to_writing_intent(intervention, mission_step=step)
@@ -227,8 +233,15 @@ def resolve_writing_intent_for_step(
     action = (intervention or {}).get("action") if intervention else None
 
     ms = resolve_manuscript(state["task_id"], ms.to_dict())
-    has_outline = bool(ms.outline_path) and int(ms.outline_bytes or 0) > 0
-    has_body = manuscript_has_body(ms)
+    stored_ms = state.get("manuscript") or {}
+    outline_bytes = max(int(ms.outline_bytes or 0), int(stored_ms.get("outline_bytes") or 0))
+    body_bytes = max(int(ms.body_bytes or 0), int(stored_ms.get("body_bytes") or 0))
+    outline_path = ms.outline_path or stored_ms.get("outline_path")
+    body_path = ms.body_path or stored_ms.get("body_path")
+    has_outline = bool(outline_path) and outline_bytes > 0
+    has_body = bool(body_path) and body_bytes >= int(
+        getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)
+    )
 
     if action == "reset_body":
         return {

@@ -6,6 +6,7 @@ from typing import Any
 from app.config.settings import settings
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
 from app.services.artifact_content import (
+    SteerPreempted,
     _build_append_chunks,
     generate_artifact_content,
     parse_requested_chars,
@@ -18,8 +19,11 @@ from app.services.artifact_tools import (
 )
 from app.services.manuscript_context import (
     build_writing_context,
+    extract_chapter_text,
+    extract_outline_chapter_brief,
     is_near_duplicate_append,
     read_body_text,
+    read_outline_text,
     sync_chapter_fields,
 )
 from app.services.manuscript_service import (
@@ -125,6 +129,7 @@ def writing_node(state: AgentState) -> AgentState:
         target_chars = int(intent.get("target_chars") or settings.ARTIFACT_CHUNK_CHARS)
 
         results: list[dict[str, Any]] = list(state.get("tool_results") or [])
+        chapter_quality_metrics: dict[str, Any] = {}
 
         work_item_id = str(
             intent.get("work_item_id")
@@ -223,23 +228,33 @@ def writing_node(state: AgentState) -> AgentState:
             if intent.get("source") == "revision_intent":
                 ms.revision = int(ms.revision or 0) + 1
 
-            # Outline rewrite may invalidate existing body. Make a structured decision.
-            # This is intentionally generic (not goal-keyword hardcoding).
+            # Outline rewrite — structured diff + multi-level alignment (replan pipeline).
             try:
                 if manuscript_has_body(ms, min_bytes=256):
                     outline_before = str(payload.get("existing_outline_excerpt") or "").strip()
                     outline_after = str(payload.get("last_written_outline_excerpt") or "").strip()
                     if outline_before and outline_after and outline_before != outline_after:
                         from app.services.artifact_tools import read_artifact_tail
+                        from app.services.mission_intervention import apply_intervention_to_payload
                         from app.services.outline_body_alignment import (
                             decide_outline_body_alignment,
                         )
-                        from app.services.mission_intervention import apply_intervention_to_payload
+                        from app.services.outline_diff import compute_outline_diff
+                        from app.services.writing_reconcile import (
+                            apply_bridge,
+                            apply_chapter_patches,
+                        )
 
                         body_name = ms.body_path or str(
                             payload.get("novel_filename") or settings.MANUSCRIPT_DEFAULT_BODY
                         )
                         body_tail = read_artifact_tail(task_id, body_name, max_chars=2400)
+                        diff = compute_outline_diff(
+                            outline_before,
+                            outline_after,
+                            use_llm=False,
+                        )
+                        payload["outline_diff"] = diff.to_dict()
                         decision = decide_outline_body_alignment(
                             outline_before_excerpt=outline_before,
                             outline_after_excerpt=outline_after,
@@ -247,8 +262,15 @@ def writing_node(state: AgentState) -> AgentState:
                             body_total_chars=int(ms.body_bytes or 0),
                             last_chapter_index=int(ms.last_chapter_index or 0),
                             user_goal=str(payload.get("goal") or ""),
+                            outline_diff=diff,
                         )
                         payload["outline_body_alignment"] = decision.to_dict()
+                        reconcile_state = merge_state(
+                            state,
+                            input_payload=payload,
+                            manuscript=ms.to_dict(),
+                            tool_results=results,
+                        )
                         if decision.body_action == "rewrite_body":
                             payload = apply_intervention_to_payload(
                                 payload,
@@ -258,6 +280,26 @@ def writing_node(state: AgentState) -> AgentState:
                                     "reason": f"outline changed ({decision.change_level}): {decision.reason}",
                                 },
                             )
+                        elif decision.body_action == "append_with_bridge" and decision.bridge_spec:
+                            reconcile_state, bridge_tools = apply_bridge(
+                                reconcile_state,
+                                spec=decision.bridge_spec,
+                                decision=decision,
+                            )
+                            results.extend(bridge_tools)
+                            ms = resolve_manuscript(task_id, reconcile_state.get("manuscript"))
+                        elif (
+                            decision.body_action == "patch_recent_chapters"
+                            and decision.patch_instructions
+                        ):
+                            reconcile_state, patch_tools = apply_chapter_patches(
+                                reconcile_state,
+                                instructions=decision.patch_instructions,
+                                decision=decision,
+                            )
+                            results.extend(patch_tools)
+                            ms = resolve_manuscript(task_id, reconcile_state.get("manuscript"))
+                        payload = reconcile_state.get("input_payload") or payload
             except Exception:
                 # Alignment check is best-effort; writing must succeed even if it fails.
                 pass
@@ -367,6 +409,39 @@ def writing_node(state: AgentState) -> AgentState:
             payload["writing_intent"] = intent
             ms = resolve_manuscript(task_id, ms_dict)
 
+            try:
+                ch_idx = int(wctx.get("last_written_chapter") or wctx.get("chapter_index") or 0)
+                if ch_idx > 0 and action == "append_body":
+                    from app.services.chapter_outcome import (
+                        extract_chapter_outcome,
+                        sync_story_bible_from_outcome,
+                    )
+                    from app.services.writing_phases import load_story_bible
+
+                    outline_name = ms.outline_path or settings.MANUSCRIPT_DEFAULT_OUTLINE
+                    outline_full = read_outline_text(task_id, outline_name, state=state)
+                    chapter_text = extract_chapter_text(body_text, ch_idx)
+                    prev_text = (
+                        extract_chapter_text(body_text, ch_idx - 1) if ch_idx > 1 else ""
+                    )
+                    outline_slice = extract_outline_chapter_brief(outline_full, ch_idx)
+                    outcome = extract_chapter_outcome(
+                        task_id=task_id,
+                        chapter_index=ch_idx,
+                        chapter_text=chapter_text,
+                        outline_slice=outline_slice,
+                        prev_chapter_text=prev_text,
+                        story_bible=load_story_bible(task_id),
+                        use_llm=False,
+                        persist=True,
+                    )
+                    sync_story_bible_from_outcome(task_id, outcome)
+                    payload["last_chapter_outcome"] = outcome.to_dict()
+                    if outcome.quality_rubric:
+                        chapter_quality_metrics = outcome.quality_rubric.to_dict()
+            except Exception:
+                pass
+
         if action == "write_outline":
             done_path = ms.outline_path
             done_bytes = ms.outline_bytes
@@ -391,6 +466,10 @@ def writing_node(state: AgentState) -> AgentState:
         )
 
         progress_patch: dict[str, Any] = dict(state.get("progress") or {})
+        if chapter_quality_metrics:
+            metrics = dict(progress_patch.get("metrics") or {})
+            metrics["chapter_quality"] = chapter_quality_metrics
+            progress_patch["metrics"] = metrics
         if writing_delta is not None:
             delta_state = merge_state(
                 state,
@@ -431,6 +510,21 @@ def writing_node(state: AgentState) -> AgentState:
         get_state_store().save(updated)
         return updated
     except Exception as exc:
+        if isinstance(exc, SteerPreempted):
+            payload = dict(state.get("input_payload") or {})
+            payload["writing_stopped_for_steer"] = True
+            return merge_state(
+                state,
+                input_payload=payload,
+                status=TaskStatus.WRITTEN.value,
+                current_node="writing",
+                audit_log=append_audit(
+                    state,
+                    "writing",
+                    "preempted",
+                    {"detail": str(exc)},
+                ),
+            )
         report_block("writing", "error", f"【Writing 失败】{exc}", field="writing_error")
         return merge_state(
             state,

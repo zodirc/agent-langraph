@@ -68,23 +68,33 @@ def run_pipeline_request(state: AgentState) -> AgentState:
 
 
 def _mission_writing_reasoning_summary(state: AgentState) -> str:
-    """Deterministic post-write summary — avoids redundant reasoning LLM on happy path."""
+    """Deterministic post-write summary — narrative outcome when available."""
     from app.runtime.state import TaskStatus, append_audit, merge_state
 
     obs = state.get("observation") or {}
     manuscript = state.get("manuscript") or obs.get("manuscript") or {}
     metrics = obs.get("progress_metrics") or (state.get("progress") or {}).get("metrics") or {}
+    payload = state.get("input_payload") or {}
+    outcome = payload.get("last_chapter_outcome") or {}
     path = manuscript.get("body_path") or manuscript.get("outline_path") or "artifact"
     written = metrics.get("written_chars", manuscript.get("body_bytes", 0))
     pct = metrics.get("progress_pct", 0)
     chapter = manuscript.get("chapter_cursor") or metrics.get("chapter_cursor")
-    parts = [f"【本轮已执行】writing 完成：{path}"]
+    parts = [f"【本轮已执行】继续写作完成：{path}"]
     if written:
         parts.append(f"约 {written} 字")
     if pct:
         parts.append(f"进度 {pct}%")
     if chapter:
-        parts.append(f"章节游标 {chapter}")
+        parts.append(f"第 {chapter} 章")
+    if outcome.get("chapter_summary"):
+        parts.append(f"本章：{str(outcome['chapter_summary'])[:120]}")
+    elif outcome.get("ending_state"):
+        parts.append(f"章末：{str(outcome['ending_state'])[:80]}")
+    quality = metrics.get("chapter_quality") or outcome.get("quality_rubric")
+    if quality and quality.get("composite_score") is not None:
+        gate = "通过" if quality.get("pass_gate") else "待校正"
+        parts.append(f"质量 {quality['composite_score']:.2f}（{gate}）")
     summary = "，".join(parts) + "。"
     reasoning_result = {
         "summary": summary,
@@ -106,17 +116,47 @@ def _mission_writing_reasoning_summary(state: AgentState) -> str:
     )
 
 
+def _run_contract_tool_step(state: AgentState) -> AgentState | None:
+    """Execute turn_contract tools without re-entering full planning."""
+    from app.services.turn_contract import contract_blocks_writing, contract_tool_names
+
+    payload = state.get("input_payload") or {}
+    if not contract_blocks_writing(payload):
+        return None
+    tools = contract_tool_names(payload)
+    if not tools:
+        return None
+    return tool_execution_node(merge_state(state, selected_tools=tools))
+
+
 def run_subgraph_writing(state: AgentState) -> AgentState:
     """Writing-focused step: mission step_policy → writing → lightweight reasoning."""
+    from app.services.turn_contract import contract_blocks_writing
+
     state = prepare_state_for_mission_act(state)
-    intent = (state.get("input_payload") or {}).get("writing_intent") or {}
+    payload = dict(state.get("input_payload") or {})
+    if contract_blocks_writing(payload):
+        tool_step = _run_contract_tool_step(state)
+        if tool_step is not None:
+            return tool_step
+        return run_pipeline_request(state)
+
+    intent = payload.get("writing_intent") or {}
     if not intent.get("enabled"):
-        payload = dict(state.get("input_payload") or {})
-        payload["writing_intent"] = {
-            "enabled": True,
-            "action": "append_body",
-            "source": "mission",
-        }
+        item = payload.get("current_work_item") or {}
+        kind = str(item.get("kind") or "")
+        write_kinds = frozenset(
+            {"append_body", "write_body", "write_outline", "reset_body"}
+        )
+        if kind not in write_kinds:
+            return run_pipeline_request(state)
+        mission = state.get("mission") or {}
+        from app.services.mission_schema import resolve_writing_intent_for_step
+
+        resolved = resolve_writing_intent_for_step(state, mission=mission)
+        if not resolved.get("enabled"):
+            return run_pipeline_request(state)
+        payload["writing_intent"] = {**resolved, "enabled": True, "source": "work_item"}
         state = merge_state(state, input_payload=payload)
 
     current = writing_node(state)
@@ -184,6 +224,16 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
 
     if kind == "edit_plot":
         spec = dict((payload.get("edit_plot_spec") or item.get("params", {}).get("edit_spec") or {}))
+        from app.services.outline_steer_patch import is_outline_filename, run_outline_edit_via_tools
+
+        from app.config.settings import settings
+
+        filename = str(
+            spec.get("filename")
+            or getattr(settings, "MANUSCRIPT_DEFAULT_OUTLINE", "outline.txt")
+        )
+        if is_outline_filename(filename) and not spec.get("old_text"):
+            return run_outline_edit_via_tools(state, spec={**spec, "filename": filename})
         if spec.get("old_text"):
             from app.services.artifact_tools import handle_edit_text_artifact, handle_read_text_artifact
 
@@ -206,9 +256,13 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
                 }
             )
             ms = resolve_manuscript(task_id, state.get("manuscript"))
-            if ms.body_path == filename or not ms.body_path:
+            nbytes = int(edit_out.get("bytes") or 0)
+            if is_outline_filename(filename):
+                ms.outline_path = filename
+                ms.outline_bytes = nbytes
+            elif ms.body_path == filename or not ms.body_path:
                 ms.body_path = filename
-                ms.body_bytes = int(edit_out.get("bytes") or 0)
+                ms.body_bytes = nbytes
             return merge_state(
                 state,
                 tool_results=[
@@ -220,6 +274,8 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
             )
         return run_pipeline_request(state)
 
+    from app.services.turn_contract import contract_blocks_writing
+
     mission = state.get("mission") or {}
     executor = str(step_decision.get("next_executor") or "pipeline:request")
     if str(mission.get("kind", "")).lower() == "writing" and kind not in (
@@ -227,6 +283,11 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
         "human_gate",
     ):
         executor = "subgraph:writing"
+    if executor == "subgraph:writing" and contract_blocks_writing(payload):
+        tool_step = _run_contract_tool_step(state)
+        if tool_step is not None:
+            return tool_step
+        return run_pipeline_request(state)
     if executor == "subgraph:writing":
         return run_subgraph_writing(state)
     if executor == "tools_only":

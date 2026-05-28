@@ -45,7 +45,12 @@ class WritingPack(DomainPack):
         mission = state.get("mission") or {}
         target = float((mission.get("success_criteria") or {}).get("target") or 0)
         sp = mission.get("step_policy") or {}
-        return {
+        payload = state.get("input_payload") or {}
+        progress = state.get("progress") or {}
+        quality = (progress.get("metrics") or {}).get("chapter_quality") or payload.get(
+            "last_chapter_outcome", {}
+        ).get("quality_rubric")
+        metrics = {
             "written_chars": written,
             "body_bytes": body_bytes,
             "body_path": manuscript.get("body_path"),
@@ -58,6 +63,11 @@ class WritingPack(DomainPack):
             "last_chapter_index": int(manuscript.get("last_chapter_index") or 0),
             "revision": int(manuscript.get("revision") or 0),
         }
+        if quality:
+            metrics["chapter_quality"] = quality
+            metrics["quality_pass_gate"] = bool(quality.get("pass_gate"))
+            metrics["quality_composite"] = quality.get("composite_score")
+        return metrics
 
     def evaluate_success(
         self,
@@ -146,6 +156,27 @@ class WritingPack(DomainPack):
 
         metrics = progress.get("metrics") or {}
         last_ch = int(metrics.get("last_chapter_index") or 0)
+        quality = metrics.get("chapter_quality") or {}
+        if quality and not quality.get("pass_gate", True):
+            return {
+                "action": "continue",
+                "next_executor": "subgraph:writing",
+                "params": {
+                    "writing_phase": "review_chapter",
+                    "chapter_index": last_ch or metrics.get("chapter_cursor"),
+                },
+                "rationale": "chapter quality below gate — review",
+            }
+        if quality.get("polish_recommended") or float(quality.get("duplication_risk") or 0) > 0.4:
+            return {
+                "action": "continue",
+                "next_executor": "subgraph:writing",
+                "params": {
+                    "writing_phase": "polish_chapter",
+                    "chapter_index": last_ch or metrics.get("chapter_cursor"),
+                },
+                "rationale": "high duplication risk — polish",
+            }
         interval = int(getattr(settings, "MISSION_WRITING_REVIEW_EVERY_CHAPTERS", 0))
         if interval > 0 and last_ch > 0 and last_ch % interval == 0:
             constraints = mission.get("constraints") or {}

@@ -13,8 +13,24 @@ from app.services.state_store import get_state_store
 
 def mission_observe_node(state: AgentState) -> AgentState:
     """Build observation snapshot and refresh progress metrics."""
+    prev_obs = (state.get("observations") or [])[-1] if state.get("observations") else {}
     state = attach_observation(state)
+    obs = state.get("observation") or {}
+    from app.services.mission_execution import compute_artifact_delta
+
+    delta = compute_artifact_delta(
+        (prev_obs or {}).get("manuscript"),
+        obs.get("manuscript"),
+    )
+    if delta.get("has_change"):
+        obs = {**obs, "artifact_delta": delta}
+        payload = dict(state.get("input_payload") or {})
+        payload["observation"] = obs
+        state = merge_state(state, observation=obs, input_payload=payload)
     state = update_progress_from_observation(state)
+    from app.services.mission_execution import reconcile_work_plan
+
+    state = reconcile_work_plan(state)
     completed_item = None
     mission = state.get("mission") or {}
     if orchestration_enabled(mission) and not (state.get("observation") or {}).get(

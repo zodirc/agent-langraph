@@ -28,6 +28,7 @@ from app.services.manuscript_context import (
 )
 from app.services.manuscript_service import Manuscript, resolve_manuscript
 from app.services.mission_orchestrator import orchestration_enabled
+from app.services import writing_memory as wm
 
 PHASE_ACTIONS = frozenset(
     {
@@ -41,6 +42,7 @@ PHASE_ACTIONS = frozenset(
 
 STORY_BIBLE_FILENAME = "story_bible.json"
 CHAPTER_REVIEWS_FILENAME = "chapter_reviews.json"
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -81,43 +83,23 @@ def mark_phase_done(state: AgentState, chapter_index: int, phase: str) -> AgentS
     return merge_state(state, progress=_save_writing_state(progress, ws))
 
 
-def _story_bible_path(task_id: str) -> Any:
-    return task_artifact_dir(task_id) / STORY_BIBLE_FILENAME
-
-
 def load_story_bible(task_id: str) -> dict[str, Any]:
-    path = _story_bible_path(task_id)
-    if not path.exists():
-        return {"chapters": {}, "characters": {}, "open_threads": [], "updated_at": None}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {"chapters": {}}
-    except (json.JSONDecodeError, OSError):
-        return {"chapters": {}, "characters": {}, "open_threads": []}
+    """Legacy dict API — backed by schema-constrained StoryBible."""
+    return wm.load_story_bible(task_id).to_dict()
 
 
 def save_story_bible(task_id: str, data: dict[str, Any]) -> None:
-    data = {**data, "updated_at": _now_iso()}
-    _story_bible_path(task_id).write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    from app.domain.writing_memory_models import StoryBible
+
+    wm.save_story_bible(task_id, StoryBible.from_dict(data))
 
 
 def load_chapter_reviews(task_id: str) -> dict[str, Any]:
-    path = task_artifact_dir(task_id) / CHAPTER_REVIEWS_FILENAME
-    if not path.exists():
-        return {"reviews": {}}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {"reviews": {}}
-    except (json.JSONDecodeError, OSError):
-        return {"reviews": {}}
+    return wm.load_chapter_reviews(task_id)
 
 
 def save_chapter_reviews(task_id: str, data: dict[str, Any]) -> None:
-    path = task_artifact_dir(task_id) / CHAPTER_REVIEWS_FILENAME
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    wm.save_chapter_reviews(task_id, data)
 
 
 def should_use_writing_llm_decide(mission: dict[str, Any]) -> bool:
@@ -337,10 +319,20 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
         return _finish_phase(state, action, chapter, result, ms)
 
     if action == "review_chapter":
+        from app.services.writing_quality import rubric_passes_gate, score_chapter_quality
+
+        prev_text = extract_chapter_text(body_text, chapter - 1) if chapter > 1 else ""
         if not chapter_text:
             result = {"issues": ["chapter text empty"], "pass": False, "summary": "no chapter to review"}
         else:
-            result = _invoke_phase_structured(
+            rubric = score_chapter_quality(
+                chapter_text=chapter_text,
+                prev_chapter_text=prev_text,
+                outline_slice=outline_slice or "",
+                story_bible_excerpt=bible,
+                use_llm=True,
+            )
+            llm_review = _invoke_phase_structured(
                 "Return JSON: issues (list of strings), pass (bool), "
                 "summary (string), polish_recommended (bool).",
                 {
@@ -350,8 +342,18 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
                     "outline_for_chapter": outline_slice,
                     "novel_tail": wctx.get("novel_tail"),
                     "story_bible": bible,
+                    "quality_rubric": rubric.to_dict(),
                 },
             )
+            gate_pass = rubric_passes_gate(rubric)
+            result = {
+                **llm_review,
+                "pass": gate_pass and bool(llm_review.get("pass", True)),
+                "chapter_quality": rubric.to_dict(),
+                "polish_recommended": bool(llm_review.get("polish_recommended"))
+                or rubric.duplication_risk > 0.4
+                or not gate_pass,
+            }
         reviews = load_chapter_reviews(task_id)
         rev_map = dict(reviews.get("reviews") or {})
         rev_map[_chapter_key(chapter)] = {**result, "at": _now_iso()}
@@ -402,28 +404,31 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
         )
 
     if action == "chapter_summary":
+        from app.services.chapter_outcome import extract_chapter_outcome, sync_story_bible_from_outcome
+
+        prev_text = extract_chapter_text(body_text, chapter - 1) if chapter > 1 else ""
         if not chapter_text:
             chapter_text = "(empty)"
-        summary = _invoke_phase_structured(
-            "Return JSON: summary (200-400 Chinese chars), characters (list), "
-            "open_threads (list), facts (list of key plot facts).",
-            {
-                "phase": "chapter_summary",
-                "chapter_index": chapter,
-                "chapter_text": chapter_text[:10000],
-                "outline_for_chapter": outline_slice,
-            },
+        outcome = extract_chapter_outcome(
+            task_id=task_id,
+            chapter_index=chapter,
+            chapter_text=chapter_text,
+            outline_slice=outline_slice or "",
+            prev_chapter_text=prev_text,
+            story_bible=bible,
+            use_llm=True,
+            persist=True,
         )
-        chapters = dict(bible.get("chapters") or {})
-        chapters[_chapter_key(chapter)] = {**summary, "at": _now_iso()}
-        bible["chapters"] = chapters
-        threads = list(bible.get("open_threads") or [])
-        for t in summary.get("open_threads") or []:
-            ts = str(t).strip()
-            if ts and ts not in threads:
-                threads.append(ts)
-        bible["open_threads"] = threads[-40:]
-        save_story_bible(task_id, bible)
+        sync_story_bible_from_outcome(task_id, outcome)
+        summary = {
+            "summary": outcome.chapter_summary,
+            "ending_state": outcome.ending_state,
+            "hook_for_next": outcome.hook_for_next,
+            "events": [e.to_dict() for e in outcome.events],
+            "quality_rubric": outcome.quality_rubric.to_dict()
+            if outcome.quality_rubric
+            else None,
+        }
         state = mark_phase_done(state, chapter, "chapter_summary")
         return _finish_phase(state, action, chapter, summary, ms)
 
@@ -509,7 +514,24 @@ def suggest_writing_phase_fallback(state: AgentState) -> StepDecision:
         return StepDecision(action="finish", rationale="target_chars reached")
 
     next_ch = max(1, last_ch + (1 if body.strip() else 0))
+    if last_ch > 0 and "chapter_summary" not in done:
+        return StepDecision(
+            action="continue",
+            next_executor="subgraph:writing",
+            params={"writing_phase": "chapter_summary", "chapter_index": last_ch},
+            rationale="extract chapter outcome",
+        )
     if last_ch > 0 and "review_chapter" not in done:
+        reviews = load_chapter_reviews(task_id)
+        rev = (reviews.get("reviews") or {}).get(_chapter_key(last_ch)) or {}
+        quality = rev.get("chapter_quality") or {}
+        if quality and not quality.get("pass_gate", True):
+            return StepDecision(
+                action="continue",
+                next_executor="subgraph:writing",
+                params={"writing_phase": "polish_chapter", "chapter_index": last_ch},
+                rationale="quality gate failed — polish",
+            )
         return StepDecision(
             action="continue",
             next_executor="subgraph:writing",

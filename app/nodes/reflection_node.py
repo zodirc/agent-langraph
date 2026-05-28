@@ -16,6 +16,12 @@ def _route_audit_issues(state: AgentState) -> list[str]:
     return [str(i) for i in (audit.get("issues") or [])[:5]]
 
 
+def _turn_contract_issues(state: AgentState) -> list[str]:
+    from app.services.turn_contract import validate_turn_contract_execution
+
+    return validate_turn_contract_execution(state)
+
+
 def _rule_based_reflection(state: AgentState) -> dict[str, object]:
     """Critique when LLM is disabled — driven by fact_warnings and confidence."""
     reasoning = state.get("reasoning_result") or {}
@@ -24,12 +30,13 @@ def _rule_based_reflection(state: AgentState) -> dict[str, object]:
     confidence = float(reasoning.get("confidence", 1.0))
     issues: list[str] = []
     issues.extend(_route_audit_issues(state))
+    issues.extend(_turn_contract_issues(state))
     if warnings:
         issues.extend(str(w) for w in warnings[:5])
     if confidence < 0.6:
         issues.append(f"low confidence ({confidence})")
     retry_reasoning = bool(issues) and not _route_audit_issues(state)
-    retry_planning = bool(_route_audit_issues(state))
+    retry_planning = bool(_route_audit_issues(state) or _turn_contract_issues(state))
     return {
         "critique": "; ".join(issues) if issues else "no issues detected",
         "retry_reasoning": retry_reasoning,
@@ -74,12 +81,14 @@ def reflection_node(state: AgentState) -> AgentState:
             reflection = _rule_based_reflection(state)
 
         route_issues = _route_audit_issues(state)
-        if route_issues and not reflection.get("retry_planning"):
+        contract_issues = _turn_contract_issues(state)
+        replan_issues = route_issues + contract_issues
+        if replan_issues and not reflection.get("retry_planning"):
             reflection = {
                 **reflection,
                 "retry_planning": True,
                 "retry_reasoning": False,
-                "issues": list(dict.fromkeys(list(reflection.get("issues") or []) + route_issues)),
+                "issues": list(dict.fromkeys(list(reflection.get("issues") or []) + replan_issues)),
             }
 
         updated = merge_state(

@@ -1,6 +1,6 @@
 # 长文手稿（Manuscript）子系统
 
-> 版本：1.2 · 状态：已实现（Writing 节点 + 手稿状态 + Steer 双阶段确认 + 纲文对齐决策 + steer 抢占提示）  
+> 版本：1.3 · 状态：已实现（Writing 节点 + 手稿状态 + Steer 双阶段确认 + execution grant + work-plan reconcile）  
 > 开发规范：[`DEVELOPMENT_GUIDELINES.md`](../DEVELOPMENT_GUIDELINES.md) · 图编排：[`app/runtime/graph.py`](../app/runtime/graph.py)
 
 ## 1. 目标
@@ -210,7 +210,7 @@ Runtime 只依赖 `ManuscriptService` 接口，不依赖中文正则。
 
 | 来源 | 说明 |
 |------|------|
-| **懒加载**（默认） | `work_plan.mode=lazy`，每步由 `step_policy` 生成一个工作项；`autonomous` 时在单轮内连续执行，`interactive`+`stepwise` 时每步 `MISSION_PAUSED` |
+| **懒加载**（默认） | `work_plan.mode=lazy`，每步由 `step_policy` 生成一个工作项；`autonomous` 时在单轮内连续执行，`interactive`+`stepwise` 时每步 `MISSION_PAUSED`（`pause_reason=step_checkpoint`）；继续执行需 **execution grant**（见 [`MISSION_EXECUTION_CONTROL.md`](MISSION_EXECUTION_CONTROL.md)） |
 | **写作阶段（模型自选）** | `mission.writing_llm_decide=true` 时，每步 `mission_decide` 选择 `writing_phase`（写/审/润色/摘要/一致性/卷检查点），非固定流水线 |
 
 ### 写作阶段（`writing_phase`）
@@ -246,19 +246,64 @@ Runtime 只依赖 `ManuscriptService` 接口，不依赖中文正则。
 
 仅发 `message` 的 steer：`POST /tasks/{id}/steer` → 下一轮 `mission_act` 前会走 **planning + 工具** 解读该消息，再执行（见 §11.2–§11.5）。
 
-`POST /tasks/{id}/resume` 执行下一工作项或批准待确认闸门。关闭编排：`"orchestration": {"enabled": false}`。
+#### Turn contract（单轮可执行契约）
+
+为避免「规划写 edit_plot、执行却 append_body」的多通道漂移，planning 之后会物化 **`turn_contract`**（`app/services/turn_contract.py`）：
+
+| 字段 | 作用 |
+|------|------|
+| `primary_op` | 本回合主操作：`edit_plot`、`append_body`、`write_outline`… |
+| `tools` / `ops` | 本回合必须先执行的非写作工具 |
+| `forbid` | 本回合禁止的写作动作（如 `append_body`） |
+| `override_step_policy` | 为 true 时，`resolve_writing_intent_for_step` 不再退回 `step_policy.then` |
+
+来源（按优先级）：
+
+1. 规划 JSON 显式 `turn_contract`
+2. `mission_intervention`（含 `coerce_steer_intervention` 结果）
+3. **结构化推断**：`selected_tools` 含 read+edit 且 `writing_intent.enabled=false` → 自动补全 `edit_plot` + `force`（steer 规划轮）
+
+调度规则：
+
+- `route_after_planning` / `route_after_tool`：contract 禁止写作时 **不得** 进入 `writing_node`
+- `run_subgraph_writing`：禁止写作时改走 `run_pipeline_request`（工具链），**不再**隐式 `append_body`
+- `execute_mission_step`：`subgraph:writing` 在 contract 禁止时改走 pipeline
+- `reflection`：`validate_turn_contract_execution` 对比 `turn_facts`，可触发 `retry_planning`
+
+规划 prompt 可选输出 `turn_contract`；与 `mission_intervention` 等价。Steer 材料变更时建议 `forbid: ["append_body"]` 并配合 `work_plan_patch` 取消 pending 续写项。
+
+**Planning 解析容错**（`app/services/llm_client.py` + `planning_fallback_from_state`）：
+
+1. 流式仅返回 thinking、无 text → 自动 **非流式重试** 一次  
+2. 截断 JSON → `_repair_truncated_planning_json`  
+3. 仍失败 → **LLM JSON repair**（一次）  
+4. 仍失败 → 按 mission / `work_plan` 队列 **结构性 fallback**（如 pending `edit_plot` → read/edit 工具链），避免整轮 `FAILED`  
+
+审计指标：`planning_parse_fallback`、`planning_parse_llm_repaired`。
+
+**大纲内设定更正**（如「林远舟是……」）：当 `outline_status.outline_complete` 时，规划应走 **`edit_plot`**（勿 `rewrite_outline`；误选时由 `coerce_steer_intervention` 降级）。执行顺序由模型 + 工具完成，而非整篇重写：
+
+1. 工具 **`read_text_artifact`** 读取 `outline.txt`
+2. **规划模型**根据读到的正文与用户纠正，判定 `old_text` / `new_text` 锚点（`plan_edit_from_read_content`）
+3. 工具 **`edit_text_artifact`** 按锚点局部替换
+
+规划若已在 `tool_params` 中给出精确 `old_text`/`new_text`，可跳过第 2 步的再规划。仅当用户明确要求整份重写大纲时才用 `rewrite_outline`。
+
+`POST /tasks/{id}/resume` 签发 `execution_grant` 并执行下一工作项（或批准待确认闸门）。关闭编排：`"orchestration": {"enabled": false}`。
+
+编排队列与手稿不一致时，由 `reconcile_work_plan` 在 `mission_observe` / `mission_decide` 自动对齐（谓词见 [`MISSION_EXECUTION_CONTROL.md`](MISSION_EXECUTION_CONTROL.md)）。
 
 ### 11.1 Steer 投递路径（Web / API）
 
 | 场景 | 客户端行为 | 服务端 |
 |------|------------|--------|
 | **Mission 流式运行中**（`running=true`） | Web CLI 输入 → `POST /tasks/{id}/steer` | 消息进入 `pending_user_message` 队列；当前步（含正文流式）结束后在 `mission_eval` 消费并 `apply_steer_message` |
-| **已暂停**（`MISSION_PAUSED` / `REASONED`） | 同上或仅 `steer` | 立即 `apply_steer_message`，挂 `require_planning_after_steer` |
-| **刷新页面后同 session 再提交** | `POST /tasks/stream`，`session_id` 不变、`new_session=false` | **Session turn**（`prepare_session_turn`）：追加 `goal`、设规划闸门、**清空** 旧 `writing_intent.enabled`；若 goal 为「查看/检阅 + 大纲」则机械路由 `review_outline`（`goal_requests_outline_read`），读 `outline.txt` 进 `final_answer`；**不是** steer 队列 API |
+| **已暂停**（`MISSION_PAUSED` / `REASONED`） | `POST /resume` 或 steer | **`/resume`**：签发 `execution_grant`（`source=resume_api`），下一轮 `mission_decide` 可 `continue` 进入写作；仅 message 的 steer 仍可能挂 `require_planning_after_steer` |
+| **刷新页面后同 session 再提交** | `POST /tasks/stream`，`session_id` 不变、`new_session=false` | **Session turn**：`turn_policy` 判定 `resume_mission` 时，机械续写信号签发 **execution_grant** 并跳过规划闸门，直接 `apply_mission_step_to_payload`；材料级 steer 仍走 planning；「查看/检阅 + 大纲」走 `review_outline` |
 
 **注意**：刷新后输入 ≠ 运行中插队；若 session 仍在 `MISSION_RUNNING`，应先等暂停或确认服务端状态，避免与后台续写并行误解。
 
-实现：`app/services/mission_steer.py`、`app/services/session_turn.py`、`app/services/graph_runner._prepare_mission_for_turn`。
+实现：`app/services/mission_execution.py`、`app/services/mission_steer.py`、`app/services/session_turn.py`、`app/services/graph_runner._prepare_mission_for_turn`。
 
 #### Steer 优先级 / 抢占提示（best-effort）
 

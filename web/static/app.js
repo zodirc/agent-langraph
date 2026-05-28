@@ -1,8 +1,19 @@
 const outputEl = document.getElementById("output");
 const formEl = document.getElementById("command-form");
 const inputEl = document.getElementById("command-input");
+const stopBtnEl = document.getElementById("stop-btn");
 const envBadge = document.getElementById("env-badge");
 const sessionBadgeEl = document.getElementById("session-badge");
+const langgraphicsMetaEl = document.getElementById("langgraphics-meta");
+const langgraphicsLinkEl = document.getElementById("langgraphics-link");
+const langgraphicsFrameEl = document.getElementById("langgraphics-frame");
+const flowMetaEl = document.getElementById("flow-meta");
+const flowTaskEl = document.getElementById("flow-task");
+const flowGraphEl = document.getElementById("flow-graph");
+const flowTimelineEl = document.getElementById("flow-timeline");
+const flowRefreshBtnEl = document.getElementById("flow-refresh-btn");
+const flowOpenBtnEl = document.getElementById("flow-open-btn");
+const themeSelectEl = document.getElementById("theme-select");
 
 let running = false;
 let activeTaskId = null;
@@ -35,12 +46,28 @@ const FILE_PREVIEW_BOX_MIN_CHARS = 64;
 const TRACE_MAX_LINES = 400;
 /** Only auto-scroll when user is already near the bottom (allows reading history). */
 const SCROLL_PIN_THRESHOLD = 64;
+/** Sticky auto-follow for output area: true when user is at bottom, false after manual scroll up. */
+let outputAutoFollow = true;
 
 let writingPendingText = "";
 let writingFlushScheduled = false;
 let writingTraceHintShown = false;
 let thinkingPendingText = "";
 let thinkingFlushScheduled = false;
+let flowAutoRefreshTimer = null;
+const flowLiveHistoryByTask = new Map();
+let flowSelectedNode = "";
+let flowPopupWin = null;
+const FLOW_PREFERRED_ORDER = [
+  "planning",
+  "retrieval",
+  "tool_execution",
+  "reasoning",
+  "policy",
+  "output_guard",
+  "output",
+  "memory_writeback",
+];
 
 function isNearScrollBottom(el, threshold = SCROLL_PIN_THRESHOLD) {
   if (!el) return true;
@@ -54,8 +81,320 @@ function scrollToBottomIfPinned(el) {
   el.scrollTop = el.scrollHeight;
 }
 
+function updateOutputAutoFollow() {
+  outputAutoFollow = isNearScrollBottom(outputEl);
+}
+
 function scrollOutputIfPinned() {
-  scrollToBottomIfPinned(outputEl);
+  if (!outputEl || !outputAutoFollow) return;
+  outputEl.scrollTop = outputEl.scrollHeight;
+  outputAutoFollow = true;
+}
+
+if (outputEl) {
+  outputEl.addEventListener("scroll", updateOutputAutoFollow, { passive: true });
+}
+
+function isTerminalTaskStatus(status) {
+  const st = String(status || "");
+  return st === "COMPLETED" || st === "FAILED" || st === "DEAD_LETTER" || st === "WRITING_FAILED" || st === "REJECTED";
+}
+
+function formatFlowAt(raw) {
+  if (!raw) return "-";
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return String(raw);
+  return d.toLocaleTimeString();
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function renderFlowTimeline(data, taskId) {
+  if (!flowMetaEl || !flowTaskEl || !flowTimelineEl) return;
+  const status = data?.status || "-";
+  const node = data?.current_node || "-";
+  flowMetaEl.textContent = `状态: ${status} | 当前节点: ${node}`;
+  flowTaskEl.textContent = `task: ${(taskId || "-").toString().slice(0, 12)}${taskId ? "…" : ""}`;
+  const persistedHistory = Array.isArray(data?.node_history) ? data.node_history : [];
+  const liveHistory = flowLiveHistoryByTask.get(taskId) || [];
+  const history = liveHistory.length ? liveHistory : persistedHistory;
+  renderFlowGraph(history);
+  if (!history.length) {
+    flowTimelineEl.innerHTML = '<p class="flow-empty">暂无节点数据。运行任务后将自动显示。</p>';
+    return;
+  }
+  const items = history
+    .slice(-80)
+    .map((h, idx) => {
+      const hNode = String(h?.node || "?");
+      const hStatus = String(h?.status || "-");
+      const selected = flowSelectedNode && hNode === flowSelectedNode ? " selected" : "";
+      const cls = /FAILED|ERROR|DEAD_LETTER|WRITING_FAILED/.test(hStatus)
+        ? `flow-item error${selected}`
+        : /(DONE|COMPLETED|WRITTEN|TOOL_EXECUTED|PLANNED|APPROVED|RESUMED)/.test(hStatus)
+          ? `flow-item done${selected}`
+          : `flow-item${selected}`;
+      return `<div class="${cls}" data-flow-node="${escapeHtml(hNode)}" data-flow-idx="${idx}">
+        <div class="flow-item-row">
+          <span class="flow-node">${escapeHtml(hNode)}</span>
+          <span class="flow-status">${escapeHtml(hStatus)}</span>
+        </div>
+        <div class="flow-time">${escapeHtml(formatFlowAt(h?.at))}</div>
+      </div>`;
+    })
+    .join("");
+  flowTimelineEl.innerHTML = items;
+  flowTimelineEl.scrollTop = flowTimelineEl.scrollHeight;
+  for (const el of flowTimelineEl.querySelectorAll("[data-flow-node]")) {
+    el.addEventListener("click", () => {
+      flowSelectedNode = String(el.getAttribute("data-flow-node") || "");
+      renderFlowGraph(history);
+      for (const item of flowTimelineEl.querySelectorAll(".flow-item")) item.classList.remove("selected");
+      el.classList.add("selected");
+      if (flowMetaEl && flowSelectedNode) {
+        flowMetaEl.textContent = `状态: ${status} | 当前节点: ${node} | 定位: ${flowSelectedNode}`;
+      }
+      syncFlowPopup();
+    });
+  }
+  if (taskId && isTerminalTaskStatus(status) && activeTaskId === taskId) {
+    activeTaskId = null;
+    stopFlowAutoRefresh();
+  }
+}
+
+function buildTransitionSet(history) {
+  const set = new Set();
+  for (let i = 1; i < history.length; i += 1) {
+    const from = String(history[i - 1]?.node || "");
+    const to = String(history[i]?.node || "");
+    if (from && to && from !== to) set.add(`${from}->${to}`);
+  }
+  return set;
+}
+
+function getFlowNodes(history) {
+  const nodeSet = new Set();
+  for (const h of history) {
+    const node = String(h?.node || "").trim();
+    if (node) nodeSet.add(node);
+  }
+  const known = FLOW_PREFERRED_ORDER.filter((n) => nodeSet.has(n));
+  const unknown = [...nodeSet]
+    .filter((n) => !FLOW_PREFERRED_ORDER.includes(n))
+    .sort((a, b) => a.localeCompare(b));
+  const ordered = [...known, ...unknown];
+  return ordered.length ? ordered : FLOW_PREFERRED_ORDER;
+}
+
+function classifyNodeStatus(node, history) {
+  const rows = history.filter((h) => String(h?.node || "") === node);
+  if (!rows.length) return "idle";
+  const latest = String(rows[rows.length - 1]?.status || "");
+  if (/FAILED|ERROR|DEAD_LETTER|WRITING_FAILED/.test(latest)) return "error";
+  if (/DONE|COMPLETED|WRITTEN|TOOL_EXECUTED|PLANNED|POLICY_CHECKED|RETRIEVED|REASONED/.test(latest)) return "done";
+  return "active";
+}
+
+function renderFlowGraph(history) {
+  if (!flowGraphEl) return;
+  if (!history.length) {
+    flowGraphEl.innerHTML = '<p class="flow-empty">流程图等待任务数据…</p>';
+    return;
+  }
+  const nodes = getFlowNodes(history);
+  const nodeW = 150;
+  const nodeH = 38;
+  const gapY = 34;
+  const marginX = 28;
+  const marginY = 16;
+  const width = 460;
+  const height = marginY + nodes.length * nodeH + Math.max(0, nodes.length - 1) * gapY + 20;
+  const layout = new Map();
+  const nodeIndex = new Map();
+  for (let i = 0; i < nodes.length; i += 1) {
+    const x = Math.floor((width - nodeW) / 2);
+    const y = marginY + i * (nodeH + gapY);
+    layout.set(nodes[i], [x, y]);
+    nodeIndex.set(nodes[i], i);
+  }
+  const transitions = buildTransitionSet(history);
+  const lastTransition = history.length >= 2
+    ? `${String(history[history.length - 2]?.node || "")}->${String(history[history.length - 1]?.node || "")}`
+    : "";
+  const edges = [...transitions].map((t) => t.split("->")).filter((pair) => pair.length === 2);
+
+  let edgeSvg = "";
+  const markerDefs = `<defs>
+    <marker id="flow-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#60a5fa"></path>
+    </marker>
+    <marker id="flow-arrow-current" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#22d3ee"></path>
+    </marker>
+  </defs>`;
+  for (const [from, to] of edges) {
+    const p1 = layout.get(from);
+    const p2 = layout.get(to);
+    if (!p1 || !p2) continue;
+    const fromIdx = nodeIndex.get(from) ?? 0;
+    const toIdx = nodeIndex.get(to) ?? 0;
+    const x1 = p1[0] + nodeW / 2;
+    const y1 = p1[1] + nodeH; // from bottom edge
+    const x2 = p2[0] + nodeW / 2;
+    const y2 = p2[1]; // to top edge
+    const transitionKey = `${from}->${to}`;
+    const isCurrent = transitionKey === lastTransition;
+    const cls = isCurrent ? "flow-edge-arrow current" : "flow-edge-arrow active";
+    const marker = isCurrent ? "flow-arrow-current" : "flow-arrow";
+    if (toIdx > fromIdx) {
+      // Forward edge: clean top-down line outside node boxes.
+      edgeSvg += `<path class="${cls}" marker-end="url(#${marker})" d="M ${x1} ${y1} L ${x2} ${y2 - 4}" />`;
+    } else {
+      // Back edge: route from side channel (Mermaid-like loopback elbow).
+      const sideX = width - marginX;
+      const midY1 = y1 + 12;
+      const midY2 = y2 - 12;
+      edgeSvg += `<path class="${cls}" marker-end="url(#${marker})" d="M ${x1} ${y1} L ${sideX} ${midY1} L ${sideX} ${midY2} L ${x2} ${y2 - 4}" />`;
+    }
+  }
+
+  let nodeSvg = "";
+  for (const node of nodes) {
+    const p = layout.get(node);
+    if (!p) continue;
+    const status = classifyNodeStatus(node, history);
+    const selected = flowSelectedNode && flowSelectedNode === node ? " selected" : "";
+    const cls =
+      status === "error"
+        ? `flow-node-box error${selected}`
+        : status === "done"
+          ? `flow-node-box done${selected}`
+          : status === "active"
+            ? `flow-node-box active${selected}`
+            : `flow-node-box${selected}`;
+    const [x, y] = p;
+    nodeSvg += `<rect class="${cls}" x="${x}" y="${y}" rx="6" ry="6" width="${nodeW}" height="${nodeH}" />`;
+    nodeSvg += `<text class="flow-node-label" x="${x + 10}" y="${y + 21}">${escapeHtml(node)}</text>`;
+  }
+
+  flowGraphEl.innerHTML = `<svg class="flow-graph-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${markerDefs}${edgeSvg}${nodeSvg}</svg>`;
+  syncFlowPopup();
+}
+
+function buildFlowPopupHtml() {
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>Flow Graph</title>
+  <style>
+    body{margin:0;background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Menlo,Consolas,monospace}
+    body.theme-light{background:#f6f8fb;color:#1f2937}
+    .wrap{padding:14px}
+    .meta{font-size:13px;color:#93c5fd;margin:0 0 8px}
+    .task{font-size:12px;color:#8b949e;margin:0 0 10px}
+    .graph,.timeline{border:1px solid #30363d;border-radius:8px;background:#010409;padding:8px}
+    .graph{min-height:280px}
+    .timeline{margin-top:10px;max-height:45vh;overflow:auto}
+    .flow-graph-svg{width:100%;height:72vh;display:block}
+    .flow-edge-arrow{fill:none;stroke:#60a5fa;stroke-width:2.2;opacity:.95}
+    .flow-edge-arrow.active{stroke:#60a5fa;stroke-width:2.2;opacity:.95}
+    .flow-edge-arrow.current{stroke:#22d3ee;stroke-width:2.8;stroke-dasharray:5 10;animation:flowEdgeWave .7s linear infinite;opacity:1;filter:drop-shadow(0 0 5px rgba(34,211,238,.5))}
+    .flow-node-box{fill:rgba(139,148,158,.12);stroke:#4b5563;stroke-width:1.2}
+    .flow-node-box.active{fill:rgba(88,166,255,.2);stroke:#60a5fa}
+    .flow-node-box.done{fill:rgba(63,185,80,.16);stroke:rgba(63,185,80,.85)}
+    .flow-node-box.error{fill:rgba(248,81,73,.18);stroke:rgba(248,81,73,.9)}
+    .flow-node-box.selected{stroke:#fde047;stroke-width:2.2}
+    .flow-node-label{fill:#d1d5db;font-size:10px}
+    .flow-item{padding:6px 8px;border-radius:6px;border:1px solid rgba(139,148,158,.35);margin-bottom:6px;background:rgba(139,148,158,.08)}
+    .flow-item.done{border-color:rgba(63,185,80,.55);background:rgba(63,185,80,.1)}
+    .flow-item.error{border-color:rgba(248,81,73,.55);background:rgba(248,81,73,.1)}
+    .flow-item.selected{border-color:rgba(88,166,255,.75);background:rgba(88,166,255,.2)}
+    .flow-item-row{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+    .flow-node{color:#a7f3d0;font-size:12px}
+    .flow-status{font-size:11px;color:#bfdbfe;white-space:nowrap}
+    .flow-time{margin-top:4px;font-size:11px;color:#8b949e}
+    @keyframes flowEdgeWave{to{stroke-dashoffset:-30}}
+    body.theme-light .meta{color:#1d4ed8}
+    body.theme-light .task{color:#475569}
+    body.theme-light .graph,body.theme-light .timeline{border-color:#cbd5e1;background:#ffffff}
+    body.theme-light .flow-edge-arrow{stroke:#2563eb}
+    body.theme-light .flow-edge-arrow.current{stroke:#0891b2;filter:drop-shadow(0 0 4px rgba(8,145,178,.45))}
+    body.theme-light .flow-node-box{fill:#f8fafc;stroke:#94a3b8}
+    body.theme-light .flow-node-box.active{fill:#dbeafe;stroke:#3b82f6}
+    body.theme-light .flow-node-box.done{fill:#dcfce7;stroke:#16a34a}
+    body.theme-light .flow-node-box.error{fill:#fee2e2;stroke:#dc2626}
+    body.theme-light .flow-node-label{fill:#0f172a}
+    body.theme-light .flow-item{border-color:#cbd5e1;background:#f8fafc}
+    body.theme-light .flow-item.done{border-color:#86efac;background:#f0fdf4}
+    body.theme-light .flow-item.error{border-color:#fca5a5;background:#fef2f2}
+    body.theme-light .flow-item.selected{border-color:#3b82f6;background:#dbeafe}
+    body.theme-light .flow-node{color:#065f46}
+    body.theme-light .flow-status{color:#1e3a8a}
+    body.theme-light .flow-time{color:#64748b}
+  </style></head><body>
+  <div class="wrap">
+    <p id="m" class="meta">等待数据</p><p id="t" class="task">task: -</p>
+    <div id="g" class="graph"></div><div id="tl" class="timeline"></div>
+  </div></body></html>`;
+}
+
+function syncFlowPopup() {
+  if (!flowPopupWin || flowPopupWin.closed) return;
+  try {
+    const d = flowPopupWin.document;
+    const m = d.getElementById("m");
+    const t = d.getElementById("t");
+    const g = d.getElementById("g");
+    const tl = d.getElementById("tl");
+    if (!m || !t || !g || !tl) return;
+    const currentTheme = document.body.classList.contains("theme-light") ? "theme-light" : "theme-dark";
+    d.body.classList.remove("theme-light", "theme-dark");
+    d.body.classList.add(currentTheme);
+    m.textContent = flowMetaEl?.textContent || "等待数据";
+    t.textContent = flowTaskEl?.textContent || "task: -";
+    g.innerHTML = flowGraphEl?.innerHTML || "";
+    tl.innerHTML = flowTimelineEl?.innerHTML || "";
+  } catch {
+    /* ignore popup sync errors */
+  }
+}
+
+async function refreshFlowPanel(taskId = null) {
+  if (!flowTimelineEl) return;
+  const useTaskId = taskId || activeTaskId || getSessionId();
+  if (!useTaskId) return;
+  try {
+    const res = await fetch(`/tasks/${useTaskId}/status`, { headers: getAuthHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    renderFlowTimeline(data, useTaskId);
+  } catch {
+    /* ignore flow panel refresh failure */
+  }
+}
+
+function ensureFlowAutoRefresh() {
+  if (flowAutoRefreshTimer) return;
+  flowAutoRefreshTimer = setInterval(() => {
+    if (!running && !activeTaskId) return;
+    refreshFlowPanel();
+  }, 1800);
+}
+
+function stopFlowAutoRefresh() {
+  if (!flowAutoRefreshTimer) return;
+  clearInterval(flowAutoRefreshTimer);
+  flowAutoRefreshTimer = null;
+}
+
+function updateStopButtonState() {
+  if (!stopBtnEl) return;
+  stopBtnEl.disabled = !(running || sessionHasInFlightMission);
 }
 /** Mission control-loop nodes — hidden from chat; use progress/trace for long runs. */
 const MISSION_LOOP_NODES = new Set([
@@ -68,19 +407,10 @@ const MISSION_LOOP_NODES = new Set([
 let healthBadgeBase = "";
 const TOKEN_KEY = "agent_access_token";
 const SESSION_KEY = "agent_session_id";
+const THEME_KEY = "agent_theme";
 /** Next stream submit uses new_session=true once (after /new). */
 let pendingNewSession = false;
-const LONGFORM_MISSION_KEY = "agent_longform_mission";
-const MISSION_TOTAL_CHARS_KEY = "agent_mission_total_chars";
-const MISSION_CHARS_PER_STEP_KEY = "agent_mission_chars_per_step";
-const DEFAULT_MISSION_TOTAL_CHARS = 600000;
-const DEFAULT_MISSION_CHARS_PER_STEP = 4000;
-
-const longformToggleEl = document.getElementById("longform-mission-toggle");
-const missionBarEl = document.getElementById("mission-bar");
-const missionFieldsEl = document.getElementById("mission-fields");
-const missionTotalCharsEl = document.getElementById("mission-total-chars");
-const missionCharsPerStepEl = document.getElementById("mission-chars-per-step");
+let sessionHasInFlightMission = false;
 
 /** UUID v4; works on http://<LAN-IP> where crypto.randomUUID is unavailable. */
 function newSessionId() {
@@ -118,6 +448,69 @@ function updateSessionBadge(sessionId) {
   const short = `${id.slice(0, 8)}…`;
   sessionBadgeEl.textContent = `session ${short}`;
   sessionBadgeEl.title = `会话 ID（完整）: ${id}\n/new 可开启新会话`;
+  updateLanggraphicsPanel();
+}
+
+function applyTheme(theme) {
+  const t = theme === "light" ? "light" : "dark";
+  document.body.classList.remove("theme-light", "theme-dark");
+  document.body.classList.add(`theme-${t}`);
+  if (themeSelectEl) themeSelectEl.value = t;
+  localStorage.setItem(THEME_KEY, t);
+  syncFlowPopup();
+}
+
+function buildSessionLanggraphicsUrl(baseUrl, sessionId) {
+  if (!baseUrl) return "";
+  try {
+    const url = new URL(baseUrl, window.location.origin);
+    const lgHost = (url.hostname || "").trim().toLowerCase();
+    const pageHost = (window.location.hostname || "").trim();
+    const loopbackHosts = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
+
+    // If backend exposes a loopback host, rewrite to the current page host.
+    // This keeps ports/path from LangGraphics while adapting host to deployment access path.
+    if (loopbackHosts.has(lgHost) && pageHost) {
+      url.hostname = pageHost;
+    }
+    // Current LangGraphics deployment is global on port 8764 and does not
+    // support session-specific query routing.
+    url.searchParams.delete("session_id");
+    return url.toString();
+  } catch {
+    return baseUrl;
+  }
+}
+
+function updateLanggraphicsPanel() {
+  if (!langgraphicsMetaEl || !langgraphicsLinkEl || !langgraphicsFrameEl) return;
+  const baseUrl = window.__langgraphicsUrl || "";
+  const sessionId = localStorage.getItem(SESSION_KEY) || "";
+  const sessionUrl = buildSessionLanggraphicsUrl(baseUrl, sessionId);
+  if (!sessionUrl) {
+    langgraphicsMetaEl.textContent = "LangGraphics 未开启或未配置";
+    langgraphicsLinkEl.hidden = true;
+    langgraphicsFrameEl.hidden = true;
+    langgraphicsFrameEl.removeAttribute("src");
+    return;
+  }
+  const short = `${sessionId.slice(0, 8)}…`;
+  let hostInfo = "";
+  try {
+    hostInfo = new URL(sessionUrl).host;
+  } catch {
+    hostInfo = "";
+  }
+  langgraphicsMetaEl.textContent = hostInfo
+    ? `当前会话: ${short} | 图地址: ${hostInfo} (全局图)`
+    : `当前会话: ${short} (全局图)`;
+  langgraphicsLinkEl.hidden = false;
+  langgraphicsLinkEl.href = sessionUrl;
+  langgraphicsLinkEl.textContent = "在新窗口打开会话图";
+  if (langgraphicsFrameEl.getAttribute("src") !== sessionUrl) {
+    langgraphicsFrameEl.src = sessionUrl;
+  }
+  langgraphicsFrameEl.hidden = false;
 }
 
 function startNewSession() {
@@ -144,6 +537,7 @@ function attachSessionFlags(body) {
 
 function clearScreen() {
   outputEl.replaceChildren();
+  outputAutoFollow = true;
   progressLineEl = null;
   resetTraceBlock();
   resetAnswerStream();
@@ -513,9 +907,12 @@ function setRunning(value) {
     resetWritingStream();
     prepareThinkingStreamUi();
     startRunTimer();
+    ensureFlowAutoRefresh();
   } else {
     stopRunTimer();
+    if (!activeTaskId) stopFlowAutoRefresh();
   }
+  updateStopButtonState();
 }
 
 function formatLanggraphicsHealth(lg) {
@@ -565,14 +962,20 @@ async function fetchHealth() {
     if (lg.enabled && lg.url) {
       window.__langgraphicsUrl = lg.url;
     }
+    updateLanggraphicsPanel();
   } catch {
     envBadge.textContent = "offline";
+    updateLanggraphicsPanel();
   }
 }
 
 async function listHistory() {
   const res = await fetch("/tasks?limit=10", { headers: getAuthHeaders() });
   if (!res.ok) {
+    if (res.status === 429) {
+      appendLine("history rate-limited (429). 请稍等 30-60 秒后重试。", "error");
+      return;
+    }
     appendLine(`history failed: ${res.status}`, "error");
     return;
   }
@@ -596,6 +999,7 @@ async function showStatus(taskId) {
     return;
   }
   const data = await res.json();
+  renderFlowTimeline(data, taskId);
   appendLine(
     `status: ${data.status} | node: ${data.current_node} | review: ${data.review_required}`,
     "system"
@@ -689,12 +1093,18 @@ async function runAutonomousUi(autonomousUi, taskId) {
   }
 }
 
-async function steerActiveMission(message) {
+async function steerActiveMission(message, opts = {}) {
   const taskId = activeTaskId || getSessionId();
+  const payload = {
+    message,
+    preempt: Boolean(opts.preempt),
+    priority: Number.isFinite(opts.priority) ? opts.priority : 0,
+    replace_goal: Boolean(opts.replaceGoal),
+  };
   const res = await fetch(`/tasks/${taskId}/steer`, {
     method: "POST",
     headers: getAuthHeaders(),
-    body: JSON.stringify({ message }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     appendLine(await res.text(), "error");
@@ -707,6 +1117,83 @@ async function steerActiveMission(message) {
     appendLine(`steer → ${data.message || data.status}`, "system");
   }
   return true;
+}
+
+async function stopActiveMission() {
+  const taskId = activeTaskId || getSessionId();
+  const res = await fetch(`/tasks/${taskId}/stop`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    appendLine(`stop failed: ${res.status} ${await res.text()}`, "error");
+    return false;
+  }
+  const data = await res.json();
+  const display = data.client_display || {};
+  appendSystemLines(display.system_lines);
+  if (!display.system_lines?.length) {
+    appendLine("stop requested, waiting current step to yield…", "system");
+  }
+  return true;
+}
+
+async function stopTaskById(taskId) {
+  const res = await fetch(`/tasks/${taskId}/stop`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) return false;
+  return true;
+}
+
+async function getTaskStatusValue(taskId) {
+  try {
+    const res = await fetch(`/tasks/${taskId}/status`, { headers: getAuthHeaders() });
+    if (!res.ok) return "";
+    const data = await res.json();
+    return String(data.status || "");
+  } catch {
+    return "";
+  }
+}
+
+async function stopAllInFlightMissions({ limit = 100 } = {}) {
+  const res = await fetch(`/tasks?limit=${Math.min(limit, 100)}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    if (res.status === 429) {
+      appendLine("stop-all blocked by rate limit (429). 请稍后再试。", "error");
+      return { stopped: 0, total: 0, limited: true };
+    }
+    appendLine(`list tasks failed: ${res.status}`, "error");
+    return { stopped: 0, total: 0, limited: false };
+  }
+  const data = await res.json();
+  const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+  const inflight = tasks.filter((t) => {
+    const st = String(t.status || "");
+    return st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
+  });
+  let stopped = 0;
+  let limited = false;
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  for (const t of inflight) {
+    const r = await fetch(`/tasks/${t.task_id}/stop`, {
+      method: "POST",
+      headers: getAuthHeaders(),
+    });
+    if (r.status === 429) {
+      limited = true;
+      break;
+    }
+    const ok = r.ok;
+    if (ok) stopped += 1;
+    // Soft throttle to avoid request burst on strict rate limits.
+    await delay(180);
+  }
+  return { stopped, total: inflight.length, limited };
 }
 
 function formatStructuredConfirmHint(confirmation, confirmationActions) {
@@ -906,6 +1393,7 @@ async function runResumeStream(taskId, { confirm = false } = {}) {
   shownConfirmationKeys.clear();
   writingStreamCharsThisTurn = 0;
   appendLine(`> /resume${confirm ? " confirm" : ""}`, "user");
+  const taskIdRef = { id: taskId };
   try {
     const res = await fetch(`/tasks/${taskId}/resume/stream`, {
       method: "POST",
@@ -916,7 +1404,6 @@ async function runResumeStream(taskId, { confirm = false } = {}) {
       appendLine(`resume stream failed: ${res.status} ${await res.text()}`, "error");
       return null;
     }
-    const taskIdRef = { id: taskId };
     activeTaskId = taskId;
     await consumeSseStream(res, taskIdRef);
     return { task_id: taskIdRef.id || taskId };
@@ -925,6 +1412,7 @@ async function runResumeStream(taskId, { confirm = false } = {}) {
     return null;
   } finally {
     setRunning(false);
+    await refreshFlowPanel(taskIdRef?.id || taskId || activeTaskId);
   }
 }
 
@@ -950,9 +1438,13 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
   if (payload.task_id) {
     taskIdRef.id = payload.task_id;
     activeTaskId = payload.task_id;
+    ensureFlowAutoRefresh();
   }
 
   if (eventType === "task_created") {
+    if (payload.task_id) {
+      flowLiveHistoryByTask.set(payload.task_id, []);
+    }
     if (payload.session_id) {
       localStorage.setItem(SESSION_KEY, payload.session_id);
       updateSessionBadge(payload.session_id);
@@ -976,10 +1468,13 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
   } else if (eventType === "worker") {
     appendLine(`  worker ${payload.domain}: ${payload.status} — ${payload.summary || ""}`, "node");
   } else if (eventType === "langgraphics") {
+    // Avoid repeating LangGraphics setup hints on every session turn / resume.
+    if (payload.continued) return;
     const msg = payload.message || "";
     if (msg) appendLine(msg, "system");
     if (payload.url) {
       window.__langgraphicsUrl = payload.url;
+      updateLanggraphicsPanel();
       appendLine(`LangGraphics UI: ${payload.url}`, "system");
       appendLine("  （需在提交任务后才会出现节点动画；仅打开页面而无任务时可能为空图）", "system");
     }
@@ -1037,6 +1532,18 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
     setAnswerStreamText(payload.text || "");
   } else if (eventType === "node") {
     formatNodeEvent(payload);
+    flowSelectedNode = String(payload.node || payload.current_node || flowSelectedNode || "");
+    const nodeTaskId = taskIdRef.id || payload.task_id || activeTaskId;
+    if (nodeTaskId) {
+      const rows = flowLiveHistoryByTask.get(nodeTaskId) || [];
+      rows.push({
+        node: payload.node || payload.current_node || "?",
+        status: payload.status || "",
+        at: new Date().toISOString(),
+      });
+      flowLiveHistoryByTask.set(nodeTaskId, rows.slice(-120));
+    }
+    refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
   } else if (eventType === "review_required") {
     appendLine(payload.message, "system");
     appendLine(`approve: /approve ${payload.task_id}`, "system");
@@ -1077,6 +1584,7 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
         );
       }
     }
+    refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
   }
 }
 
@@ -1149,69 +1657,6 @@ async function consumeSseStream(res, taskIdRef) {
   }
 }
 
-function isLongformMissionEnabled() {
-  return Boolean(longformToggleEl && longformToggleEl.checked);
-}
-
-function syncMissionBarUi() {
-  if (!longformToggleEl || !missionBarEl || !missionFieldsEl) return;
-  const on = longformToggleEl.checked;
-  missionFieldsEl.hidden = !on;
-  missionBarEl.classList.toggle("mission-on", on);
-  localStorage.setItem(LONGFORM_MISSION_KEY, on ? "1" : "0");
-  if (missionTotalCharsEl && missionTotalCharsEl.value) {
-    localStorage.setItem(MISSION_TOTAL_CHARS_KEY, missionTotalCharsEl.value);
-  }
-  if (missionCharsPerStepEl && missionCharsPerStepEl.value) {
-    localStorage.setItem(MISSION_CHARS_PER_STEP_KEY, missionCharsPerStepEl.value);
-  }
-}
-
-function restoreMissionBarUi() {
-  if (!longformToggleEl) return;
-  longformToggleEl.checked = localStorage.getItem(LONGFORM_MISSION_KEY) === "1";
-  if (missionTotalCharsEl) {
-    const saved = localStorage.getItem(MISSION_TOTAL_CHARS_KEY);
-    if (saved) missionTotalCharsEl.value = saved;
-  }
-  if (missionCharsPerStepEl) {
-    const saved = localStorage.getItem(MISSION_CHARS_PER_STEP_KEY);
-    if (saved) missionCharsPerStepEl.value = saved;
-  }
-  syncMissionBarUi();
-}
-
-/** Explicit writing mission contract — only when UI toggle is on (no goal parsing). */
-function buildWritingMissionBody(goal, riskLevel = "LOW") {
-  const totalRaw = missionTotalCharsEl && missionTotalCharsEl.value.trim();
-  const stepRaw = missionCharsPerStepEl && missionCharsPerStepEl.value.trim();
-  const totalTarget = totalRaw ? parseInt(totalRaw, 10) : DEFAULT_MISSION_TOTAL_CHARS;
-  const charsPerStep = stepRaw ? parseInt(stepRaw, 10) : DEFAULT_MISSION_CHARS_PER_STEP;
-  return attachSessionFlags({
-    task_type: "qa",
-    user_id: "web",
-    input_payload: {
-      goal,
-      risk_level: riskLevel,
-      execution_mode: "mission",
-      mission_auto: false,
-      mission: {
-        kind: "writing",
-        objective: goal,
-        total_target_chars: Number.isFinite(totalTarget) ? totalTarget : DEFAULT_MISSION_TOTAL_CHARS,
-        autonomous: true,
-        step_policy: {
-          first_step: "outline",
-          then: "append_body",
-          chars_per_step: Number.isFinite(charsPerStep)
-            ? charsPerStep
-            : DEFAULT_MISSION_CHARS_PER_STEP,
-        },
-      },
-    },
-  });
-}
-
 function buildDefaultTaskBody(goal, riskLevel = "LOW") {
   return attachSessionFlags({
     task_type: "qa",
@@ -1226,9 +1671,6 @@ function buildDefaultTaskBody(goal, riskLevel = "LOW") {
 }
 
 function buildTaskRequestBody(goal, riskLevel = "LOW") {
-  if (isLongformMissionEnabled()) {
-    return buildWritingMissionBody(goal, riskLevel);
-  }
   return buildDefaultTaskBody(goal, riskLevel);
 }
 
@@ -1238,14 +1680,7 @@ async function runTaskStream(goal, riskLevel = "LOW", endpoint = "/tasks/stream"
   writingStreamCharsThisTurn = 0;
   appendLine(`> ${goal}`, "user");
   const requestBody = body || buildTaskRequestBody(goal, riskLevel);
-  if (!body && isLongformMissionEnabled()) {
-    const m = requestBody.input_payload.mission || {};
-    const sp = m.step_policy || {};
-    appendLine(
-      `mission: writing | total=${m.total_target_chars} | step=${sp.chars_per_step} | outline→append`,
-      "system"
-    );
-  }
+  const taskIdRef = { id: null };
 
   try {
     const res = await fetch(endpoint, {
@@ -1259,12 +1694,12 @@ async function runTaskStream(goal, riskLevel = "LOW", endpoint = "/tasks/stream"
       return;
     }
 
-    const taskIdRef = { id: null };
     await consumeSseStream(res, taskIdRef);
   } catch (err) {
     appendLine(`stream error: ${err}`, "error");
   } finally {
     setRunning(false);
+    await refreshFlowPanel(taskIdRef?.id || activeTaskId);
   }
 }
 
@@ -1279,6 +1714,10 @@ function printHelp() {
   appendLine("  /new             Start a new session (new task window)", "system");
   appendLine("  /clear           Clear terminal output", "system");
   appendLine("  /confirm         POST /resume {\"confirm\":true} (pending steer gate)", "system");
+  appendLine("  /resume          Continue current paused mission stream", "system");
+  appendLine("  /stop            Stop current running session task (best-effort immediate)", "system");
+  appendLine("  /stop-all        Stop all in-flight missions in recent task list", "system");
+  appendLine("  /append <text>   Add follow-up steer without replacing current goal", "system");
   appendLine("  /session         Show current session id (also in header)", "system");
   appendLine("  /help            Show this help", "system");
   appendLine("  /history         List recent tasks", "system");
@@ -1289,8 +1728,7 @@ function printHelp() {
   appendLine("  /reject <id>     Reject human review", "system");
   appendLine("  /supervisor <text>  Multi-agent supervisor task (SSE)", "system");
   appendLine("  /risk high <text> Run high-risk task (triggers review)", "system");
-  appendLine("  /mission on|off   强开长篇 Mission（勾选同）；未开时由规划模型自动判定", "system");
-  appendLine("  /langgraphics       显示 LangGraph 可视化地址与开启说明", "system");
+  appendLine("  /langgraphics       显示 LangGraph 可视化地址与开启说明（可选）", "system");
   appendLine("  /login <user> <pass>  Obtain JWT (when auth enabled)", "system");
   appendLine("  /logout           Clear stored token", "system");
 }
@@ -1304,7 +1742,9 @@ async function handleCommand(raw) {
     return;
   }
   if (text === "/new") {
+    sessionHasInFlightMission = false;
     startNewSession();
+    appendLine("tip: use /stop-all if you want to stop old in-flight missions", "system");
     return;
   }
   if (text === "/clear") {
@@ -1315,6 +1755,42 @@ async function handleCommand(raw) {
   if (text === "/confirm") {
     const taskId = activeTaskId || getSessionId();
     await runResumeStream(taskId, { confirm: true });
+    sessionHasInFlightMission = false;
+    return;
+  }
+  if (text === "/resume") {
+    const taskId = activeTaskId || getSessionId();
+    await runResumeStream(taskId, { confirm: false });
+    sessionHasInFlightMission = false;
+    return;
+  }
+  if (text === "/stop") {
+    const ok = await stopActiveMission();
+    if (ok) sessionHasInFlightMission = false;
+    return;
+  }
+  if (text === "/stop-all") {
+    const r = await stopAllInFlightMissions();
+    appendLine(`stop-all done: ${r.stopped}/${r.total} mission(s) requested to stop`, "system");
+    if (r.limited) {
+      appendLine("stop-all partially applied due to 429 rate limit; retry after 30-60s.", "error");
+    }
+    sessionHasInFlightMission = false;
+    updateStopButtonState();
+    return;
+  }
+  if (text.startsWith("/append ")) {
+    const msg = text.slice("/append ".length).trim();
+    if (!msg) {
+      appendLine("usage: /append <text>", "error");
+      return;
+    }
+    const ok = await steerActiveMission(msg, {
+      preempt: false,
+      priority: 0,
+      replaceGoal: false,
+    });
+    if (ok) sessionHasInFlightMission = true;
     return;
   }
   if (text === "/session") {
@@ -1364,30 +1840,31 @@ async function handleCommand(raw) {
   }
   if (text.startsWith("/risk high ")) {
     await runTaskStream(text.slice("/risk high ".length), "HIGH");
+    sessionHasInFlightMission = false;
     return;
   }
-  if (text === "/mission" || text.startsWith("/mission ")) {
-    const arg = text === "/mission" ? "" : text.slice("/mission ".length).trim().toLowerCase();
-    if (arg === "on" || arg === "1" || arg === "true") {
-      if (longformToggleEl) longformToggleEl.checked = true;
-      syncMissionBarUi();
-      appendLine("长篇 Mission 已开启（下次提交将带显式 mission 合同）", "system");
+  // Only intercept when mission is actively running (steer queue). Paused missions use
+  // normal session turn so backend turn_policy + planning LLM interpret intent.
+  if (sessionHasInFlightMission && !text.startsWith("/")) {
+    const taskId = activeTaskId || getSessionId();
+    const st = await getTaskStatusValue(taskId);
+    if (st === "MISSION_RUNNING") {
+      const ok = await steerActiveMission(text, {
+        preempt: true,
+        priority: 80,
+        replaceGoal: true,
+      });
+      if (ok) {
+        appendLine(
+          "任务运行中：已按接管模式处理输入。暂停后续写请等本轮结束，或使用 /append <text>。",
+          "system"
+        );
+      }
       return;
     }
-    if (arg === "off" || arg === "0" || arg === "false") {
-      if (longformToggleEl) longformToggleEl.checked = false;
-      syncMissionBarUi();
-      appendLine("长篇 Mission 已关闭", "system");
-      return;
-    }
-    appendLine(
-      `长篇 Mission: ${isLongformMissionEnabled() ? "on" : "off"} (use /mission on|off)`,
-      "system"
-    );
-    return;
   }
-
   await runTaskStream(text, "LOW");
+  sessionHasInFlightMission = false;
 }
 
 formEl.addEventListener("submit", async (event) => {
@@ -1397,21 +1874,57 @@ formEl.addEventListener("submit", async (event) => {
   if (!value) return;
   if (running) {
     appendLine(`> ${value}`, "user");
-    await steerActiveMission(value);
+    await steerActiveMission(value, {
+      preempt: true,
+      priority: 80,
+      replaceGoal: true,
+    });
     return;
   }
   await handleCommand(value);
 });
 
-if (longformToggleEl) {
-  longformToggleEl.addEventListener("change", syncMissionBarUi);
-  if (missionTotalCharsEl) {
-    missionTotalCharsEl.addEventListener("change", syncMissionBarUi);
-  }
-  if (missionCharsPerStepEl) {
-    missionCharsPerStepEl.addEventListener("change", syncMissionBarUi);
-  }
-  restoreMissionBarUi();
+if (stopBtnEl) {
+  stopBtnEl.addEventListener("click", async () => {
+    if (!(running || sessionHasInFlightMission)) return;
+    stopBtnEl.disabled = true;
+    try {
+      const ok = await stopActiveMission();
+      if (ok) sessionHasInFlightMission = false;
+    } finally {
+      updateStopButtonState();
+    }
+  });
+}
+
+if (flowRefreshBtnEl) {
+  flowRefreshBtnEl.addEventListener("click", async () => {
+    await refreshFlowPanel();
+  });
+}
+
+if (flowOpenBtnEl) {
+  flowOpenBtnEl.addEventListener("click", () => {
+    if (!flowPopupWin || flowPopupWin.closed) {
+      flowPopupWin = window.open("", "agent-flow-graph", "width=1200,height=900");
+      if (!flowPopupWin) return;
+      flowPopupWin.document.open();
+      flowPopupWin.document.write(buildFlowPopupHtml());
+      flowPopupWin.document.close();
+      setTimeout(() => {
+        syncFlowPopup();
+      }, 60);
+    } else {
+      flowPopupWin.focus();
+    }
+    syncFlowPopup();
+  });
+}
+
+if (themeSelectEl) {
+  themeSelectEl.addEventListener("change", () => {
+    applyTheme(themeSelectEl.value);
+  });
 }
 
 async function warnIfSessionMissionInFlight() {
@@ -1421,13 +1934,25 @@ async function warnIfSessionMissionInFlight() {
     if (!res.ok) return;
     const data = await res.json();
     const st = String(data.status || "");
-    if (st === "MISSION_RUNNING" || st === "MISSION_PAUSED") {
+    if (st === "MISSION_RUNNING") {
+      sessionHasInFlightMission = true;
       appendLine(
-        `Note: session ${taskId.slice(0, 8)}… is ${st} (node ${data.current_node}). ` +
-          "While a run is active, new input is steered; after refresh, submit steers via session turn — " +
-          "wait for pause or use /confirm if a gate is shown.",
+        `Note: session ${taskId.slice(0, 8)}… is MISSION_RUNNING (node ${data.current_node}). ` +
+          "运行中输入会进入 steer 接管；暂停后请用普通输入续写。",
         "system"
       );
+      updateStopButtonState();
+    } else if (st === "MISSION_PAUSED") {
+      sessionHasInFlightMission = false;
+      appendLine(
+        `Note: session ${taskId.slice(0, 8)}… is MISSION_PAUSED (node ${data.current_node}). ` +
+          "直接输入「继续写作」等即可，由规划/会话策略理解意图；待确认时用 /confirm，不必先 /resume。",
+        "system"
+      );
+      updateStopButtonState();
+    } else {
+      sessionHasInFlightMission = false;
+      updateStopButtonState();
     }
   } catch {
     /* ignore */
@@ -1435,9 +1960,9 @@ async function warnIfSessionMissionInFlight() {
 }
 
 updateSessionBadge(getSessionId());
+applyTheme(localStorage.getItem(THEME_KEY) || "dark");
 appendLine("Agent LangGraph Web CLI ready. Type /help for commands.", "system");
+updateStopButtonState();
 warnIfSessionMissionInFlight();
-if (isLongformMissionEnabled()) {
-  appendLine("长篇 Mission 已开启 — 提交时将自动附带 writing mission 合同", "system");
-}
 fetchHealth();
+refreshFlowPanel();

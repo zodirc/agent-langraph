@@ -24,7 +24,7 @@ from app.runtime.langgraphics_wrap import resolve_compiled_graph
 from app.runtime.graph_cache import cached_graph_compiler
 from app.runtime.exploration_router import route_after_explore_prune
 from app.runtime.router import route_after_output_guard, route_after_policy_to_guard
-from app.runtime.state import AgentState, append_node_history, ensure_agent_state
+from app.runtime.state import AgentState, append_node_history, ensure_agent_state, merge_state
 from app.services.session_turn import graph_thread_id
 
 
@@ -122,6 +122,6 @@ def stream_exploration_graph(
             continue
         for node_name, update in chunk.items():
             if isinstance(update, dict):
-                latest = ensure_agent_state({**latest, **update})
+                latest = merge_state(latest, **update)
             latest = append_node_history(latest, node_name)
             yield node_name, latest

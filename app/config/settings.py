@@ -312,6 +312,26 @@ class Settings:
         self.MANUSCRIPT_APPEND_DEDUP_RATIO = float(
             manuscript.get("append_dedup_ratio", 0.82)
         )
+        self.WRITING_QUALITY_GATE_THRESHOLD = float(
+            manuscript.get("quality_gate_threshold", 0.65)
+        )
+        self.WRITING_L2_TOKEN_BUDGET = int(manuscript.get("l2_token_budget", 1500))
+        self.WRITING_L3_TOKEN_BUDGET = int(manuscript.get("l3_token_budget", 1200))
+        self.WRITING_ALIGNMENT_RECENT_WINDOW = int(
+            manuscript.get("alignment_recent_window", 2)
+        )
+        self.WRITING_ALIGNMENT_PATCH_MAX_CHAPTERS = int(
+            manuscript.get("alignment_patch_max_chapters", 3)
+        )
+        self.WRITING_BRIDGE_DEFAULT_CHARS = int(
+            manuscript.get("bridge_default_chars", 600)
+        )
+        self.WRITING_RECONCILE_MAX_PATCHES = int(
+            manuscript.get("reconcile_max_patches", 3)
+        )
+        self.WRITING_RECONCILE_MIN_PATCH_CHARS = int(
+            manuscript.get("reconcile_min_patch_chars", 80)
+        )
         patterns = manuscript.get("placeholder_patterns")
         self.MANUSCRIPT_PLACEHOLDER_PATTERNS = (
             tuple(patterns) if isinstance(patterns, list) else None

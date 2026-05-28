@@ -7,14 +7,33 @@ from app.services.state_store import get_state_store
 
 def mission_finalize_node(state: AgentState) -> AgentState:
     """Ensure reasoning_result exists before policy/output."""
-    if not state.get("reasoning_result"):
-        state = reasoning_node(state)
+    from app.services.mission_execution import (
+        build_mission_checkpoint_summary,
+        should_skip_llm_reasoning_on_finalize,
+    )
+    from app.services.mission_orchestrator import orchestration_enabled, orchestration_summary
+
     mission = state.get("mission") or {}
     progress = state.get("progress") or {}
     metrics = progress.get("metrics") or {}
-    summary_extra = ""
-    from app.services.mission_orchestrator import orchestration_enabled, orchestration_summary
 
+    if not state.get("reasoning_result"):
+        if should_skip_llm_reasoning_on_finalize(state):
+            checkpoint = build_mission_checkpoint_summary(state)
+            state = merge_state(
+                state,
+                reasoning_result=checkpoint,
+                audit_log=append_audit(
+                    state,
+                    "mission_finalize",
+                    "checkpoint_summary",
+                    {"source": "mission_checkpoint"},
+                ),
+            )
+        else:
+            state = reasoning_node(state)
+
+    summary_extra = ""
     if orchestration_enabled(mission):
         summary_extra = f" {orchestration_summary(state)}。"
     elif mission.get("kind") == "writing" and metrics.get("target_chars"):
@@ -23,10 +42,13 @@ def mission_finalize_node(state: AgentState) -> AgentState:
             f"{metrics.get('target_chars')} 字 "
             f"({metrics.get('progress_pct', 0)}%)."
         )
-    else:
-        summary_extra = ""
+
     reasoning = dict(state.get("reasoning_result") or {})
-    if summary_extra and reasoning.get("summary"):
+    structured = dict(reasoning.get("structured") or {})
+    if structured.get("source") == "mission_checkpoint" and summary_extra:
+        reasoning["summary"] = str(reasoning.get("summary", "")) + summary_extra
+        state = merge_state(state, reasoning_result=reasoning)
+    elif summary_extra and reasoning.get("summary"):
         reasoning["summary"] = str(reasoning["summary"]) + summary_extra
         state = merge_state(state, reasoning_result=reasoning)
 

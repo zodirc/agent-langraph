@@ -14,7 +14,7 @@ def test_writing_node_skipped_when_disabled(base_state):
     }
     result = writing_node(state)
     assert result["current_node"] == "writing"
-    assert result["audit_log"][-1]["action"] == "skipped"
+    assert result["audit_log"][-1]["action"] in {"skipped", "skipped_route_audit"}
 
 
 def test_writing_node_append_validated(base_state, test_settings, monkeypatch):

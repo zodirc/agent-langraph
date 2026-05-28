@@ -165,6 +165,17 @@ def merge_state(state: AgentState, **updates: Any) -> AgentState:
     merged = dict(state)
     for key, value in updates.items():
         if (
+            key == "node_history"
+            and isinstance(value, list)
+            and isinstance(merged.get(key), list)
+        ):
+            # Stream snapshots may carry truncated node_history (or only current node).
+            # Keep the richer in-memory history instead of regressing to a shorter list.
+            current = list(merged.get(key) or [])
+            incoming = list(value or [])
+            merged[key] = incoming if len(incoming) >= len(current) else current
+            continue
+        if (
             key in ("input_payload", "progress", "mission", "manuscript", "observation", "mission_control")
             and isinstance(value, dict)
             and isinstance(merged.get(key), dict)

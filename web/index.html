@@ -4,11 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent Runtime CLI</title>
-  <link rel="stylesheet" href="/static/terminal.css?v=steer-outcome-1" />
+  <link rel="stylesheet" href="/static/terminal.css?v=flow-debug-11" />
 </head>
 <body>
   <div class="terminal">
     <header class="terminal-header">
+      <select id="theme-select" class="theme-select" title="主题">
+        <option value="dark">深色</option>
+        <option value="light">淡色</option>
+      </select>
       <span class="dot red"></span>
       <span class="dot yellow"></span>
       <span class="dot green"></span>
@@ -18,36 +22,25 @@
         <span id="session-badge" class="badge badge-session" title="当前会话 ID">session …</span>
       </div>
     </header>
-    <main id="output" class="terminal-output"></main>
-    <div class="mission-bar" id="mission-bar">
-      <label class="mission-toggle" title="显式 mission 合同，不经由目标文案推断">
-        <input type="checkbox" id="longform-mission-toggle" />
-        <span>长篇 Mission</span>
-      </label>
-      <div class="mission-fields" id="mission-fields" hidden>
-        <label class="mission-field">
-          <span>总字数</span>
-          <input
-            type="number"
-            id="mission-total-chars"
-            min="1000"
-            step="1000"
-            placeholder="600000"
-            aria-label="mission total target chars"
-          />
-        </label>
-        <label class="mission-field">
-          <span>每步字数</span>
-          <input
-            type="number"
-            id="mission-chars-per-step"
-            min="500"
-            step="500"
-            value="4000"
-            aria-label="mission chars per step"
-          />
-        </label>
-      </div>
+    <div class="terminal-main">
+      <main id="output" class="terminal-output"></main>
+      <aside class="flow-pane" id="flow-pane">
+        <div class="flow-head">
+          <h3 class="flow-title">Flow Debug</h3>
+          <div class="flow-actions">
+            <button id="flow-open-btn" type="button" class="flow-btn">新窗口</button>
+            <button id="flow-refresh-btn" type="button" class="flow-btn">刷新</button>
+          </div>
+        </div>
+        <p class="flow-meta" id="flow-meta">等待任务运行</p>
+        <p class="flow-task" id="flow-task">task: -</p>
+        <div class="flow-graph" id="flow-graph">
+          <p class="flow-empty">流程图等待任务数据…</p>
+        </div>
+        <div class="flow-timeline" id="flow-timeline">
+          <p class="flow-empty">暂无节点数据。运行任务后将自动显示。</p>
+        </div>
+      </aside>
     </div>
     <form id="command-form" class="terminal-input-row" autocomplete="off">
       <label for="command-input" class="prompt">&gt;</label>
@@ -57,8 +50,9 @@
         placeholder="输入任务目标，或 /help 查看命令"
         autofocus
       />
+      <button id="stop-btn" type="button" class="stop-btn" disabled>Stop</button>
     </form>
   </div>
-  <script src="/static/app.js?v=session-isolation-1"></script>
+  <script src="/static/app.js?v=flow-debug-13"></script>
 </body>
 </html>

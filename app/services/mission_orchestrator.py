@@ -297,6 +297,36 @@ def work_item_to_writing_intent(
             "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)),
             "chapter_index": int(params.get("chapter_index") or 1),
         }
+    if kind == "bridge_chapter":
+        return {
+            **base,
+            "action": "append_body",
+            "target_chars": int(
+                params.get("target_chars")
+                or getattr(settings, "WRITING_BRIDGE_DEFAULT_CHARS", 600)
+            ),
+            "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)),
+            "chapter_index": int(params.get("chapter_index") or 1),
+            "bridge_spec": dict(params.get("bridge_spec") or {}),
+            "phase_notes": str(params.get("phase_notes") or "bridge_chapter"),
+        }
+    if kind == "patch_recent_chapter":
+        return {
+            **base,
+            "action": "append_body",
+            "target_chars": int(params.get("target_chars") or policy.chars_per_step),
+            "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)),
+            "chapter_index": int(params.get("chapter_index") or 1),
+            "patch_instructions": list(params.get("patch_instructions") or []),
+            "phase_notes": str(params.get("phase_notes") or "patch_recent_chapter"),
+        }
+    if kind == "reconcile_outline_body":
+        return {
+            **base,
+            "action": "consistency_check",
+            "chapter_index": int(params.get("chapter_index") or 1),
+            "phase_notes": str(params.get("phase_notes") or "reconcile_outline_body"),
+        }
     if kind == "reset_body":
         return {
             **base,
@@ -333,11 +363,17 @@ def work_item_to_writing_intent(
 
 
 def _apply_tools_for_edit_plot(payload: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
+    from app.config.settings import settings
+
+    outline_name = str(
+        spec.get("filename")
+        or getattr(settings, "MANUSCRIPT_DEFAULT_OUTLINE", "outline.txt")
+    )
     payload = dict(payload)
     payload["selected_tools"] = ["read_text_artifact", "edit_text_artifact"]
     payload.setdefault("tool_params", {})
     payload["tool_params"]["read_text_artifact"] = {
-        "filename": spec.get("filename", "novel.txt"),
+        "filename": outline_name,
         "max_chars": int(spec.get("read_max_chars", 12000)),
     }
     edit_params = {
@@ -370,6 +406,9 @@ def apply_work_plan_to_payload(state: AgentState) -> AgentState:
         is_forced,
     )
 
+    from app.services.mission_execution import reconcile_work_plan
+
+    state = reconcile_work_plan(state)
     state = ensure_next_work_item(state)
     payload = dict(state.get("input_payload") or {})
     intervention = intervention_from_payload(payload)
@@ -380,7 +419,17 @@ def apply_work_plan_to_payload(state: AgentState) -> AgentState:
 
         payload = apply_intervention_to_payload(payload, intervention)
         wi = intervention.get("work_item")
-        if wi:
+        if wi or intervention.get("action") in ("edit_plot", "run_tools", "reset_body"):
+            wi = wi or {
+                "id": f"wi-forced-{step}",
+                "kind": str(intervention.get("action") or "forced"),
+                "title": str(intervention.get("action") or "forced"),
+                "params": (
+                    {"edit_spec": intervention.get("edit_spec") or {}}
+                    if intervention.get("action") == "edit_plot"
+                    else {}
+                ),
+            }
             state = insert_work_item_after_current(
                 state,
                 {
@@ -397,6 +446,11 @@ def apply_work_plan_to_payload(state: AgentState) -> AgentState:
             payload = _apply_tools_for_edit_plot(
                 payload, intervention.get("edit_spec") or {}
             )
+        item = get_current_work_item(state)
+        if item:
+            state = activate_work_item(state, item)
+            payload = dict(state.get("input_payload") or payload)
+            payload["current_work_item"] = item
         return merge_state(state, input_payload=payload)
 
     item = get_current_work_item(state)

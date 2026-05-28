@@ -97,7 +97,11 @@ def test_extract_json_recovers_truncated_planning():
     assert len(result["plan"]) <= 12
 
 
-def test_extract_json_with_repair_reasoning_fallback_for_codeblock_text():
+def test_extract_json_with_repair_reasoning_fallback_for_codeblock_text(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.llm_client._attempt_reasoning_json_repair",
+        lambda *a, **k: None,
+    )
     raw = "```cpp\n#include <iostream>\nint main(){return 0;}\n```"
     result = extract_json_with_repair("reasoning", raw, prefer_keys=("summary",))
     assert "summary" in result
@@ -105,7 +109,11 @@ def test_extract_json_with_repair_reasoning_fallback_for_codeblock_text():
     assert result["structured"]["parser_fallback"] is True
 
 
-def test_extract_json_with_repair_non_reasoning_still_raises():
+def test_extract_json_with_repair_non_reasoning_still_raises(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.llm_client._attempt_planning_json_repair",
+        lambda *a, **k: None,
+    )
     raw = "```cpp\nint main(){return 0;}\n```"
     try:
         extract_json_with_repair("planning", raw, prefer_keys=("plan",))

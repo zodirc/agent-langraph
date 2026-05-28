@@ -20,7 +20,7 @@ from app.runtime.router import (
     route_after_output_guard,
     route_after_policy_to_guard,
 )
-from app.runtime.state import AgentState, append_node_history, ensure_agent_state
+from app.runtime.state import AgentState, append_node_history, ensure_agent_state, merge_state
 
 
 def build_supervisor_graph() -> StateGraph:
@@ -121,6 +121,6 @@ def stream_supervisor_graph(
             continue
         for node_name, update in chunk.items():
             if isinstance(update, dict):
-                latest = ensure_agent_state({**latest, **update})
+                latest = merge_state(latest, **update)
             latest = append_node_history(latest, node_name)
             yield node_name, latest

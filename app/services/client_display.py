@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from app.config.settings import settings
 from app.runtime.state import AgentState
 from app.services.mission_intervention import intervention_from_payload
 from app.services.mission_steer_confirm import steer_confirmation_pending
@@ -143,6 +144,51 @@ def autonomous_ui_for_pause(state: AgentState, *, autonomous: bool, steer_pause:
     }
 
 
+_WRITING_ACTION_LABELS = {
+    "append_body": "继续生成下一章",
+    "write_outline": "生成/更新大纲",
+    "write_body": "开始正文",
+    "review_chapter": "审阅当前章节",
+    "polish_chapter": "润色当前章节",
+    "chapter_summary": "整理本章摘要",
+    "consistency_check": "检查连贯性",
+    "reset_body": "重写正文",
+    "bridge_chapter": "生成桥接段",
+    "patch_recent_chapter": "修补近期章节",
+}
+
+
+def _writing_action_labels() -> dict[str, str]:
+    display_cfg = getattr(settings, "DISPLAY_CONFIG", {})
+    if not isinstance(display_cfg, dict):
+        return _WRITING_ACTION_LABELS
+    writing_cfg = display_cfg.get("writing_actions")
+    if not isinstance(writing_cfg, dict):
+        return _WRITING_ACTION_LABELS
+    merged = dict(_WRITING_ACTION_LABELS)
+    for k, v in writing_cfg.items():
+        ks = str(k).strip()
+        vs = str(v).strip()
+        if ks and vs:
+            merged[ks] = vs
+    return merged
+
+
+def writing_action_label(state: AgentState) -> Optional[str]:
+    """User-facing action label (hides Mission runtime vocabulary)."""
+    labels = _writing_action_labels()
+    payload = state.get("input_payload") or {}
+    intent = payload.get("writing_intent") or {}
+    action = str(intent.get("action") or intent.get("writing_phase") or "")
+    if action in labels:
+        return labels[action]
+    alignment = payload.get("outline_body_alignment") or {}
+    body_action = alignment.get("body_action")
+    if body_action in labels:
+        return labels[body_action]
+    return None
+
+
 def build_mission_paused_payload(
     state: AgentState,
     *,
@@ -160,6 +206,11 @@ def build_mission_paused_payload(
         system_lines = ["mission_paused"]
 
     auto_ui = autonomous_ui_for_pause(state, autonomous=autonomous, steer_pause=steer_pause)
+    action_label = writing_action_label(state)
+    if action_label:
+        system_lines = [f"下一步：{action_label}"] + [
+            ln for ln in system_lines if ln != "mission_paused"
+        ]
 
     return {
         "task_id": state["task_id"],
@@ -174,6 +225,7 @@ def build_mission_paused_payload(
         "confirmation_actions": confirmation_actions,
         "display": {
             "pause_kind": "steer" if steer_pause else "stepwise",
+            "writing_action": action_label,
             "mission_control": control,
             "intervention": intervention,
             "orchestration_summary": _orchestration_line(state),

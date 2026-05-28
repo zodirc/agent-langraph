@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
+from app.config.settings import settings
+
 InterventionAction = Literal[
     "rewrite_outline",
     "review_outline",
@@ -114,9 +116,69 @@ def intervention_to_writing_intent(
     return {**base, "enabled": False, "action": action}
 
 
+def coerce_steer_intervention(
+    state: dict[str, Any],
+    intervention: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    When outline already exists, downgrade rewrite_outline to localized edit_plot.
+
+    Structural only (outline bytes, edit_spec anchors) — not user-message regex.
+    """
+    if str(intervention.get("action") or "") != "rewrite_outline":
+        return intervention
+
+    from app.services.manuscript_service import resolve_manuscript
+
+    task_id = str(state.get("task_id") or "")
+    stored = state.get("manuscript") or {}
+    ms = resolve_manuscript(task_id, stored) if task_id else None
+    outline_bytes = max(
+        int(getattr(ms, "outline_bytes", 0) or 0),
+        int(stored.get("outline_bytes") or 0),
+    )
+    outline_path = (
+        (getattr(ms, "outline_path", None) if ms else None)
+        or stored.get("outline_path")
+        or getattr(settings, "MANUSCRIPT_DEFAULT_OUTLINE", "outline.txt")
+    )
+    min_outline = int(getattr(settings, "MANUSCRIPT_MIN_OUTLINE_CHARS", 80))
+    spec = dict(intervention.get("edit_spec") or {})
+
+    if spec.get("old_text") and spec.get("new_text"):
+        return {
+            **intervention,
+            "action": "edit_plot",
+            "edit_spec": {**spec, "filename": spec.get("filename") or outline_path},
+            "tools": list(intervention.get("tools") or ["read_text_artifact", "edit_text_artifact"]),
+            "coerced_from": "rewrite_outline",
+        }
+
+    if outline_bytes < min_outline:
+        return intervention
+
+    payload = state.get("input_payload") or {}
+    goal = str(payload.get("goal") or "")
+    return {
+        **intervention,
+        "action": "edit_plot",
+        "force": bool(intervention.get("force")),
+        "reason": str(intervention.get("reason") or "localized outline patch"),
+        "edit_spec": {
+            "filename": spec.get("filename") or outline_path,
+            "steer_correction": goal[-2000:] if goal else "",
+            **spec,
+        },
+        "tools": ["read_text_artifact", "edit_text_artifact"],
+        "coerced_from": "rewrite_outline",
+    }
+
+
 def apply_planning_intervention(
     planning_result: dict[str, Any],
     payload: dict[str, Any],
+    *,
+    state: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Merge mission_intervention from planning LLM output (model decides force/actions)."""
     raw = planning_result.get("mission_intervention")
@@ -125,6 +187,8 @@ def apply_planning_intervention(
     block = _normalize_intervention(raw)
     if not block:
         return payload
+    if state is not None:
+        block = coerce_steer_intervention(state, block)
     return apply_intervention_to_payload(payload, block)
 
 
@@ -147,19 +211,25 @@ def apply_intervention_to_payload(
     if action == "edit_plot":
         spec = intervention.get("edit_spec") or {}
         out["edit_plot_spec"] = spec
+        outline_name = str(
+            spec.get("filename")
+            or getattr(settings, "MANUSCRIPT_DEFAULT_OUTLINE", "outline.txt")
+        )
+        from app.services.outline_steer_patch import is_outline_filename
+
         if intervention.get("tools"):
             out["selected_tools"] = list(intervention["tools"])
         else:
             out["selected_tools"] = ["read_text_artifact", "edit_text_artifact"]
         out.setdefault("tool_params", {})
-        if spec:
-            out["tool_params"].setdefault(
-                "read_text_artifact",
-                {
-                    "filename": spec.get("filename", "novel.txt"),
-                    "max_chars": int(spec.get("read_max_chars", 12000)),
-                },
-            )
+        out["tool_params"].setdefault(
+            "read_text_artifact",
+            {
+                "filename": outline_name if is_outline_filename(outline_name) else spec.get("filename", "novel.txt"),
+                "max_chars": int(spec.get("read_max_chars", 12000)),
+            },
+        )
+        if spec.get("old_text"):
             edit_params = {
                 k: spec[k]
                 for k in (
@@ -176,10 +246,21 @@ def apply_intervention_to_payload(
             }
             if edit_params:
                 out["tool_params"]["edit_text_artifact"] = edit_params
+        elif is_outline_filename(outline_name):
+            out["outline_edit_via_tools"] = True
+            out["tool_stages"] = [["read_text_artifact"], ["edit_text_artifact"]]
     if action == "run_tools" and intervention.get("tools"):
         out["selected_tools"] = list(intervention["tools"])
         out["tool_params"] = {**out.get("tool_params", {}), **intervention.get("tool_params", {})}
     if is_forced(intervention):
         out["force_slow_reasoning"] = True
         out.pop("skip_planning_llm", None)
+    from app.services.turn_contract import apply_turn_contract_to_payload, build_turn_contract
+
+    contract = build_turn_contract(
+        {"mission_intervention": intervention},
+        out,
+        steer_planning_turn=bool(out.get("require_planning_after_steer")),
+    )
+    out = apply_turn_contract_to_payload(out, contract)
     return out

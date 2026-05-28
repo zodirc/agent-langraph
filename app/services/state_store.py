@@ -22,6 +22,8 @@ _VOLATILE_STATE_KEYS = (
 
 # Nested under input_payload — same loss pattern during mission_act / writing_node saves.
 _PAYLOAD_VOLATILE_KEYS = (
+    "execution_grant",
+    "last_execution_grant",
     "require_planning_after_steer",
     "steer_planning_done",
     "steer_watch_outcome",

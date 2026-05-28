@@ -8,6 +8,7 @@ from app.services.retrieval_policy import (
     should_route_to_retrieval_after_planning,
 )
 from app.services.route_audit.apply import writing_gate_allowed
+from app.services.turn_contract import contract_blocks_writing, contract_tool_names
 
 
 def _failed_route(state: AgentState, retry_node: str) -> str:
@@ -16,14 +17,28 @@ def _failed_route(state: AgentState, retry_node: str) -> str:
     return retry_node
 
 
+def _writing_route_allowed(state: AgentState) -> bool:
+    payload = state.get("input_payload") or {}
+    if contract_blocks_writing(payload):
+        return False
+    intent = payload.get("writing_intent") or {}
+    return writing_gate_allowed(state) and bool(intent.get("enabled"))
+
+
+def _effective_selected_tools(state: AgentState) -> list[str]:
+    tools = list(state.get("selected_tools") or [])
+    if tools:
+        return tools
+    return contract_tool_names(state.get("input_payload") or {})
+
+
 def route_after_retrieval(state: AgentState) -> str:
     """Skip tool_execution when no registered tools were selected."""
     if str(state.get("status", "")) == TaskStatus.FAILED.value:
         return _failed_route(state, "retrieval")
     if state.get("selected_tools"):
         return "tool_execution"
-    intent = (state.get("input_payload") or {}).get("writing_intent") or {}
-    if writing_gate_allowed(state) and intent.get("enabled"):
+    if _writing_route_allowed(state):
         return "writing"
     return "reasoning"
 
@@ -35,8 +50,7 @@ def route_after_tool(state: AgentState) -> str:
         if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
             return "dead_letter"
         return "tool_execution"
-    intent = (state.get("input_payload") or {}).get("writing_intent") or {}
-    if writing_gate_allowed(state) and intent.get("enabled"):
+    if _writing_route_allowed(state):
         return "writing"
     return "reasoning"
 
@@ -63,19 +77,19 @@ def route_after_planning(state: AgentState) -> str:
             return "end"
 
     plan = state.get("plan") or []
-    selected_tools = state.get("selected_tools") or []
-    intent = (state.get("input_payload") or {}).get("writing_intent") or {}
+    selected_tools = _effective_selected_tools(state)
 
-    if writing_gate_allowed(state) and intent.get("enabled") and not selected_tools:
+    if _writing_route_allowed(state) and not selected_tools:
         return "writing"
 
     if state.get("skip_retrieval") and not should_route_to_retrieval_after_planning(state):
         if selected_tools:
             return "tool_execution"
-        if writing_gate_allowed(state) and intent.get("enabled"):
+        if _writing_route_allowed(state):
             return "writing"
         return "reasoning"
 
+    intent = (state.get("input_payload") or {}).get("writing_intent") or {}
     if (
         needs_session_memory_retrieval(state)
         and not selected_tools
@@ -91,7 +105,7 @@ def route_after_planning(state: AgentState) -> str:
         and not selected_tools
         and not needs_retrieval
     ):
-        if writing_gate_allowed(state) and intent.get("enabled"):
+        if _writing_route_allowed(state):
             return "writing"
         return "reasoning"
 
@@ -101,7 +115,7 @@ def route_after_planning(state: AgentState) -> str:
         return "retrieval"
     if needs_tools:
         return "tool_execution"
-    if writing_gate_allowed(state) and intent.get("enabled"):
+    if _writing_route_allowed(state):
         return "writing"
     return "reasoning"
 

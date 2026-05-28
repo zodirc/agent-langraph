@@ -67,25 +67,41 @@ def _prepare_mission_for_turn(
         if goal:
             state = apply_steer_message(state, goal)
             payload_after = dict(state.get("input_payload") or {})
-            payload_after["skip_planning_llm"] = False
-            payload_after["writing_intent"] = {
-                "enabled": False,
-                "source": "await_steer_planning",
-            }
-            payload_after.pop("current_work_item", None)
-            state = merge_state(
-                state,
-                input_payload=payload_after,
-                status=TaskStatus.MISSION_RUNNING.value,
-            )
+            from app.services.mission_execution import has_execution_grant
+            from app.services.mission_schema import apply_mission_step_to_payload
+
+            if has_execution_grant(payload_after):
+                payload_after = apply_mission_step_to_payload(state)
+                state = merge_state(
+                    state,
+                    input_payload=payload_after,
+                    status=TaskStatus.MISSION_RUNNING.value,
+                )
+            else:
+                payload_after["skip_planning_llm"] = False
+                payload_after["writing_intent"] = {
+                    "enabled": False,
+                    "source": "await_steer_planning",
+                }
+                payload_after.pop("current_work_item", None)
+                state = merge_state(
+                    state,
+                    input_payload=payload_after,
+                    status=TaskStatus.MISSION_RUNNING.value,
+                )
         mission = state.get("mission") or {}
+        from app.services.mission_execution import has_execution_grant
+
         if orchestration_enabled(mission) and not work_plan_completed(state):
             prev = str(state.get("status") or "")
+            payload_check = state.get("input_payload") or {}
             if prev in (
                 TaskStatus.COMPLETED.value,
                 TaskStatus.MISSION_PAUSED.value,
-            ):
+            ) and not has_execution_grant(payload_check):
                 state = merge_state(state, status=TaskStatus.MISSION_PAUSED.value)
+            elif has_execution_grant(payload_check):
+                state = merge_state(state, status=TaskStatus.MISSION_RUNNING.value)
         return merge_state(state, execution_mode="mission")
 
     return init_mission_state(state, payload)
@@ -273,17 +289,8 @@ _MISSION_QUIET_NODES = frozenset(
 
 
 def _should_emit_node_event(node_name: str, state: AgentState) -> bool:
-    """Suppress mission control-loop noise; keep failures and user-facing nodes."""
-    if node_name not in _MISSION_QUIET_NODES:
-        return True
-    status = str(state.get("status") or "")
-    if status in (
-        TaskStatus.FAILED.value,
-        TaskStatus.WRITING_FAILED.value,
-        TaskStatus.DEAD_LETTER.value,
-    ):
-        return True
-    return False
+    """Emit all node events so UI flow graph works for all execution modes."""
+    return True
 
 
 def _node_stream_payload(state: AgentState, node_name: str) -> dict[str, Any]:
@@ -875,6 +882,7 @@ class GraphRunner:
         confirm: bool = False,
         priority: int = 0,
         preempt: bool = False,
+        replace_goal: bool = False,
     ) -> AgentState:
         from app.services.mission_steer import queue_steer_message
 
@@ -885,6 +893,7 @@ class GraphRunner:
             confirm=confirm,
             priority=priority,
             preempt=preempt,
+            replace_goal=replace_goal,
         )
         get_audit_store().append_events(task_id, updated.get("audit_log", []))
         return updated
@@ -929,10 +938,15 @@ class GraphRunner:
             stored = confirm_steer_outcome(stored)
             get_state_store().save(stored)
 
-        resumed = merge_state(
-            stored,
-            status=TaskStatus.MISSION_RUNNING.value,
-            mission_control=None,
+        from app.services.mission_execution import issue_execution_grant
+
+        resumed = issue_execution_grant(
+            merge_state(
+                stored,
+                status=TaskStatus.MISSION_RUNNING.value,
+                mission_control=None,
+            ),
+            source="resume_api",
         )
         get_state_store().save(resumed)
         return resumed

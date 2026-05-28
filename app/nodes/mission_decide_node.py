@@ -82,11 +82,26 @@ def mission_decide_node(state: AgentState) -> AgentState:
     from app.services.mission_steer import consume_pending_steer
 
     state = consume_pending_steer(state)
+    from app.services.mission_execution import reconcile_work_plan
+
+    state = reconcile_work_plan(state)
     mission = state.get("mission") or {}
     progress = state.get("progress") or {}
     observation = state.get("observation") or {}
 
     eval_result = evaluate_mission_control(state)
+    from app.services.mission_execution import has_execution_grant
+
+    if has_execution_grant(state.get("input_payload") or {}) and (
+        eval_result.done and eval_result.action == "pause"
+    ):
+        from app.services.progress_evaluator import EvalResult
+
+        eval_result = EvalResult(
+            done=False,
+            reason="execution grant overrides pause",
+            action="continue",
+        )
     decision: StepDecision
     source = "rules"
 
@@ -171,5 +186,9 @@ def mission_decide_node(state: AgentState) -> AgentState:
             },
         ),
     )
+    if decision.action == "continue":
+        from app.services.mission_execution import consume_execution_grant
+
+        updated = consume_execution_grant(updated)
     get_state_store().save(updated)
     return updated

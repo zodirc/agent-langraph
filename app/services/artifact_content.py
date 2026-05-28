@@ -22,6 +22,10 @@ _CHARS_RE = re.compile(r"(\d+)\s*字")
 _WAN_RE = re.compile(r"([一二两三四五六七八九十\d]+)\s*万\s*字?")
 
 
+class SteerPreempted(Exception):
+    """Raised when queued steer requests immediate generation stop."""
+
+
 def parse_requested_chars(goal: str) -> Optional[int]:
     """Parse user target length like 一万字 / 写够8000字."""
     text = goal.strip()
@@ -103,13 +107,21 @@ def generate_artifact_content(
     task_id = str(state["task_id"])
     # Best-effort: if a high-priority steer is queued, avoid starting another long LLM draft.
     try:
-        from app.services.mission_steer import has_pending_steer, pending_steer_priority
+        from app.services.mission_steer import (
+            has_pending_steer,
+            pending_has_forced_action,
+            pending_steer_priority,
+        )
         from app.services.state_store import get_state_store
 
         stored = get_state_store().load(task_id, read_only=True) or {}
         pending = stored.get("pending_user_message")
+        if pending_has_forced_action(pending, "pause"):
+            raise SteerPreempted("forced pause requested")
         if has_pending_steer(task_id) and pending_steer_priority(pending) > 0:
-            raise ValueError("steer preempt requested (skip content generation)")
+            raise SteerPreempted("steer preempt requested")
+    except SteerPreempted:
+        raise
     except Exception:
         # Never fail hard if steer inspection breaks; generation will proceed normally.
         pass

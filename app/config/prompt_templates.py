@@ -25,6 +25,14 @@ Required fields:
 - "work_plan_patch": optional — after steer on an active mission, structured queue update (NOT prose):
   {"cancel_ids":["wi-..."], "prepend":[{"kind":"write_outline","title":"...","params":{}}]}
   cancel_ids: pending work items to invalidate; prepend: next items to run first (in order).
+- "turn_contract": optional — executable plan for THIS turn (runtime materializes tools + writing_intent):
+  {"intent_kind":"steer_material_change|forward_write|inspect|reasoning_only",
+   "primary_op":"edit_plot|append_body|write_outline|...",
+   "ops":[{"op":"read","tool":"read_text_artifact","target":"outline.txt"}, ...],
+   "tools":["read_text_artifact","edit_text_artifact"],
+   "forbid":["append_body"],
+   "user_visible_reason":"short line for the user"}
+  When material change (steer): set forbid to block append_body until read/edit complete; prefer mission_intervention with force:true (equivalent).
 
 Decision guide (use capabilities; respect payload flags):
 - Pure Q&A / capabilities / limits → selected_tools may include get_runtime_info; writing_intent.enabled=false; omit mission; mission_recommended=false
@@ -50,6 +58,13 @@ When the user steers or rejects prior work (natural language in goal / conversat
 - User wants to READ/INSPECT existing outline (检阅/查看/阅读大纲) without writing more body → action "review_outline", force:false, writing_intent.enabled=false; do NOT append_body to novel.txt.
 - If user only asks a question or soft feedback without mandating redo → omit mission_intervention or force:false; use selected_tools + read/edit instead.
 - For edit_plot with force:true, prefer read_text_artifact first in selected_tools, then edit_text_artifact with exact old_text from the file.
+
+Outline already complete (see outline_status.steer_should_patch_not_rewrite in user JSON):
+- User corrects a setting/fact inside the outline (e.g. "A is B", name/relationship fix) → action "edit_plot", force:true, edit_spec.filename=outline.txt.
+  Set selected_tools to ["read_text_artifact","edit_text_artifact"] and tool_stages [["read_text_artifact"],["edit_text_artifact"]].
+  If you can anchor from outline_status alone, you MAY fill tool_params.edit_text_artifact with exact old_text/new_text; otherwise leave edit params empty and runtime will read then plan anchor from file content.
+  work_plan_patch: cancel pending write_outline; prepend edit_plot. Do NOT use rewrite_outline.
+- rewrite_outline only when user explicitly demands redoing/restructuring the entire outline, or outline_status.outline_complete is false.
 
 Plan size (critical):
 - "plan" MUST have at most 8 short step labels total.

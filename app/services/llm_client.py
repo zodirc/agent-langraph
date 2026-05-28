@@ -289,7 +289,8 @@ def _extract_json(text: str, *, prefer_keys: tuple[str, ...] | None = None) -> d
         if repaired:
             return repaired
 
-    raise ValueError(f"Could not parse JSON from model output: {cleaned[:200]}")
+    snippet = cleaned[:200] if cleaned.strip() else "(empty response)"
+    raise ValueError(f"Could not parse JSON from model output: {snippet}")
 
 
 def _reasoning_fallback_payload(text: str) -> dict[str, Any]:
@@ -303,6 +304,62 @@ def _reasoning_fallback_payload(text: str) -> dict[str, Any]:
             "fallback_reason": "non_json_reasoning_output",
         },
     }
+
+
+def _attempt_planning_json_repair(
+    malformed_text: str,
+    *,
+    trace_state: Any | None = None,
+    budget_ctx: Any | None = None,
+) -> dict[str, Any] | None:
+    """Ask model to emit valid planning JSON when stream/parse failed."""
+    llm = get_llm("planning", budget_ctx=budget_ctx)
+    if llm is None:
+        return None
+
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    repair_system = (
+        "Convert the assistant output into ONE valid planning JSON object only.\n"
+        'Required keys: "plan" (array of short strings), "selected_tools" (array), '
+        '"risk_level", "skip_retrieval".\n'
+        "For mission writing steer / plot change: "
+        'mission_intervention {"action":"edit_plot","force":true}, '
+        'selected_tools ["read_text_artifact","edit_text_artifact"], '
+        'writing_intent {"enabled":false,"action":"edit_plot"}.\n'
+        "No markdown fences. No story prose in plan steps."
+    )
+    repair_user = json.dumps(
+        {
+            "assistant_output": (malformed_text or "")[:16000],
+            "schema_hint": {
+                "plan": ["read outline", "edit plot"],
+                "selected_tools": ["read_text_artifact", "edit_text_artifact"],
+                "writing_intent": {"enabled": False, "action": "edit_plot"},
+                "risk_level": "LOW",
+                "skip_retrieval": True,
+            },
+        },
+        ensure_ascii=False,
+    )
+    run_config = runnable_config_with_trace(
+        trace_state if isinstance(trace_state, dict) else None
+    )
+    try:
+        response = llm.invoke(
+            [SystemMessage(content=repair_system), HumanMessage(content=repair_user)],
+            config=run_config or None,
+        )
+        content = response.content if hasattr(response, "content") else str(response)
+        normalized = _normalize_content(content)
+        if not normalized.strip():
+            return None
+        parsed = _extract_json(normalized, prefer_keys=("plan", "writing_intent", "mission"))
+        if not isinstance(parsed.get("plan"), list) or not parsed["plan"]:
+            return None
+        return parsed
+    except Exception:
+        return None
 
 
 def _attempt_reasoning_json_repair(
@@ -384,6 +441,26 @@ def extract_json_with_repair(
                 repaired["contract_repaired"] = True
                 get_metrics_service().inc_contract_event("planning_parse_repaired")
                 return repaired
+            llm_repaired = _attempt_planning_json_repair(
+                text,
+                trace_state=trace_state,
+                budget_ctx=budget_ctx,
+            )
+            if llm_repaired is not None:
+                llm_repaired["contract_phase"] = "planning"
+                llm_repaired["parser_repaired"] = True
+                get_metrics_service().inc_contract_event("planning_parse_llm_repaired")
+                return llm_repaired
+            from app.services.turn_contract import planning_fallback_from_state
+
+            fallback = planning_fallback_from_state(
+                trace_state if isinstance(trace_state, dict) else None
+            )
+            if fallback is not None:
+                fallback["contract_phase"] = "planning"
+                fallback["parser_fallback"] = True
+                get_metrics_service().inc_contract_event("planning_parse_fallback")
+                return fallback
             get_metrics_service().inc_contract_event("planning_parse_failed")
             raise
         if purpose != "reasoning":
@@ -713,6 +790,21 @@ def stream_structured(
         raise
 
     full_text = "".join(chunks)
+    if not full_text.strip():
+        try:
+            response = llm.invoke(
+                [SystemMessage(content=system_prompt), HumanMessage(content=user_content)],
+                config=run_config or None,
+            )
+            normalized = _normalize_content(
+                response.content if hasattr(response, "content") else str(response)
+            )
+            if normalized.strip():
+                full_text = normalized
+                yield normalized
+        except Exception:
+            pass
+
     if full_text:
         if budget_ctx is not None:
             budget_ctx.after_invoke(purpose, system_prompt, user_content, full_text)

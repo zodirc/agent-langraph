@@ -47,6 +47,7 @@ def _reset_execution_fields(state: AgentState, payload: dict[str, Any]) -> Agent
         state,
         input_payload=payload,
         conversation_history=history,
+        node_history=[],
         status=TaskStatus.NEW.value,
         current_node="api",
         session_turn=turn,
@@ -134,6 +135,17 @@ def prepare_session_turn(
 
             if decision.intent == "resume_mission":
                 merged = restore_archived_mission(existing, merged)
+                from app.services.mission_execution import (
+                    is_mechanical_resume_decision,
+                    issue_execution_grant_to_payload,
+                )
+                from app.services.mission_steer import complete_steer_planning
+
+                if is_mechanical_resume_decision(decision):
+                    merged = issue_execution_grant_to_payload(
+                        merged, source=str(decision.source)
+                    )
+                    merged = complete_steer_planning(merged)
             elif existing.get("mission") and decision.intent == "isolate_qa":
                 merged = apply_qa_turn_isolation(merged, existing)
         if goal:
@@ -152,14 +164,17 @@ def prepare_session_turn(
             mission_active = bool(existing.get("mission")) and not merged.get(
                 "mission_suspended"
             )
+            from app.services.mission_execution import has_execution_grant
+
             if mission_active and steer_needs_planning_llm(message=goal):
-                merged = apply_steer_planning_gate(merged)
-                merged["writing_intent"] = {
-                    "enabled": False,
-                    "source": "await_steer_planning",
-                }
-                merged.pop("current_work_item", None)
-                merged["skip_planning_llm"] = False
+                if not has_execution_grant(merged):
+                    merged = apply_steer_planning_gate(merged)
+                    merged["writing_intent"] = {
+                        "enabled": False,
+                        "source": "await_steer_planning",
+                    }
+                    merged.pop("current_work_item", None)
+                    merged["skip_planning_llm"] = False
             from app.services.mission_steer import (
                 apply_review_outline_mode,
                 goal_requests_outline_read,

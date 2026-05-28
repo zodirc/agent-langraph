@@ -90,12 +90,17 @@ def _edge_lookup(topology: dict[str, Any]) -> dict[tuple[str, str], str]:
     return {(e["source"], e["target"]): e["id"] for e in topology.get("edges", [])}
 
 
-def _run_on_broadcaster_loop(broadcaster: Any, coro: Any, *, timeout: float = 5.0) -> None:
+def _run_on_broadcaster_loop(
+    broadcaster: Any,
+    coro_factory: Callable[[], Any],
+    *,
+    timeout: float = 5.0,
+) -> None:
     loop = broadcaster.loop
     if loop is None:
         return
     try:
-        asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=timeout)
+        asyncio.run_coroutine_threadsafe(coro_factory(), loop).result(timeout=timeout)
     except Exception as exc:
         logger.debug("LangGraphics async broadcast skipped: %s", exc)
 
@@ -112,7 +117,7 @@ def _broadcast_topology(broadcaster: Any) -> None:
             return_exceptions=True,
         )
 
-    _run_on_broadcaster_loop(broadcaster, _send())
+    _run_on_broadcaster_loop(broadcaster, _send)
 
 
 def _ensure_servers(host: str, port: int, ws_port: int, topology: dict[str, Any]) -> Any:
@@ -164,11 +169,10 @@ class SyncLangGraphViewport:
         self.linked: set[tuple[str, int, str]] = set()
 
     def _make_config(self, config: Any) -> dict[str, Any]:
-        from langgraphics.streamer import BroadcastingTracer
-
-        tracer = BroadcastingTracer(self)
         merged: dict[str, Any] = dict(config or {})
-        merged["callbacks"] = list(merged.get("callbacks") or []) + [tracer]
+        # Keep sync stream compatible with current LangChain callback payloads.
+        # We emit run_start/run_end + edge_active ourselves from stream updates,
+        # so topology/edge visualization stays available without tracer hooks.
         return merged
 
     async def broadcast(self, message: dict[str, Any]) -> None:
@@ -176,7 +180,7 @@ class SyncLangGraphViewport:
         await self._broadcast_async(message)
 
     def _broadcast_sync(self, message: dict[str, Any]) -> None:
-        _run_on_broadcaster_loop(self.ws, self.broadcast(message))
+        _run_on_broadcaster_loop(self.ws, lambda: self.broadcast(message))
 
     async def _broadcast_async(self, message: dict[str, Any]) -> None:
         message_str = json.dumps(message)
@@ -204,7 +208,7 @@ class SyncLangGraphViewport:
         self.generation[target] = self.generation.get(target, -1) + 1
 
     def _emit_edge_sync(self, target: str) -> None:
-        _run_on_broadcaster_loop(self.ws, self._emit_edge(target))
+        _run_on_broadcaster_loop(self.ws, lambda: self._emit_edge(target))
 
     async def _emit_error(self, last_node: str) -> None:
         for (src, tgt), eid in self.edge_lookup.items():
@@ -241,7 +245,7 @@ class SyncLangGraphViewport:
             self._broadcast_sync({"type": "run_end", "run_id": run_id})
         except Exception:
             self.node_current = last_node
-            _run_on_broadcaster_loop(self.ws, self._emit_error(last_node))
+            _run_on_broadcaster_loop(self.ws, lambda: self._emit_error(last_node))
             raise
 
     def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:

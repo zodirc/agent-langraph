@@ -19,9 +19,17 @@ class EvalResult:
     done: bool
     reason: str
     action: str  # continue | finish | pause | escalate
+    pause_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {"done": self.done, "reason": self.reason, "action": self.action}
+        out: dict[str, Any] = {
+            "done": self.done,
+            "reason": self.reason,
+            "action": self.action,
+        }
+        if self.pause_reason:
+            out["pause_reason"] = self.pause_reason
+        return out
 
 
 def evaluate_success_criteria(
@@ -136,17 +144,33 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
                 action="continue",
             )
 
+    from app.services.state_store import merge_input_payload_for_gates
+    from app.services.mission_execution import (
+        PAUSE_GATE_INTENT,
+        PAUSE_GATE_OUTCOME,
+        PAUSE_HUMAN_GATE,
+        PAUSE_STEP_CHECKPOINT,
+        PAUSE_STEER_QUEUED,
+        has_execution_grant,
+    )
     from app.services.mission_steer import pending_steer_is_set
 
-    pending = stored.get("pending_user_message") or state.get("pending_user_message")
-    if pending_steer_is_set(pending):
+    payload_for_grant = merge_input_payload_for_gates(state, stored)
+    if has_execution_grant(payload_for_grant):
         return EvalResult(
-            done=True,
-            reason="user steer message queued",
-            action="pause",
+            done=False,
+            reason="execution grant: run next orchestrated step",
+            action="continue",
         )
-
-    from app.services.state_store import merge_input_payload_for_gates
+    else:
+        pending = stored.get("pending_user_message") or state.get("pending_user_message")
+        if pending_steer_is_set(pending):
+            return EvalResult(
+                done=True,
+                reason="user steer message queued",
+                action="pause",
+                pause_reason=PAUSE_STEER_QUEUED,
+            )
 
     payload_for_confirm = merge_input_payload_for_gates(state, stored)
     from app.services.mission_steer_confirm import steer_confirmation_pending
@@ -156,6 +180,7 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
             done=True,
             reason="steer intent confirmation required before execute",
             action="pause",
+            pause_reason=PAUSE_GATE_INTENT,
         )
 
     from app.services.mission_steer_outcome_confirm import steer_outcome_confirmation_pending
@@ -165,6 +190,7 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
             done=True,
             reason="steer outcome confirmation required after work item",
             action="pause",
+            pause_reason=PAUSE_GATE_OUTCOME,
         )
 
     if orchestration_enabled(mission):
@@ -176,6 +202,7 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
                 done=True,
                 reason=str(item.get("title") or "human checkpoint"),
                 action="pause",
+                pause_reason=PAUSE_HUMAN_GATE,
             )
         if work_plan_completed(state):
             return EvalResult(
@@ -189,6 +216,7 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
                     done=True,
                     reason="stepwise orchestration: awaiting user steer or resume",
                     action="pause",
+                    pause_reason=PAUSE_STEP_CHECKPOINT,
                 )
 
     payload = state.get("input_payload") or stored.get("input_payload") or {}

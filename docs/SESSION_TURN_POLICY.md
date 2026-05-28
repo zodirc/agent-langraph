@@ -49,6 +49,16 @@ flowchart TD
 
 已移除 **`min_steer_chars` 自动 resume**（长句不再默认当作 steer，避免误开写作管线）。
 
+### 与 mission execution grant
+
+`resume_mission` 且来源为 **机械续写**（`continue_signal`、`explicit_request`、`pattern_kind` 等，见 `is_mechanical_resume_decision`）时：
+
+- `prepare_session_turn` 写入 `input_payload.execution_grant`
+- 调用 `complete_steer_planning`，**不**挂 `require_planning_after_steer`
+- 与 `POST /tasks/{id}/resume` 共用同一控制面（见 [`MISSION_EXECUTION_CONTROL.md`](MISSION_EXECUTION_CONTROL.md)）
+
+材料级自然语言 steer（改纲、改剧情）仍走 planning + `mission_intervention`，不自动签发 grant。
+
 ---
 
 ## 4. 配置（`session.turn_policy`）

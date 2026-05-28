@@ -147,6 +147,11 @@ display:
   stream:
     include_artifact_code: true   # used when code_artifact.enabled=false
     max_artifact_stream_chars: 32000
+  writing_actions:
+    append_body: 继续生成下一章
+    write_outline: 生成/更新大纲
+    review_chapter: 审阅当前章节
+    polish_chapter: 润色当前章节
 
 # Code artifact pipeline: compile verify + LLM repair (compiler stderr only; no style/indent hardcoding).
 # See docs/CODE_ARTIFACT_PIPELINE.md
@@ -258,7 +263,8 @@ confirmation_gates:
       max_chars: 4500
   cancel_on_intervention:
     reset_body: [append_chapter, append_body, write_body]
-    rewrite_outline: [append_chapter, append_body]
+    rewrite_outline: [append_chapter, append_body, write_outline]
+    edit_plot: [write_outline]
 
 # Post-planning route alignment (see docs/ROUTE_AUDIT.md): kinds + conflicts, not per-user-string hacks
 route_audit:
@@ -357,6 +363,14 @@ manuscript:
   tail_excerpt_chars: 2400
   head_excerpt_chars: 1200
   append_dedup_ratio: 0.82
+  quality_gate_threshold: 0.65
+  l2_token_budget: 1500
+  l3_token_budget: 1200
+  alignment_recent_window: 2
+  alignment_patch_max_chapters: 3
+  bridge_default_chars: 600
+  reconcile_max_patches: 3
+  reconcile_min_patch_chars: 80
   placeholder_patterns:
     - 待续写
     - 待填充

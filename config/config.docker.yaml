@@ -208,6 +208,11 @@ display:
   stream:
     include_artifact_code: true
     max_artifact_stream_chars: 32000
+  writing_actions:
+    append_body: 继续生成下一章
+    write_outline: 生成/更新大纲
+    review_chapter: 审阅当前章节
+    polish_chapter: 润色当前章节
 
 # See docs/CODE_ARTIFACT_PIPELINE.md (stderr-only repair; no indent/style hardcoding)
 code_artifact:
@@ -262,6 +267,16 @@ delivery:
     qa:
       primary: reasoning_summary
 
+manuscript:
+  quality_gate_threshold: 0.65
+  l2_token_budget: 1500
+  l3_token_budget: 1200
+  alignment_recent_window: 2
+  alignment_patch_max_chapters: 3
+  bridge_default_chars: 600
+  reconcile_max_patches: 3
+  reconcile_min_patch_chars: 80
+
 output_guard:
   enabled: true
   llm_review: false
@@ -306,3 +321,9 @@ cli:
 observability:
   langsmith_enabled: false
   metrics_enabled: true
+
+rate_limit:
+  enabled: false
+  user_per_minute: 120
+  ip_per_minute: 600
+  window_sec: 60

@@ -42,6 +42,24 @@ from app.services.state_store import get_state_store
 from app.services.stream_progress import report_progress
 
 
+def _outline_status_for_planning(state: AgentState, payload: dict[str, Any]) -> dict[str, Any]:
+    """Tell planning when outline is already materialized (steer should patch, not rewrite)."""
+    from app.config.settings import settings
+
+    ms = resolve_manuscript(state["task_id"], state.get("manuscript") or payload.get("manuscript"))
+    stored = state.get("manuscript") or payload.get("manuscript") or {}
+    outline_bytes = max(int(ms.outline_bytes or 0), int(stored.get("outline_bytes") or 0))
+    min_outline = int(getattr(settings, "MANUSCRIPT_MIN_OUTLINE_CHARS", 80))
+    body_bytes = max(int(ms.body_bytes or 0), int(stored.get("body_bytes") or 0))
+    return {
+        "outline_path": ms.outline_path or stored.get("outline_path"),
+        "outline_bytes": outline_bytes,
+        "outline_complete": outline_bytes >= min_outline,
+        "body_bytes": body_bytes,
+        "steer_should_patch_not_rewrite": outline_bytes >= min_outline,
+    }
+
+
 def planning_node(state: AgentState) -> AgentState:
     """
     Understand task goal and produce execution plan via LLM.
@@ -79,6 +97,7 @@ def planning_node(state: AgentState) -> AgentState:
             session_turn=int(state.get("session_turn") or 1),
             manuscript=ms,
         )
+        payload.pop("turn_contract", None)
         from app.services.mission_steer import complete_steer_planning, steer_requires_planning
 
         steer_planning_turn = steer_requires_planning(payload)
@@ -143,6 +162,7 @@ def planning_node(state: AgentState) -> AgentState:
                 ),
                 "session_turn": state.get("session_turn"),
                 "manuscript": payload.get("manuscript"),
+                "outline_status": _outline_status_for_planning(state, payload),
                 "writing_instruction": payload.get("writing_instruction"),
                 "previous_artifact_summary": payload.get("previous_artifact_summary"),
                 "risk_level": payload.get("risk_level", "LOW"),
@@ -197,7 +217,9 @@ def planning_node(state: AgentState) -> AgentState:
 
         from app.services.mission_intervention import apply_planning_intervention
 
-        payload = apply_planning_intervention(result, payload)
+        payload = apply_planning_intervention(
+            result, payload, state=merge_state(state, input_payload=payload)
+        )
         if steer_planning_turn:
             payload = complete_steer_planning(payload)
             from app.services.mission_intervention import intervention_from_payload
@@ -316,11 +338,16 @@ def planning_node(state: AgentState) -> AgentState:
 
         mission_in_state = dict(payload.get("mission") or state.get("mission") or {})
         if mission_in_state.get("kind") == "writing":
-            from app.services.mission_schema import resolve_writing_intent_for_step
+            from app.services.turn_contract import finalize_turn_execution_plan
 
-            payload["writing_intent"] = resolve_writing_intent_for_step(
-                merge_state(state, input_payload=payload, manuscript=ms.to_dict()),
+            merged = merge_state(state, input_payload=payload, manuscript=ms.to_dict())
+            payload, exec_tools = finalize_turn_execution_plan(
+                result,
+                payload,
+                merged,
+                exec_tools,
                 mission=mission_in_state,
+                steer_planning_turn=steer_planning_turn,
             )
         else:
             llm_intent = (

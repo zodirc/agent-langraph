@@ -192,6 +192,71 @@ def extract_outline_chapter_brief(
     return text
 
 
+def _l2_chapter_window(
+    task_id: str,
+    *,
+    next_chapter: int,
+    outline_full: str,
+) -> dict[str, Any]:
+    """L2: prev/current/next chapter state from ChapterOutcome + outline."""
+    from app.services.writing_memory import (
+        estimate_tokens,
+        get_chapter_outcome,
+        load_chapter_outcomes,
+        truncate_to_token_budget,
+    )
+
+    l2_budget = int(getattr(settings, "WRITING_L2_TOKEN_BUDGET", 1500))
+    prev_ch = max(0, next_chapter - 1)
+    prev_outcome = get_chapter_outcome(task_id, prev_ch) if prev_ch > 0 else None
+    recent = load_chapter_outcomes(task_id, limit=3)
+
+    prev_summary = ""
+    prev_chapter_outcome = ""
+    current_chapter_goal = extract_outline_chapter_brief(
+        outline_full, next_chapter, max_chars=800
+    )
+    next_chapter_hook = ""
+    next_preview = ""
+
+    if prev_outcome:
+        prev_summary = truncate_to_token_budget(
+            prev_outcome.chapter_summary or prev_outcome.ending_state,
+            l2_budget // 3,
+        )
+        prev_chapter_outcome = truncate_to_token_budget(
+            f"章末：{prev_outcome.ending_state}\n承接：{prev_outcome.hook_for_next}",
+            l2_budget // 3,
+        )
+    elif recent:
+        last = recent[-1]
+        prev_summary = truncate_to_token_budget(last.chapter_summary, l2_budget // 3)
+        prev_chapter_outcome = truncate_to_token_budget(last.ending_state, l2_budget // 3)
+
+    next_slice = extract_outline_chapter_brief(outline_full, next_chapter + 1, max_chars=400)
+    if next_slice:
+        next_preview = truncate_to_token_budget(next_slice[:200], 120)
+        next_chapter_hook = truncate_to_token_budget(
+            next_slice.splitlines()[-1] if next_slice else "",
+            l2_budget // 4,
+        )
+
+    used = sum(
+        estimate_tokens(x)
+        for x in (prev_summary, prev_chapter_outcome, current_chapter_goal, next_chapter_hook)
+    )
+    if used > l2_budget:
+        prev_summary = truncate_to_token_budget(prev_summary, l2_budget // 4)
+
+    return {
+        "prev_chapter_summary": prev_summary or None,
+        "prev_chapter_outcome": prev_chapter_outcome or None,
+        "current_chapter_goal": current_chapter_goal or None,
+        "next_chapter_hook": next_chapter_hook or None,
+        "next_chapter_preview": next_preview or None,
+    }
+
+
 def build_writing_context(
     *,
     task_id: str,
@@ -201,7 +266,7 @@ def build_writing_context(
     chapter_index: Optional[int] = None,
 ) -> dict[str, Any]:
     """
-    Assemble continuation context: tail prose, outline slice, chapter cursor.
+    Assemble tiered continuation context: L1 sliding window, L2 chapter outcomes, L3 Story Bible.
     """
     payload = state.get("input_payload") or {}
     manuscript = payload.get("manuscript") or state.get("manuscript") or {}
@@ -243,6 +308,21 @@ def build_writing_context(
     intent = payload.get("writing_intent") or {}
     action = str(intent.get("action") or "append_body")
 
+    l2 = _l2_chapter_window(task_id, next_chapter=next_chapter, outline_full=outline_full)
+
+    from app.services.writing_memory import activate_story_bible_entries, load_story_bible
+
+    bible = load_story_bible(task_id)
+    l3_budget = int(getattr(settings, "WRITING_L3_TOKEN_BUDGET", 1200))
+    activated = activate_story_bible_entries(
+        bible,
+        outline_text=outline_slice or "",
+        context_text=tail or "",
+        max_tokens=l3_budget,
+    )
+    open_loops = [o.description for o in bible.open_loops if o.status == "open"][:12]
+    style = bible.style_contract.to_dict()
+
     return {
         "body_filename": body_name,
         "outline_filename": outline_name,
@@ -253,10 +333,21 @@ def build_writing_context(
         "novel_head": head or None,
         "outline_for_chapter": outline_slice or None,
         "body_total_chars": len(body_text),
+        "memory_tier": {
+            "L1": ["novel_tail", "novel_head"],
+            "L2": list(l2.keys()),
+            "L3": ["story_bible_entries", "open_loops", "style_contract"],
+        },
+        **l2,
+        "story_bible_entries": activated or None,
+        "open_loops": open_loops or None,
+        "timeline_state": [t.to_dict() for t in bible.timeline[-8:]] or None,
+        "style_contract": style if any(style.values()) or style.get("constraints") else None,
         "continuation_rules": [
             "Write ONLY the next chapter; do not rewrite earlier chapters.",
-            "Follow outline_for_chapter plot beats; stay consistent with novel_tail.",
-            "Resolve foreshadowing planted in novel_tail when outline requires it.",
+            "Follow outline_for_chapter and current_chapter_goal plot beats.",
+            "Stay consistent with novel_tail, prev_chapter_outcome, and story_bible_entries.",
+            "Resolve open_loops from prior chapters when outline requires it.",
             "End with a single chapter footer like （第N章完） matching chapter_index.",
         ],
     }
