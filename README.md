@@ -1,35 +1,15 @@
 # Agent LangGraph Runtime
 
-基于 LangGraph 的通用多领域 Agent Runtime（v0.10+），实现见 [`DEVELOPMENT_GUIDELINES.md`](DEVELOPMENT_GUIDELINES.md) 与 [`docs/`](docs/) 子系统说明。私人文档（面试稿、差距分析等）请放在本地 `docs-private/`（已 gitignore）。
+基于 LangGraph 的通用多领域 Agent Runtime（v0.10+），实现见 [`DEVELOPMENT_GUIDELINES.md`](DEVELOPMENT_GUIDELINES.md) 与 [`docs/`](docs/) 子系统说明。
 
-## 快速开始
+## quick start
+cp .env.example .env
+> Enter your API and LLM URLs, along with your chosen model, into the .env file.
 
-### 5 分钟零 API Key 体验（推荐首次上手）
-
-```bash
-bash scripts/demo_local.sh
-```
-
-脚本会：创建 venv → 安装依赖 → 跑冒烟测试 → 用本地 stub LLM 执行单轮 CLI 任务。
+start usage (require docker):  
+HOST_PORT=8001 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 ### 完整开发环境
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# 可选：启用真实 LLM / Voyage Embedding
-export ANTHROPIC_API_KEY=sk-ant-xxx
-export VOYAGE_API_KEY=pa-xxx
-export MODEL_ENABLED=true
-
-pytest tests/ -v
-uvicorn app.main:app --reload --port 8000
-```
-
-能力成熟度（stable / beta / experimental）见 [`docs/CAPABILITY_MATRIX.md`](docs/CAPABILITY_MATRIX.md)。  
-**已实现 / 未实现对照**见 [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md)。
 
 ## 入口（§8）
 
