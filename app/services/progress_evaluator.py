@@ -131,6 +131,15 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
             {"rewrite_outline", "reset_body", "edit_plot", "run_tools", "enqueue_work"}
         )
         action = str(intervention_early.get("action") or "")
+        if action == "pause":
+            from app.services.mission_execution import PAUSE_FORCED
+
+            return EvalResult(
+                done=True,
+                reason=intervention_early.get("reason") or "forced intervention pause",
+                action="pause",
+                pause_reason=PAUSE_FORCED,
+            )
         if action in material:
             return EvalResult(
                 done=False,
@@ -146,6 +155,7 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
 
     from app.services.state_store import merge_input_payload_for_gates
     from app.services.mission_execution import (
+        PAUSE_FORCED,
         PAUSE_GATE_INTENT,
         PAUSE_GATE_OUTCOME,
         PAUSE_HUMAN_GATE,
@@ -153,9 +163,17 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
         PAUSE_STEER_QUEUED,
         has_execution_grant,
     )
-    from app.services.mission_steer import pending_steer_is_set
+    from app.services.mission_steer import pending_has_forced_action, pending_steer_is_set
 
     payload_for_grant = merge_input_payload_for_gates(state, stored)
+    pending = stored.get("pending_user_message") or state.get("pending_user_message")
+    if pending_has_forced_action(pending, "pause"):
+        return EvalResult(
+            done=True,
+            reason="forced pause requested",
+            action="pause",
+            pause_reason=PAUSE_FORCED,
+        )
     if has_execution_grant(payload_for_grant):
         return EvalResult(
             done=False,
@@ -163,7 +181,6 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
             action="continue",
         )
     else:
-        pending = stored.get("pending_user_message") or state.get("pending_user_message")
         if pending_steer_is_set(pending):
             return EvalResult(
                 done=True,

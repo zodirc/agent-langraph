@@ -39,6 +39,11 @@ def mission_act_node(state: AgentState) -> AgentState:
                 )
         result_status = str(result.get("status") or TaskStatus.MISSION_RUNNING.value)
         failed = result_status.endswith("FAILED") or result_status == TaskStatus.FAILED.value
+        terminal_or_paused = result_status in (
+            TaskStatus.MISSION_PAUSED.value,
+            TaskStatus.REASONED.value,
+            TaskStatus.COMPLETED.value,
+        )
         updated = merge_state(
             result,
             mission_step=int(result.get("mission_step") or mission_step),
@@ -46,7 +51,7 @@ def mission_act_node(state: AgentState) -> AgentState:
             + (1 if micro else 0),
             mission_micro_reflect=micro,
             current_node="mission_act",
-            status=result_status if failed else TaskStatus.MISSION_RUNNING.value,
+            status=result_status if (failed or terminal_or_paused) else TaskStatus.MISSION_RUNNING.value,
             audit_log=append_audit(
                 state,
                 "mission_act",

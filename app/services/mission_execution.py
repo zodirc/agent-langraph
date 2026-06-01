@@ -66,6 +66,10 @@ def issue_execution_grant_to_payload(
     }
     out["steer_planning_done"] = True
     out.pop("require_planning_after_steer", None)
+    intervention = out.get("mission_intervention")
+    if isinstance(intervention, dict):
+        if str(intervention.get("action") or "") == "pause" and bool(intervention.get("force")):
+            out.pop("mission_intervention", None)
     for key in (
         "steer_intent_pending_confirm",
         "steer_intent_confirmation",

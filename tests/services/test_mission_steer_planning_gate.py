@@ -258,3 +258,27 @@ def test_planning_skip_blocked_while_steer_gate_open(base_state, monkeypatch):
     assert invoked
     assert out.get("input_payload", {}).get("steer_planning_done") is True
     assert not steer_requires_planning(out.get("input_payload") or {})
+
+
+def test_mission_act_preserves_paused_status(base_state, monkeypatch):
+    from app.nodes.mission_act_node import mission_act_node
+    from app.runtime.state import TaskStatus
+
+    state = merge_state(
+        base_state,
+        status=TaskStatus.MISSION_RUNNING.value,
+        mission={"kind": "writing"},
+        mission_step=1,
+        step_decision={"action": "continue", "next_executor": "pipeline:request"},
+    )
+
+    def fake_execute(_state, _decision):
+        return merge_state(
+            _state,
+            status=TaskStatus.MISSION_PAUSED.value,
+            mission_control={"done": True, "action": "pause", "reason": "forced stop"},
+        )
+
+    monkeypatch.setattr("app.nodes.mission_act_node.execute_mission_step", fake_execute)
+    out = mission_act_node(state)
+    assert out.get("status") == TaskStatus.MISSION_PAUSED.value

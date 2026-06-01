@@ -326,6 +326,7 @@ def _stream_artifact_live(
     *,
     system: str,
     user: str,
+    user_payload: dict[str, Any],
     filename: str,
     preferred: str,
     target_chars: int,
@@ -354,8 +355,21 @@ def _stream_artifact_live(
     buffer_trace_at = 0.0
     merged: Any = None
     emit_thinking = thinking_stream_enabled()
+    task_id = str(user_payload.get("task_id") or "")
 
     for chunk in stream_llm.stream(messages):
+        if task_id:
+            try:
+                from app.services.mission_steer import pending_has_forced_action
+                from app.services.state_store import get_state_store
+
+                stored = get_state_store().load(task_id, read_only=True) or {}
+                pending = stored.get("pending_user_message")
+                if pending_has_forced_action(pending, "pause"):
+                    report_status_trace("writing", "检测到强制停止，终止本次流式生成")
+                    break
+            except Exception:
+                pass
         merged = chunk if merged is None else merged + chunk
         piece = _chunk_writing_buffer(chunk)
         if not piece:
@@ -444,6 +458,7 @@ def invoke_artifact_draft(
                 llm,
                 system=system,
                 user=user,
+                user_payload=user_payload,
                 filename=fname,
                 preferred=preferred,
                 target_chars=target_chars,

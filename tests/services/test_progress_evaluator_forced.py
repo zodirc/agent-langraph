@@ -24,3 +24,32 @@ def test_forced_reset_body_continues_despite_queued_steer(base_state):
     assert result.done is False
     assert result.action == "continue"
     assert "reset_body" in result.reason
+
+
+def test_forced_pause_beats_execution_grant(base_state):
+    state = merge_state(
+        base_state,
+        status=TaskStatus.MISSION_RUNNING.value,
+        mission={"kind": "writing", "budget": {"max_failures": 3}},
+        pending_user_message={
+            "messages": [
+                {
+                    "message": "stop now",
+                    "queued_at": "t",
+                    "intervention": {"action": "pause", "force": True},
+                }
+            ],
+            "message": "stop now",
+        },
+        input_payload={
+            "execution_grant": {
+                "issued_at": "t",
+                "source": "resume_api",
+                "consume_once": True,
+            }
+        },
+    )
+    result = evaluate_mission_control(state)
+    assert result.done is True
+    assert result.action == "pause"
+    assert "forced pause" in result.reason

@@ -11,6 +11,7 @@ from app.nodes.tool_node import tool_execution_node
 from app.nodes.writing_node import writing_node
 from app.services.mission_service import prepare_state_for_mission_act, update_progress_from_observation
 from app.services.observation import attach_observation
+from app.services.state_store import get_state_store
 from app.runtime.router import (
     route_after_planning,
     route_after_retrieval,
@@ -20,12 +21,34 @@ from app.runtime.router import (
 from app.runtime.state import AgentState, merge_state
 
 
+def _forced_stop_requested(state: AgentState) -> bool:
+    from app.services.mission_steer import pending_has_forced_action
+
+    task_id = str(state.get("task_id") or "")
+    if not task_id:
+        return False
+    stored = get_state_store().load(task_id, read_only=True) or {}
+    pending = stored.get("pending_user_message")
+    if pending_has_forced_action(pending, "pause"):
+        return True
+    payload = {
+        **(stored.get("input_payload") or {}),
+        **(state.get("input_payload") or {}),
+    }
+    intervention = payload.get("mission_intervention") or {}
+    return bool(
+        str(intervention.get("action") or "") == "pause" and intervention.get("force")
+    )
+
+
 def run_pipeline_request(state: AgentState) -> AgentState:
     """
     One mission step: planning → retrieval? → tools? → writing? → reasoning.
     Stops before policy/output (mission control handles termination).
     """
     state = prepare_state_for_mission_act(state)
+    if _forced_stop_requested(state):
+        return merge_state(state, status="MISSION_PAUSED", current_node="mission_act")
     current = planning_node(state)
     from app.services.mission_steer_confirm import (
         attach_steer_confirmation_to_state,
@@ -39,6 +62,8 @@ def run_pipeline_request(state: AgentState) -> AgentState:
     safety = 0
 
     while safety < 12:
+        if _forced_stop_requested(current):
+            return merge_state(current, status="MISSION_PAUSED", current_node="mission_act")
         safety += 1
         if node == "retrieval":
             current = retrieval_node(current)
@@ -134,6 +159,8 @@ def run_subgraph_writing(state: AgentState) -> AgentState:
     from app.services.turn_contract import contract_blocks_writing
 
     state = prepare_state_for_mission_act(state)
+    if _forced_stop_requested(state):
+        return merge_state(state, status="MISSION_PAUSED", current_node="mission_act")
     payload = dict(state.get("input_payload") or {})
     if contract_blocks_writing(payload):
         tool_step = _run_contract_tool_step(state)

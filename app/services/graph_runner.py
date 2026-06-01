@@ -964,12 +964,37 @@ class GraphRunner:
             get_state_store().save(stored)
 
         from app.services.mission_execution import issue_execution_grant
+        from app.services.mission_steer import normalize_pending_entries
+
+        pending_entries = normalize_pending_entries(stored.get("pending_user_message"))
+        kept_entries: list[dict[str, Any]] = []
+        for entry in pending_entries:
+            intervention = entry.get("intervention")
+            is_forced_pause = bool(
+                isinstance(intervention, dict)
+                and str(intervention.get("action") or "") == "pause"
+                and bool(intervention.get("force"))
+            )
+            if not is_forced_pause:
+                kept_entries.append(entry)
+        pending_user_message = None
+        if kept_entries:
+            pending_user_message = {
+                "queued_at": kept_entries[0].get("queued_at"),
+                "messages": kept_entries,
+                "message": "\n\n".join(
+                    str(e.get("message") or "").strip()
+                    for e in kept_entries
+                    if e.get("message")
+                ).strip(),
+            }
 
         resumed = issue_execution_grant(
             merge_state(
                 stored,
                 status=TaskStatus.MISSION_RUNNING.value,
                 mission_control=None,
+                pending_user_message=pending_user_message,
             ),
             source="resume_api",
         )

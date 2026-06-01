@@ -21,6 +21,7 @@ from app.services.mission_orchestrator import (
     work_plan_completed,
 )
 from app.services.state_store import get_state_store
+from app.services.mission_execution import PAUSE_FORCED
 
 
 def _now_iso() -> str:
@@ -460,13 +461,18 @@ def queue_steer_message(
     )
     if is_forced_pause:
         # Emergency stop lane: replace queued steers to avoid starvation behind queue tail.
+        norm_pause = _normalize_intervention(intervention or {})
         pending = build_pending_queue(
             None,
             message=message,
-            intervention=intervention,
+            intervention=norm_pause,
             priority=max(100, int(priority or 0)),
             preempt=True,
             replace_goal=False,
+        )
+        payload_now = apply_intervention_to_payload(
+            dict(stored.get("input_payload") or {}),
+            norm_pause,
         )
     else:
         pending = build_pending_queue(
@@ -477,10 +483,21 @@ def queue_steer_message(
             preempt=preempt,
             replace_goal=replace_goal,
         )
+        payload_now = dict(stored.get("input_payload") or {})
 
     updated = merge_state(
         stored,
+        input_payload=payload_now,
         pending_user_message=pending,
+        status=TaskStatus.MISSION_PAUSED.value if is_forced_pause else stored.get("status"),
+        mission_control={
+            "done": True,
+            "action": "pause",
+            "reason": "forced pause requested",
+            "pause_reason": PAUSE_FORCED,
+        }
+        if is_forced_pause
+        else stored.get("mission_control"),
         audit_log=append_audit(
             stored,
             "steer",

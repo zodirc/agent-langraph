@@ -195,6 +195,7 @@ def generate_artifact_content(
         )
 
     user_payload = {
+        "task_id": task_id,
         "current_goal": goal,
         "filename": filename,
         "tool": tool_name,

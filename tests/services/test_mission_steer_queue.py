@@ -168,3 +168,31 @@ def test_queue_steer_while_running_accumulates(base_state, monkeypatch):
     loaded = get_state_store().load(state["task_id"])
     entries = normalize_pending_entries(loaded.get("pending_user_message"))
     assert len(entries) == 2
+
+
+def test_forced_pause_queue_also_sets_immediate_intervention(base_state):
+    mission = build_mission_dict(
+        base_state,
+        {"mission": {"kind": "writing", "total_target_chars": 50000}},
+        kind="writing",
+    )
+    state = merge_state(base_state, mission=mission, status="MISSION_RUNNING", input_payload={})
+    get_state_store().save(state)
+
+    queue_steer_message(
+        state["task_id"],
+        "",
+        intervention={"action": "pause", "force": True, "reason": "stop now"},
+        priority=100,
+        preempt=True,
+    )
+    loaded = get_state_store().load(state["task_id"])
+    payload = loaded.get("input_payload") or {}
+    intervention = payload.get("mission_intervention") or {}
+    assert intervention.get("action") == "pause"
+    assert intervention.get("force") is True
+    assert loaded.get("status") == "MISSION_PAUSED"
+    control = loaded.get("mission_control") or {}
+    assert control.get("action") == "pause"
+    pending = normalize_pending_entries(loaded.get("pending_user_message"))
+    assert len(pending) == 1

@@ -91,10 +91,16 @@ def mission_decide_node(state: AgentState) -> AgentState:
 
     eval_result = evaluate_mission_control(state)
     from app.services.mission_execution import has_execution_grant
+    from app.services.mission_intervention import intervention_from_payload
 
-    if has_execution_grant(state.get("input_payload") or {}) and (
+    payload_for_decide = state.get("input_payload") or {}
+    intervention = intervention_from_payload(payload_for_decide) or {}
+    forced_pause = bool(
+        str(intervention.get("action") or "") == "pause" and intervention.get("force")
+    )
+    if has_execution_grant(payload_for_decide) and (
         eval_result.done and eval_result.action == "pause"
-    ):
+    ) and not forced_pause:
         from app.services.progress_evaluator import EvalResult
 
         eval_result = EvalResult(

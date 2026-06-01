@@ -88,6 +88,17 @@ def test_execution_grant_overrides_stepwise_pause(base_state):
     assert not result.done
 
 
+def test_issue_execution_grant_clears_forced_pause_intervention():
+    payload = issue_execution_grant_to_payload(
+        {
+            "mission_intervention": {"action": "pause", "force": True, "reason": "stop now"},
+        },
+        source="resume_api",
+    )
+    assert payload.get("execution_grant")
+    assert payload.get("mission_intervention") is None
+
+
 def test_mechanical_resume_decision_sources():
     assert TurnDecision(intent="resume_mission", source="continue_signal").source == "continue_signal"
     from app.services.mission_execution import is_mechanical_resume_decision

@@ -1873,6 +1873,11 @@ formEl.addEventListener("submit", async (event) => {
   inputEl.value = "";
   if (!value) return;
   if (running) {
+    // Keep slash commands operational while stream is running (e.g. /stop, /stop-all).
+    if (value.startsWith("/")) {
+      await handleCommand(value);
+      return;
+    }
     appendLine(`> ${value}`, "user");
     await steerActiveMission(value, {
       preempt: true,
