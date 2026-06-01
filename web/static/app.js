@@ -130,7 +130,18 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-function renderFlowTimeline(data, taskId) {
+function pickFlowHistory(persistedHistory, liveHistory) {
+  if (!liveHistory.length) return persistedHistory;
+  if (!persistedHistory.length) return liveHistory;
+  if (persistedHistory.length > liveHistory.length) return persistedHistory;
+  if (liveHistory.length > persistedHistory.length) return liveHistory;
+  const pLast = String(persistedHistory[persistedHistory.length - 1]?.at || "");
+  const lLast = String(liveHistory[liveHistory.length - 1]?.at || "");
+  if (pLast && lLast) return pLast >= lLast ? persistedHistory : liveHistory;
+  return persistedHistory;
+}
+
+function renderFlowTimeline(data, taskId, { preferStore = false } = {}) {
   if (!flowMetaEl || !flowTaskEl || !flowTimelineEl) return;
   const status = data?.status || "-";
   const node = data?.current_node || "-";
@@ -138,7 +149,9 @@ function renderFlowTimeline(data, taskId) {
   flowTaskEl.textContent = `task: ${(taskId || "-").toString().slice(0, 12)}${taskId ? "…" : ""}`;
   const persistedHistory = Array.isArray(data?.node_history) ? data.node_history : [];
   const liveHistory = flowLiveHistoryByTask.get(taskId) || [];
-  const history = liveHistory.length ? liveHistory : persistedHistory;
+  const history = preferStore
+    ? persistedHistory
+    : pickFlowHistory(persistedHistory, liveHistory);
   renderFlowGraph(history);
   if (!history.length) {
     flowTimelineEl.innerHTML = '<p class="flow-empty">暂无节点数据。运行任务后将自动显示。</p>';
@@ -378,7 +391,7 @@ function syncFlowPopup() {
   }
 }
 
-async function refreshFlowPanel(taskId = null) {
+async function refreshFlowPanel(taskId = null, { preferStore = false } = {}) {
   if (!flowTimelineEl) return;
   const useTaskId = taskId || activeTaskId || getSessionId();
   if (!useTaskId) return;
@@ -386,7 +399,7 @@ async function refreshFlowPanel(taskId = null) {
     const res = await fetch(`/tasks/${useTaskId}/status`, { headers: getAuthHeaders() });
     if (!res.ok) return;
     const data = await res.json();
-    renderFlowTimeline(data, useTaskId);
+    renderFlowTimeline(data, useTaskId, { preferStore });
   } catch {
     /* ignore flow panel refresh failure */
   }
@@ -395,7 +408,7 @@ async function refreshFlowPanel(taskId = null) {
 function ensureFlowAutoRefresh() {
   if (flowAutoRefreshTimer) return;
   flowAutoRefreshTimer = setInterval(() => {
-    if (!running && !activeTaskId) return;
+    if (!running && !activeTaskId && !sessionHasInFlightMission) return;
     refreshFlowPanel();
   }, 1800);
 }
@@ -2088,7 +2101,7 @@ if (stopBtnEl) {
 
 if (flowRefreshBtnEl) {
   flowRefreshBtnEl.addEventListener("click", async () => {
-    await refreshFlowPanel();
+    await refreshFlowPanel(null, { preferStore: true });
   });
 }
 
@@ -2165,6 +2178,7 @@ async function warnIfSessionMissionInFlight() {
     const st = String(data.status || "");
     if (st === "MISSION_RUNNING") {
       sessionHasInFlightMission = true;
+      ensureFlowAutoRefresh();
       appendLine(
         `Note: session ${taskId.slice(0, 8)}… is MISSION_RUNNING (node ${data.current_node}). ` +
           "运行中输入会进入 steer 接管；暂停后请用普通输入续写。",

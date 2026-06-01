@@ -54,3 +54,44 @@ def test_resolve_writing_intent_append_when_body_on_disk_only(
     )
     intent = resolve_writing_intent_for_step(state, mission=mission)
     assert intent["action"] == "append_body"
+
+
+def test_resolve_manuscript_syncs_chapter_from_disk(base_state, test_settings, monkeypatch):
+    import app.services.artifact_tools as art
+
+    monkeypatch.setattr(art.settings, "ARTIFACTS_PATH", test_settings.ARTIFACTS_PATH)
+    task_id = base_state["task_id"]
+    art_dir = Path(test_settings.ARTIFACTS_PATH) / task_id
+    art_dir.mkdir(parents=True, exist_ok=True)
+    (art_dir / "novel.txt").write_text(
+        "# 第十章\n内容。\n\n# 第十一章\n更多内容。\n",
+        encoding="utf-8",
+    )
+
+    ms = resolve_manuscript(
+        task_id,
+        {"body_path": "novel.txt", "body_bytes": 0, "last_chapter_index": 10},
+    )
+    assert ms.last_chapter_index >= 11
+    assert ms.body_bytes > 0
+
+
+def test_enrich_agent_state_manuscript_from_disk(base_state, test_settings, monkeypatch):
+    import app.services.artifact_tools as art
+    from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
+
+    monkeypatch.setattr(art.settings, "ARTIFACTS_PATH", test_settings.ARTIFACTS_PATH)
+    task_id = base_state["task_id"]
+    art_dir = Path(test_settings.ARTIFACTS_PATH) / task_id
+    art_dir.mkdir(parents=True, exist_ok=True)
+    (art_dir / "novel.txt").write_text("# 第十二章\n正文。\n", encoding="utf-8")
+
+    state = merge_state(
+        base_state,
+        manuscript={"body_path": "novel.txt", "body_bytes": 10, "last_chapter_index": 10},
+        progress={"metrics": {"last_chapter_index": 10}},
+    )
+    enriched = enrich_agent_state_manuscript(state)
+    assert enriched["manuscript"]["last_chapter_index"] >= 12
+    assert enriched["progress"]["metrics"]["last_chapter_index"] >= 12
+    assert enriched["manuscript"]["body_bytes"] > 10

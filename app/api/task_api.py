@@ -408,10 +408,22 @@ def get_task_state_debug(
 
     Returns store (DB), live (in-process stream), and merged views when available.
     """
+    from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
+
     store_state = get_state_store().load(task_id, read_only=True)
     live_entry = get_live(task_id)
     if not store_state and not live_entry:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    if store_state:
+        store_state = enrich_agent_state_manuscript(store_state)
+    if live_entry is not None:
+        from app.services.live_task_state import LiveTaskEntry
+
+        live_entry = LiveTaskEntry(
+            state=enrich_agent_state_manuscript(live_entry.state),
+            updated_at=live_entry.updated_at,
+            running=live_entry.running,
+        )
     return build_task_state_debug_response(
         task_id=task_id,
         store_state=store_state,
@@ -425,9 +437,12 @@ def get_task_status(
     task_id: str,
     _principal: AuthPrincipal = Depends(get_current_principal),
 ) -> TaskStatusResponse:
+    from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
+
     state = get_state_store().load(task_id, read_only=True)
     if not state:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    state = enrich_agent_state_manuscript(state)
     history = [
         NodeHistoryEntry(
             node=str(item.get("node", "")),
@@ -437,10 +452,15 @@ def get_task_status(
         )
         for item in (state.get("node_history") or [])
     ]
+    display_node = str(state.get("current_node") or "")
+    if display_node == "mission_act" and str(state.get("status", "")) == "MISSION_RUNNING":
+        manuscript = state.get("manuscript") or {}
+        if manuscript.get("body_path"):
+            display_node = "writing"
     return TaskStatusResponse(
         task_id=task_id,
         status=str(state["status"]),
-        current_node=state["current_node"],
+        current_node=display_node,
         review_required=bool(state.get("review_required")),
         errors=list(state.get("errors", [])),
         node_history=history,

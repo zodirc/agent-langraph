@@ -388,6 +388,12 @@ def writing_node(state: AgentState) -> AgentState:
                 results.append(
                     {"tool": "append_text_artifact", "status": "ok", "result": outcome}
                 )
+                from app.services.manuscript_checkpoint import checkpoint_writing_state
+
+                checkpoint_writing_state(
+                    merge_state(state, input_payload=payload),
+                    tool_results=results,
+                )
             ms.body_path = filename
             ms = resolve_manuscript(task_id, ms.to_dict())
             ms.body_outline_revision_seen = int(ms.outline_revision or 0)

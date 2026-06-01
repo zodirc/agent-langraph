@@ -174,6 +174,23 @@ def resolve_manuscript(task_id: str, stored: Optional[dict[str, Any]] = None) ->
     return ms
 
 
+def _sync_chapter_from_disk(ms: Manuscript) -> None:
+    """Raise last_chapter_index / chapter_cursor when body on disk has newer chapter headers."""
+    if not ms.body_path:
+        return
+    from app.services.manuscript_context import parse_last_chapter_index, read_body_text
+
+    try:
+        body_text = read_body_text(ms.task_id, ms.body_path)
+    except OSError:
+        return
+    disk_last = parse_last_chapter_index(body_text)
+    if disk_last <= 0:
+        return
+    ms.last_chapter_index = max(int(ms.last_chapter_index or 0), disk_last)
+    ms.chapter_cursor = max(int(ms.chapter_cursor or 0), disk_last + 1)
+
+
 def _refresh_bytes(ms: Manuscript) -> Manuscript:
     for item in ms.files:
         name = str(item.get("filename") or "")
@@ -186,6 +203,7 @@ def _refresh_bytes(ms: Manuscript) -> Manuscript:
             int(ms.body_bytes or 0),
             artifact_bytes_on_disk(ms.task_id, ms.body_path),
         )
+        _sync_chapter_from_disk(ms)
     if ms.outline_path:
         ms.outline_bytes = max(
             int(ms.outline_bytes or 0),
