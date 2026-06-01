@@ -114,9 +114,12 @@ export SERVICE_API_KEY=your-service-key
 | 文档 | 内容 |
 |------|------|
 | [`docs/ROUTE_AUDIT.md`](docs/ROUTE_AUDIT.md) | 规划后任务类型 vs 执行路径审计、reflection 重规划 |
-| [`docs/DISPLAY_AND_DELIVERY.md`](docs/DISPLAY_AND_DELIVERY.md) | 代码缩进保留、流式 artifacts、delivery 与记忆写回门控 |
-| [`docs/CODE_ARTIFACT_PIPELINE.md`](docs/CODE_ARTIFACT_PIPELINE.md) | 编译校验、stderr 驱动 LLM 修复、composed_at_end 流式 |
 | [`docs/REASONING_SHORTCUT.md`](docs/REASONING_SHORTCUT.md) | 多轮推理隔离：每轮清零、问答强制完整思考 |
+| [`docs/CONFIRMATION_GATES.md`](docs/CONFIRMATION_GATES.md) | Intent / Outcome 双阶段确认门闸、预览策略、gate registry |
+| [`docs/MISSION_EXECUTION_CONTROL.md`](docs/MISSION_EXECUTION_CONTROL.md) | execution grant、pause_reason、resume / steer 控制面 |
+| [`docs/SESSION_TURN_POLICY.md`](docs/SESSION_TURN_POLICY.md) | session turn 规划闸门、机械续写、mission active 场景决策 |
+| [`docs/CODE_ARTIFACT_PIPELINE.md`](docs/CODE_ARTIFACT_PIPELINE.md) | 编译校验、stderr 驱动 LLM 修复、composed_at_end 流式 |
+| [`docs/DISPLAY_AND_DELIVERY.md`](docs/DISPLAY_AND_DELIVERY.md) | 代码缩进保留、流式 artifacts、delivery 与记忆写回门控 |
 | [`app/config/prompt_templates.py`](app/config/prompt_templates.py) | 按 `purpose` / `domain` / `reasoning_mode` 选择 Prompt |
 | `config.yaml` → `reasoning_trace` · [`app/services/reasoning_trace.py`](app/services/reasoning_trace.py) | SSE trace、`thinking` 字段 |
 | `GET /domains/prompt-catalog` | HTTP 查询模板目录 |
@@ -178,6 +181,7 @@ export SERVICE_API_KEY=your-service-key
 | `calculator` | 大整数 / 精确算术（勿心算） |
 | `write_text_artifact` | 将文本写入任务目录下的文件 |
 | `append_text_artifact` | 向已有文件追加内容（长文分块写入） |
+| `edit_text_artifact` | 对已有文本 artifact 做精确替换，常用于 outline / plot 局部修订 |
 | `read_text_artifact` | 读取已写入的文件 |
 | `echo` / `summarize_text` | 调试与摘要 |
 

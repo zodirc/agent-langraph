@@ -41,6 +41,7 @@
 | `context_compressor.py` | ✅ | `SemanticContextSummary`、字符 / 语义双路径 |
 | `conversation_context` 模块 | ✅ | history 读写、`finalize_turn_history`、草稿 answer、memory 写回 |
 | `session_turn` 接入 | ✅ | `prepare_session_turn`；压缩见 `compress_session_history()` |
+| session turn 策略闸门 | ✅ | `SESSION_TURN_POLICY.md` 对齐：mission active 时的 intent classifier、机械续写与 planning gate |
 | 配置 `session.memory_retrieval_enabled` | ✅ | 多轮 QA 在 `skip_retrieval` 时仍走 session memory |
 | 配置 `context_compress.semantic_enabled` | ✅ | 默认 **false** |
 | 单测 | ✅ | `tests/services/test_context_compressor.py` |

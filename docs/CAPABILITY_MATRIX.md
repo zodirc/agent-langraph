@@ -35,6 +35,7 @@
 | LLM circuit breaker | **beta** | off | ✅ | `llm.circuit_breaker_enabled` |
 | Checkpoint corruption recovery | **beta** | off | ✅ | `checkpoint_recovery.py` |
 | Context compress (character) | **stable** | on | ✅ | `session.compress_enabled` |
+| Session turn policy / planning gate | **stable** | on | ✅ | [`SESSION_TURN_POLICY.md`](SESSION_TURN_POLICY.md)；mission active 时的机械续写、intent classifier、planning gate |
 | Semantic context compress | **beta** | off | 🔶 | Code ✅；压缩率 hard gate 未齐 |
 | Skill runtime | **beta** | off | ✅ | `skill.enabled=false`；registry + yaml |
 | MCP tools + ops | **beta** | off | ✅ | probe/evict；resources/prompts；HTTP stub E2E |
@@ -50,6 +51,7 @@
 | PG HA (Patroni/pgpool) | **experimental** | — | ❌ | 无 failover 集成测试 |
 | Edge LLM / GDPR / DR | **experimental** | — | ❌ | 长期 |
 | Controlled file edit tool | **stable** | on | ✅ | whitelist + precise replace + audit |
+| Outline patch via read/edit artifact tools | **beta** | on | ✅ | `outline_steer_patch.py`；`read_text_artifact` → model anchor → `edit_text_artifact` |
 
 \* `writing_llm_decide` 默认 `true`（`config.yaml`）；关闭后回退规则型 `suggest_writing_phase_fallback`。
 
