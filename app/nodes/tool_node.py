@@ -7,7 +7,11 @@ from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
 from app.services.artifact_content import generate_artifact_content, needs_generated_content
 from app.services.fact_layer import attach_turn_facts
 from app.services.manuscript_service import WRITING_TOOL_NAMES, resolve_read_paths
-from app.services.artifact_tools import extract_math_expression
+from app.services.artifact_tools import (
+    collect_file_artifacts,
+    extract_math_expression,
+    list_task_artifacts,
+)
 from app.services.metrics_service import get_metrics_service
 from app.services.reasoning_trace import report_boundary, report_status_trace
 from app.services.state_store import get_state_store
@@ -69,7 +73,28 @@ def tool_execution_node(state: AgentState) -> AgentState:
                     }
                 )
                 return blocked_results[-1]["result"]
-            result = registry.invoke(tool_name, params, user_role=user_role)
+            try:
+                result = registry.invoke(tool_name, params, user_role=user_role)
+            except FileNotFoundError as exc:
+                pending_events.append(
+                    (
+                        "tool_failed",
+                        tool_name,
+                        {"status": "error", "error": str(exc), "error_code": "artifact_not_found"},
+                    )
+                )
+                return {
+                    "tool": tool_name,
+                    "status": "error",
+                    "error": str(exc),
+                    "error_code": "artifact_not_found",
+                    "result": {
+                        "status": "error",
+                        "error": str(exc),
+                        "error_code": "artifact_not_found",
+                        "non_retryable": True,
+                    },
+                }
             pending_events.append(
                 (
                     "tool_invoked",
@@ -87,11 +112,40 @@ def tool_execution_node(state: AgentState) -> AgentState:
             r for r in results
             if r.get("status") in ("error", "skipped") or r.get("error")
         ]
-        if tools and failures and len(failures) == len([r for r in results if r.get("tool") in tools]):
+        tool_invocations = [r for r in results if r.get("tool") in tools]
+        if tools and failures and len(failures) == len(tool_invocations):
+            all_non_retryable = all(
+                bool(r.get("non_retryable"))
+                or bool((r.get("result") or {}).get("non_retryable"))
+                for r in failures
+            )
+            if all_non_retryable:
+                updated = merge_state(
+                    state,
+                    tool_results=results,
+                    errors=list(state.get("errors", []))
+                    + [f"tool_execution(non_retryable): {failures[0].get('error', 'all tools failed')}"],
+                    status=TaskStatus.TOOL_FAILED.value,
+                    current_node="tool_execution",
+                    audit_log=append_audit(
+                        state,
+                        "tool_execution",
+                        "non_retryable_error",
+                        {
+                            "tools": tools,
+                            "error": failures[0].get("error", "all tools failed"),
+                            "error_code": failures[0].get("error_code"),
+                        },
+                    ),
+                )
+                get_state_store().save(updated)
+                return updated
             raise KeyError(failures[0].get("error", "all tools failed"))
 
+        payload_updates = _build_artifact_registry_updates(state, payload, results)
         updated = merge_state(
             state,
+            input_payload={**payload, **payload_updates},
             tool_results=results,
             status=TaskStatus.TOOL_EXECUTED.value,
             current_node="tool_execution",
@@ -194,8 +248,10 @@ def _build_tool_params(tool_name: str, state: AgentState) -> dict[str, Any]:
             },
         }
     if tool_name in ("write_text_artifact", "append_text_artifact", "read_text_artifact"):
-        filename = resolve_read_paths(
-            state, str(tool_params.get("filename") or "output.md")
+        filename = _resolve_artifact_filename(
+            state,
+            tool_name=tool_name,
+            requested_filename=str(tool_params.get("filename") or ""),
         )
         params: dict[str, Any] = {
             "task_id": task_id,
@@ -228,3 +284,84 @@ def _build_tool_params(tool_name: str, state: AgentState) -> dict[str, Any]:
             params["content"] = content
         return params
     return tool_params
+
+
+def _build_artifact_registry_updates(
+    state: AgentState,
+    payload: dict[str, Any],
+    results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    produced = collect_file_artifacts(results)
+    if not produced:
+        return {}
+    registry = dict(payload.get("artifact_registry") or {})
+    known = dict(registry.get("known") or {})
+    for item in produced:
+        name = str(item.get("filename") or "").strip()
+        path = str(item.get("path") or "").strip()
+        if name and path:
+            known[name] = path
+    last = produced[-1]
+    out = dict(registry)
+    out["known"] = known
+    if str(last.get("filename") or "").strip():
+        out["last_written"] = str(last["filename"])
+    out["updated_in_node"] = "tool_execution"
+    out["updated_turn"] = int(state.get("session_turn") or 0)
+    return {"artifact_registry": out}
+
+
+def _resolve_artifact_filename(
+    state: AgentState,
+    *,
+    tool_name: str,
+    requested_filename: str,
+) -> str:
+    requested = requested_filename.strip()
+    if requested:
+        return resolve_read_paths(state, requested)
+
+    payload = state.get("input_payload") or {}
+    registry = payload.get("artifact_registry") or {}
+    known = dict(registry.get("known") or {})
+
+    # 1) deterministic pointer from registry
+    last_written = str(registry.get("last_written") or "").strip()
+    if last_written:
+        return resolve_read_paths(state, last_written)
+
+    # 2) active manuscript pointer (for writing sessions)
+    manuscript = payload.get("manuscript") or payload.get("session_artifacts") or {}
+    body = str(manuscript.get("body_path") or payload.get("novel_filename") or "").strip()
+    if body:
+        return resolve_read_paths(state, body)
+
+    # 3) path map from previous writes in this or previous turns
+    if known:
+        preferred = ("output.md", "novel.txt", "outline.txt")
+        for name in preferred:
+            if name in known:
+                return resolve_read_paths(state, name)
+        # deterministic fallback: lexical first key
+        first_name = sorted(known.keys())[0]
+        return resolve_read_paths(state, first_name)
+
+    # 4) latest tool result path in current runtime state
+    latest = collect_file_artifacts(state.get("tool_results"))
+    if latest:
+        return resolve_read_paths(state, str(latest[-1].get("filename") or "output.md"))
+
+    # 5) scan task artifact directory as a final deterministic fallback
+    task_id = str(state["task_id"])
+    files = list_task_artifacts(task_id)
+    if files:
+        preferred = ("output.md", "novel.txt", "outline.txt")
+        names = {str(item.get("filename") or "") for item in files}
+        for name in preferred:
+            if name in names:
+                return resolve_read_paths(state, name)
+        first_name = sorted(names)[0]
+        if first_name:
+            return resolve_read_paths(state, first_name)
+
+    return resolve_read_paths(state, "output.md")

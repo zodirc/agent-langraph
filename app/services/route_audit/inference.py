@@ -55,12 +55,22 @@ def infer_task_kind(
         primary = max(scores, key=scores.get)  # type: ignore[arg-type]
         confidence = float(scores[primary])
 
-    return {
+    primary, confidence, switched_from = _auto_switch_primary_kind(
+        primary=primary,
+        confidence=confidence,
+        scores=scores,
+        structural=structural,
+    )
+
+    out = {
         "primary_kind": primary,
         "kind_scores": scores,
         "confidence": confidence,
         "structural": structural,
     }
+    if switched_from:
+        out["switched_from"] = switched_from
+    return out
 
 
 def infer_goal_kind_from_text(
@@ -94,3 +104,36 @@ def infer_goal_kind_from_text(
         "kind_scores": scores,
         "confidence": float(scores[primary]),
     }
+
+
+def _auto_switch_primary_kind(
+    *,
+    primary: str,
+    confidence: float,
+    scores: dict[str, float],
+    structural: dict[str, bool],
+) -> tuple[str, float, str | None]:
+    """
+    Dynamically promote mixed-scene QA turns to manuscript when writing evidence is strong.
+
+    This avoids single-label lock-in where `qa` suppresses actionable rewrite intents.
+    """
+    if primary != "qa":
+        return primary, confidence, None
+    if structural.get("code_filename_in_tools"):
+        return primary, confidence, None
+
+    writing_intent = bool(structural.get("writing_intent_enabled"))
+    manuscript_anchor = bool(
+        structural.get("manuscript_body_exists")
+        or structural.get("manuscript_default_body")
+        or structural.get("mission_writing")
+    )
+    if not (writing_intent and manuscript_anchor):
+        return primary, confidence, None
+
+    qa_score = float(scores.get("qa", 0.0))
+    manuscript_score = float(scores.get("manuscript", 0.0))
+    promoted = max(manuscript_score, max(0.45, qa_score + 0.05))
+    scores["manuscript"] = round(promoted, 4)
+    return "manuscript", float(scores["manuscript"]), "qa"

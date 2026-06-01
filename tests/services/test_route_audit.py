@@ -113,3 +113,24 @@ def test_detect_planned_route_code_filename():
         },
     )
     assert detect_planned_route(state) == "writing_code_artifact"
+
+
+def test_qa_with_existing_manuscript_allows_writing_sub_intent():
+    state = {
+        "task_id": "t-route-audit-mixed",
+        "session_id": "s-route-audit-mixed",
+        "input_payload": {
+            "goal": "你觉得写的怎么样，顺便帮我润色重写",
+            "writing_intent": {"enabled": True, "action": "write_body"},
+            "manuscript": {"body_path": "novel.txt", "body_bytes": 12000},
+        },
+        "selected_tools": [],
+        "plan": ["rewrite manuscript body"],
+        "skip_retrieval": True,
+        "manuscript": {"body_path": "novel.txt", "body_bytes": 12000},
+    }
+    audit = audit_planned_route(state)
+    assert audit["planned_route"] == "writing_manuscript"
+    assert audit["inferred_kind"] == "manuscript"
+    assert audit["aligned"] is True
+    assert audit["writing_blocked"] is False

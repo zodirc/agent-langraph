@@ -1,10 +1,10 @@
 # 实现状态追踪（对齐代码库）
 
-> **最后更新**：2026-05-27（补：display/delivery 管线、artifact 流式、memory writeback 门控、生效计划 trace）  
+> **最后更新**：2026-06-01（补：SRDL 受控 ReAct 子图、turn_event_log 事件账本、agenda / DAG、confirmation gates、execution grant 等近期大项）  
 > **对照文档**：[`CAPABILITY_MATRIX.md`](CAPABILITY_MATRIX.md)  
 > **图例**：✅ 已实现并有用例覆盖 · 🔶 部分实现 / 默认关 · ❌ 未实现
 
-当前代码库处于 **v0.11–v0.12 能力已落地、v0.13 平台化进行中** 状态（以仓库实测为准，非发布 tag）。
+当前代码库处于 **v0.11–v0.13 能力已落地、v0.13 平台化持续补齐** 状态（以仓库实测为准，非发布 tag）。
 
 ---
 
@@ -13,10 +13,11 @@
 | Batch | 主题 | 状态 | 说明 |
 |-------|------|------|------|
 | **0** | 开源可用性 | ✅ **完成** | README 5 分钟路径、`scripts/demo_local.sh`、`CAPABILITY_MATRIX.md` |
-| **1** | 可信问答 | ✅ **完成** | RAG 闭环 + Golden 26 项；语义压缩 E2E + `agent_context_compress_ratio` 门禁 |
-| **2** | 稳定性 | ✅ **完成** | 背压、熔断、Checkpoint 恢复 |
-| **3** | 能力模块化 | 🔶 **核心完成** | Skill、MCP 运维、Embedding 治理；OCR 未做 |
-| **4** | 平台化 | 🔶 **核心完成** | 租户隔离/配额/成本/API；图边界 Pydantic + mypy；PG HA 未做 |
+| **1** | 可信问答 | ✅ **核心完成** | RAG 闭环 + Golden 26 项；语义压缩逻辑到位，E2E/指标门禁仍未齐 |
+| **2** | 稳定性 | ✅ **核心完成** | 背压、熔断、Checkpoint 恢复 |
+| **3** | 能力模块化 | ✅ **核心完成** | Skill、MCP 运维、Embedding 治理；OCR 未做 |
+| **4** | 平台化 | 🔶 **核心完成** | 租户隔离/配额/成本/API；HA、长期合规项未做 |
+| **5** | Runtime 认知控制增强 | ✅ **完成** | route audit、reasoning isolation、SRDL、turn event log、agenda / DAG、confirmation gates |
 
 ---
 
@@ -24,28 +25,28 @@
 
 | ID | 任务 | 状态 | 产物 |
 |----|------|------|------|
-| B0-1 | 5 分钟快速路径 | ✅ | `README.md` §零 API Key |
+| B0-1 | 5 分钟快速路径 | ✅ | `README.md` 顶部 quick start / Docker / CLI |
 | B0-2 | `demo_local.sh` | ✅ | `scripts/demo_local.sh` |
-| B0-3 | 能力矩阵 | ✅ | `docs/CAPABILITY_MATRIX.md` |
-| B0-4 | 受控文件编辑文档 | 🔶 | 架构/工具存在；README 专节可再补 |
+| B0-3 | 能力矩阵 | ✅ | [`docs/CAPABILITY_MATRIX.md`](CAPABILITY_MATRIX.md) |
+| B0-4 | 受控文件编辑文档 | ✅ | `artifact_tools.py` / `builtin_tools.py` + matrix / README 对齐 |
 
 ---
 
 ## 三、Batch 1 — 可信问答
 
-### 1.1 语义上下文压缩
+### 1.1 会话上下文压缩与多轮记忆
 
 | 项 | 状态 | 说明 |
 |----|------|------|
-| `context_compressor.py` | ✅ | `SemanticContextSummary`、字符/语义双路径 |
+| `context_compressor.py` | ✅ | `SemanticContextSummary`、字符 / 语义双路径 |
 | `conversation_context` 模块 | ✅ | history 读写、`finalize_turn_history`、草稿 answer、memory 写回 |
 | `session_turn` 接入 | ✅ | `prepare_session_turn`；压缩见 `compress_session_history()` |
 | 配置 `session.memory_retrieval_enabled` | ✅ | 多轮 QA 在 `skip_retrieval` 时仍走 session memory |
 | 配置 `context_compress.semantic_enabled` | ✅ | 默认 **false** |
 | 单测 | ✅ | `tests/services/test_context_compressor.py` |
-| E2E | ❌ | `test_context_compress_e2e.py` 未建 |
-| CI 压缩率门禁 | ❌ | `agent_context_compress_ratio` 未接 Prometheus |
-| DoD（开源可用性批次） | 🔶 | 逻辑有，门禁与 E2E 未齐 |
+| E2E | 🔶 | 代码库已有 integration 覆盖迹象，但门禁口径仍未完全在本文档闭环 |
+| CI 压缩率门禁 | ❌ | `agent_context_compress_ratio` 未形成硬 gate |
+| DoD（开源可用性批次） | 🔶 | 逻辑完整；E2E/门禁仍可补强 |
 
 ### 1.2 RAG 精排 + Citation + Faithfulness
 
@@ -57,9 +58,9 @@
 | 节点接入 | ✅ | retrieval / output / output_guard / fact_layer |
 | 配置 `rag.*` | ✅ | rerank、citation、faithfulness 默认关 |
 | 单测 | ✅ | `test_reranker.py`、`test_rag_eval.py` |
-| Eval | ✅ | `test_rag_golden.py`（8 任务）、`test_rag_faithfulness_llm.py`（mock LLM） |
-| CI | ✅ | `scripts/ci_eval.sh` SUITE=rag；阈值 `eval_thresholds.py` |
-| Faithfulness 生产 LLM 实测 | 🔶 | CI 仅 mock；live 需 API Key |
+| Eval | ✅ | `test_rag_golden.py`、`test_rag_faithfulness_llm.py` |
+| CI | ✅ | `scripts/ci_eval.sh` SUITE=rag；阈值在 `eval_thresholds.py` |
+| Faithfulness 生产 LLM 实测 | 🔶 | CI 仅 mock；live 依赖 API Key |
 
 ### 1.3 Golden 评测集
 
@@ -71,9 +72,8 @@
 | 合计 | 20+ | **26** | ✅ |
 | `test_golden_quality` | — | ✅ | doc_id 存在性校验 |
 | `ci_eval.sh` | unit/integration/rag/all | ✅ | |
-| `.github/workflows/eval.yml` | — | ✅ | 分 suite 步骤 |
 | Mission planning handoff | — | ✅ | `enable_planning_mission_handoff` + sync stream handoff |
-| 通过率门禁 85%/80% | — | 🔶 | baseline 回归有；汇总通过率未单独 gate |
+| 通过率门禁 85%/80% | — | 🔶 | baseline 回归有；聚合通过率仍可加强 |
 
 ---
 
@@ -84,9 +84,9 @@
 | 图执行背压 | ✅ | `graph_execution_pool.py`；429 `GraphExecutionRejected`；`test_graph_runner_backpressure.py` |
 | Prometheus 队列指标 | ✅ | `graph_queue_active` / `graph_rejected_total` 等 |
 | LLM Circuit Breaker | ✅ | `circuit_breaker.py`；`llm.circuit_breaker_enabled`；`test_circuit_breaker.py` |
-| LLM 集成熔断 E2E | ❌ | `test_llm_circuit_breaker.py` 未建 |
+| LLM 集成熔断 E2E | 🔶 | 单测有；端到端门禁仍可继续补 |
 | Checkpoint 恢复 | ✅ | `checkpoint_recovery.py`；`test_checkpoint_recovery.py` |
-| 压测脚本 | ❌ | 文档级待补 |
+| 压测脚本 / SLO 文档 | ❌ | 文档级仍待补 |
 
 ---
 
@@ -94,7 +94,7 @@
 
 | 项 | 状态 | 说明 |
 |----|------|------|
-| Skill 运行时 | ✅ | `skill.py`、`skill_registry.py`、`config/skills/`；`test_skill_registry` |
+| Skill 运行时 | ✅ | `skill.py`、`skill_registry.py`、`config/skills/`；`test_skill_registry*` |
 | MCP 运维 | ✅ | `mcp_manager.py`；probe/evict；resources/prompts；`test_mcp_manager.py` |
 | MCP HTTP E2E | ✅ | `mcp_stubs/http_server.py`、`test_mcp_http_e2e.py` |
 | Embedding 治理 | ✅ | `embedding_meta.py`、`embedding_reindex.py`；`test_embedding_governance.py` |
@@ -146,89 +146,62 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 
 ---
 
-## 七、长篇 Mission 写作（Manuscript + Orchestration）
+## 七、Batch 5 — Runtime 认知控制增强（2026-05 末至 2026-06）
+
+### 5.1 路径审计与多轮推理隔离
+
+| 项 | 状态 | 说明 |
+|----|------|------|
+| Route audit（规划后） | ✅ | `app/services/route_audit/`；规划完成后审计任务类型 vs 执行路径 |
+| Reflection 路由纠错 + replan | ✅ | `retry_planning`；`reflection.route_audit_on_misroute` |
+| Artifact profile | ✅ | `source_code` / `manuscript_prose` / `outline` |
+| 多轮 reasoning 隔离 | ✅ | `reasoning_shortcut.py`；每轮清零，问答强制完整思考 |
+| Segment-aware output_guard | ✅ | `content_segments.py` + `output_guard.pii_prose_only` |
+| Session memory query 增强 | ✅ | `memory_query.py`；`session_memory_*` counters |
+
+### 5.2 长篇 Mission 编排增强
 
 | 项 | 状态 | 说明 |
 |----|------|------|
 | 手稿子系统 | ✅ | `manuscript_service`、`writing_node`、`build_writing_context` |
 | Planning → Mission handoff | ✅ | `enable_planning_mission_handoff` + `mission_auto` |
 | Lazy work_plan | ✅ | `mission_orchestrator` 按 `step_policy` 推进一步 |
-| **写作阶段（模型自选）** | ✅ | `writing_phases.py`；`mission.writing_llm_decide`（默认 true） |
-| `writing_phase` 阶段 | ✅ | outline / append / consistency / review / polish / summary / arc_checkpoint |
-| `story_bible.json` / `chapter_reviews.json` | ✅ | 任务 artifact 目录侧车文件 |
-| **autonomous 连续执行** | ✅ | `init_mission_state` 保留 autonomous；`stepwise_pause` 对 autonomous 为 false |
+| agenda / DAG 扩展 | ✅ | `task_agenda.py`：`depends_on`、阻塞传播、局部重规划 |
+| 写作阶段（模型自选） | ✅ | `writing_phases.py`；`mission.writing_llm_decide`（默认 true） |
+| autonomous 连续执行 | ✅ | `init_mission_state` 保留 autonomous；`stepwise_pause` 对 autonomous 为 false |
 | 输出保留 `MISSION_PAUSED` | ✅ | `output_node._resolve_output_status` |
-| Web steer + 输入不禁用 | ✅ | `POST .../steer`；`web/static/app.js` |
-| Steer intent 确认（规划后、执行前） | ✅ | `mission_steer_confirm.py`；`planning_node` |
-| Steer outcome 确认（工作项后、节选） | ✅ | `confirmation/` 预览策略 + `mission_steer_outcome_confirm.py`；见 [`CONFIRMATION_GATES.md`](CONFIRMATION_GATES.md) |
-| Steer replan / work_plan SSOT | ✅ | `mission/steer_replan.py`；planning `work_plan_patch` |
-| 预览策略（head/tail/diff/delta） | ✅ | `confirmation/preview_resolver.py`；`config.confirmation_gates` |
-| 结构化批准 `confirm:true` | ✅ | `resume` / `steer` API；`steer_confirmation_actions.py`；无 NL 短语表 |
-| Steer payload 持久化 | ✅ | `state_store._PAYLOAD_VOLATILE_KEYS` |
-| Steer 优先级 / 抢占提示 | ✅ | `POST /tasks/{id}/steer` 支持 `priority`/`preempt`；写作生成前 best-effort 收敛 |
-| Session turn 规划闸门 | ✅ | `session_turn.py`；`graph_runner._prepare_mission_for_turn` |
-| 客户端展示 `client_display` | ✅ | `system_lines` / `autonomous_ui`；Web 不硬编码 steer_action 文案 |
-| Streaming 合并修复（避免 work_plan 回滚） | ✅ | `merge_state` 深合并 `progress/input_payload`；`stream_mission_graph` 使用 merge |
-| 纲文对齐决策（重写大纲后自动判断是否 reset_body） | ✅ | `outline_body_alignment.py` + `writing_node` 写入 forced `reset_body` |
-| Reasoning JSON 修复链路（repair + fallback） | ✅ | `extract_json_with_repair`；reasoning 流式/非流式统一走修复 |
-| 多轮会话 history 持久化（user+assistant 同步） | ✅ | `conversation_context.py`；`finalize_turn_history` 合并 payload/state |
-| 审核中断轮次草稿入库 | ✅ | `persist_turn_draft_answer` + `resolve_turn_surface_answer` |
-| Session memory 检索（skip_retrieval 时） | ✅ | `retrieval_policy.py`；`router` + `retrieval_node` |
-| Parser fallback 不触发低置信度审核 | ✅ | `policy_engine._is_parser_format_recovery` |
-| PG `memories.session_id` 迁移 | ✅ | `db.POSTGRES_SCHEMA_MIGRATIONS` |
-| Segment-aware output_guard（代码块不扫 PII） | ✅ | `content_segments.py` + `output_guard.pii_prose_only` |
-| Reasoning `structured.artifacts` + answer 组装 | ✅ | `answer_compose.py`；`output_node` / `persist_turn_draft_answer` |
-| History outcome / session_outcomes_digest | ✅ | `conversation_context`；拒答不入 LLM history |
-| Memory 检索 query 增强 + 指标 | ✅ | `memory_query.py`；`session_memory_*` counters |
-| Route audit（规划后路径审计） | ✅ | [`ROUTE_AUDIT.md`](ROUTE_AUDIT.md)；`app/services/route_audit/` |
-| Reflection 路由纠错 + replan | ✅ | `retry_planning`；`reflection.route_audit_on_misroute` |
-| Display / delivery（缩进、流式、代码写盘） | ✅ | [`DISPLAY_AND_DELIVERY.md`](DISPLAY_AND_DELIVERY.md)；`answer_compose` / `delivery_policy` |
-| Code artifact pipeline（编译校验 / stderr 修复 / 流式） | ✅ | [`CODE_ARTIFACT_PIPELINE.md`](CODE_ARTIFACT_PIPELINE.md)；`code_artifact_pipeline.py` + `code_verify/`（无排版硬编码、无压扁启发式） |
-| Memory writeback 门控 | ✅ | `memory.writeback`；`memory_writeback_policy.py` |
-| Artifact 生成 profile | ✅ | `artifact_profile`：source_code / manuscript_prose / outline |
-| 多轮 reasoning 隔离 | ✅ | [`REASONING_SHORTCUT.md`](REASONING_SHORTCUT.md)；`reasoning_shortcut.py` |
-| Reasoning 修复可观测性 | ✅ | audit 记录 `parser_repaired/parser_fallback`；metrics 计数 `reasoning_parser_*` |
+| Streaming 深合并修复 | ✅ | `merge_state` 深合并 `progress/input_payload` |
+| 纲文对齐决策 | ✅ | `outline_body_alignment.py` + `writing_node` 强制 `reset_body` |
 | `budget.max_steps` 估算 + 硬顶 500 | ✅ | `mission_schema.resolve_mission_budget_dict` |
-| Supervisor 按章多 Agent | ❌ | 未与 mission 写作默认打通；见 `MANUSCRIPT_WRITING.md` |
-| 单测 | ✅ | `test_writing_phases.py`、`test_mission_autonomous_orchestration.py`、`test_mission_budget_steps.py` |
+| Supervisor 按章多 Agent | ❌ | 默认 mission 写作链未打通 |
 
-配置见 `config/config.yaml` → `mission.writing_llm_decide`、`mission.steps_hard_cap`。
+### 5.3 Steer / confirmation / execution control
 
----
+| 项 | 状态 | 说明 |
+|----|------|------|
+| Steer intent 确认（规划后、执行前） | ✅ | `mission_steer_confirm.py`；`planning_node` |
+| Steer outcome 确认（工作项后、节选） | ✅ | `confirmation/` 预览策略 + `mission_steer_outcome_confirm.py` |
+| `confirmation_gates` 配置化 | ✅ | `confirmation/config.py` + `gate_registry.py` + `preview_resolver.py` |
+| `work_plan_patch` | ✅ | `planning_node` + `mission/steer_replan.py` |
+| 结构化批准 `confirm:true` | ✅ | `resume` / `steer` API；`steer_confirmation_actions.py` |
+| Steer payload 持久化 | ✅ | `state_store._PAYLOAD_VOLATILE_KEYS` |
+| Steer 优先级 / 抢占提示 | ✅ | `POST /tasks/{id}/steer` 支持 `priority`/`preempt` |
+| Session turn 规划闸门 | ✅ | `session_turn.py`；`graph_runner._prepare_mission_for_turn` |
+| execution_grant | ✅ | `mission_execution.py`；`resume_api` / session 机械续写签发继续令牌 |
+| pause_reason 分型 | ✅ | `step_checkpoint` / `gate_intent` / `gate_outcome` / `budget` / `failure` 等 |
+| client_display | ✅ | `system_lines` / `autonomous_ui` / `client_display` |
 
-## 八、验收总表
+### 5.4 事件账本与事实层增强
 
-| 缺口项 | 计划版本 | 实现 | 测试 | CI 门禁 |
-|--------|----------|------|------|---------|
-| 语义上下文压缩 | v0.11 | ✅ | ✅ E2E | ✅ ratio ≥ `min_ratio` |
-| RAG 精排+citation+faithfulness | v0.11 | ✅ | ✅ | ✅ rag suite |
-| Golden 20+ | v0.11 | ✅ 26 项 | ✅ | ✅ baseline 回归 |
-| 背压队列 | v0.11.1 | ✅ | ✅ | 🔶 指标有/压测无 |
-| Circuit breaker | v0.11.1 | ✅ | ✅ 单测 | 🔶 无集成 E2E |
-| Checkpoint 恢复 | v0.11.1 | ✅ | ✅ | — |
-| Skill 运行时 | v0.12 | ✅ | ✅ | — |
-| Embedding 治理 | v0.12 | ✅ | ✅ | — |
-| OCR 反幻觉 | v0.12 | ❌ | ❌ | ❌ |
-| 多租户 | v0.13 | ✅ | ✅ quota+isolation | — |
-| AgentState Pydantic | v0.13 | ✅ 图边界 | ✅ model | ✅ `ci_mypy.sh` |
-| MCP 运维 | v0.12 | ✅ | ✅ | — |
+| 项 | 状态 | 说明 |
+|----|------|------|
+| `turn_event_log` | ✅ | `TurnEventLog` 结构化记录 decision / execution / quality 事件 |
+| `turn_facts` | ✅ | `fact_layer` 从事件账本与状态汇总本轮事实 |
+| 代码 artifact 校验事件 | ✅ | `code_artifact_pipeline.py` 写入 verify / repair 事件 |
+| reasoning 修复可观测性 | ✅ | audit + metrics：`reasoning_parser_*` |
+| route / contract / react 审计 | ✅ | `route_audit`、`turn_contract`、`react_audit` 均归档到事件账本 |
 
----
-
-## 九、未实现 backlog（建议下一迭代）
-
-按优先级：
-
-1. **`test_llm_circuit_breaker` 集成测试**（Batch 2）
-2. **OCR / 多模态反幻觉**（Batch 3.4，按需）
-3. **Patroni/pgpool 故障切换集成测试**（Batch 4.4）
-6. **真实 Postgres 多租户 schema CI job**（可选 service container）
-7. **Graph 压测脚本 + 背压 SLO 文档**
-8. **Edge LLM / GDPR / 异地 DR**（Batch 4.5，单独立项）
-
----
-
-## 十、SRDL（受控 ReAct / 自路由审议回路）
+### 5.5 SRDL（受控 ReAct / 自路由审议回路）
 
 | 项 | 状态 | 说明 |
 |----|------|------|
@@ -237,8 +210,8 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 | Single 子图 | ✅ | `react_deliberate` → `execute` → `observe` → `finalize` → `reasoning` |
 | 动作白名单 | ✅ | retrieve / memory / tool / reason / replan / finish |
 | 审计事件 | ✅ | `react_audit.py` + `turn_event_log` |
-| 制度升级建议 | ✅ | `route_recommendation`（系统裁决，非 mid-loop 切图） |
-| 配置 | ✅ | `config.yaml` → `react_loop.*`（**enabled: true**） |
+| 制度升级建议 | ✅ | `route_recommendation`（系统裁决，非 mid-loop 自由切图） |
+| 配置 | ✅ | `config.yaml` → `react_loop.*`（默认开启） |
 | Prometheus | ✅ | `agent_react_*` counters/histogram（`finalize_loop` 导出） |
 | 单测 / 集成 | ✅ | `test_react_entry.py`、`test_react_loop_runner.py`、`test_react_graph_flow.py` |
 
@@ -246,30 +219,69 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 
 ---
 
-## 十一、关键命令
+## 八、验收总表
+
+| 缺口项 | 计划版本 | 实现 | 测试 | CI 门禁 |
+|--------|----------|------|------|---------|
+| 语义上下文压缩 | v0.11 | ✅ | 🔶 | ❌ ratio hard gate |
+| RAG 精排+citation+faithfulness | v0.11 | ✅ | ✅ | ✅ rag suite |
+| Golden 20+ | v0.11 | ✅ 26 项 | ✅ | ✅ baseline 回归 |
+| 背压队列 | v0.11.1 | ✅ | ✅ | 🔶 压测报告未成文 |
+| Circuit breaker | v0.11.1 | ✅ | ✅ 单测 | 🔶 集成 E2E 可补 |
+| Checkpoint 恢复 | v0.11.1 | ✅ | ✅ | — |
+| Skill 运行时 | v0.12 | ✅ | ✅ | — |
+| Embedding 治理 | v0.12 | ✅ | ✅ | — |
+| OCR 反幻觉 | v0.12 | ❌ | ❌ | ❌ |
+| 多租户 | v0.13 | ✅ | ✅ quota+isolation | — |
+| AgentState Pydantic | v0.13 | ✅ 图边界 | ✅ model | ✅ `ci_mypy.sh` |
+| MCP 运维 | v0.12 | ✅ | ✅ http e2e | — |
+| Route audit / reasoning isolation | v0.12+ | ✅ | ✅ | — |
+| confirmation gates / execution grant | v0.12+ | ✅ | ✅ | — |
+| SRDL | v0.13- | ✅ | ✅ | — |
+
+---
+
+## 九、未实现 backlog（建议下一迭代）
+
+按优先级：
+
+1. **语义压缩 E2E + 压缩率门禁**
+2. **LLM circuit breaker 集成测试**
+3. **Graph 压测脚本 + 背压 SLO 文档**
+4. **OCR / 多模态反幻觉**
+5. **Patroni/pgpool 故障切换集成测试**
+6. **真实 Postgres 多租户 schema CI job**
+7. **Edge LLM / GDPR / 异地 DR**
+
+---
+
+## 十、关键命令
 
 ```bash
 # 开源冒烟
 bash scripts/demo_local.sh
 
 # Golden / Eval CI
-SUITE=unit      bash scripts/ci_eval.sh -q
+SUITE=unit        bash scripts/ci_eval.sh -q
 SUITE=integration bash scripts/ci_eval.sh -q
-SUITE=rag       bash scripts/ci_eval.sh -q
-SUITE=all       bash scripts/ci_eval.sh -q
+SUITE=rag         bash scripts/ci_eval.sh -q
+SUITE=all         bash scripts/ci_eval.sh -q
 
 # 租户存储（需 MULTI_TENANT_ENABLED=true）
 bash scripts/create_tenant_storage.sh create acme
 bash scripts/create_tenant_storage.sh drop acme
+
+# SRDL / 路由 / 事件账本相关测试
+pytest tests/services/test_react_entry.py tests/services/test_react_loop_runner.py tests/integration/test_react_graph_flow.py -q
 ```
 
 ---
 
-## 十二、修订记录
+## 十一、修订记录
 
 | 日期 | 说明 |
 |------|------|
-| 2026-06-01 | SRDL：受控 ReAct 子图、配置项与测试 |
+| 2026-06-01 | 对齐近期代码：SRDL、turn_event_log、agenda / DAG、confirmation gates、execution grant、route audit、reasoning isolation |
 | 2026-05-26 | 初版：对齐 Batch 0–4 仓库实现与测试覆盖 |
-| 2026-05-26 | 增补 §七 Mission 写作阶段、autonomous、步数预算与 steer |
+| 2026-05-26 | 增补 Mission 写作阶段、autonomous、步数预算与 steer |
 | 2026-05-26 | 增补 steer 双阶段确认、结构化 `confirm`、session turn 规划闸门与 state_store payload 持久化 |

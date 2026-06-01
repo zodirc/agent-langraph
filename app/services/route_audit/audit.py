@@ -104,6 +104,13 @@ def audit_planned_route(
             continue
         if planned_route != rule.planned_route:
             continue
+        if _should_allow_mixed_qa_writing(
+            primary=primary,
+            planned_route=planned_route,
+            inference=inference,
+            state=state,
+        ):
+            continue
         if rule.unless_kind and float(kind_scores.get(rule.unless_kind, 0)) >= cfg.min_kind_score:
             if kind_scores.get(rule.unless_kind, 0) >= kind_scores.get(primary, 0):
                 continue
@@ -150,3 +157,36 @@ def audit_planned_route(
         "artifact_profile": artifact_profile,
         "structural": inference.get("structural"),
     }
+
+
+def _should_allow_mixed_qa_writing(
+    *,
+    primary: str,
+    planned_route: str,
+    inference: dict[str, Any],
+    state: AgentState | dict[str, Any],
+) -> bool:
+    """
+    Allow QA turns with strong manuscript evidence to execute writing routes.
+
+    This preserves multi-scene conversations: a turn can still be broadly QA while
+    carrying a concrete "rewrite existing manuscript" sub-intent.
+    """
+    if primary != "qa":
+        return False
+    if planned_route != "writing_manuscript":
+        return False
+    structural = dict(inference.get("structural") or {})
+    payload = state.get("input_payload") or {}
+    intent = payload.get("writing_intent") or {}
+    has_manuscript_signal = bool(
+        structural.get("manuscript_body_exists") or structural.get("manuscript_default_body")
+    )
+    if not has_manuscript_signal:
+        return False
+    if bool(intent.get("enabled")):
+        return True
+    kind_scores = dict(inference.get("kind_scores") or {})
+    manuscript_score = float(kind_scores.get("manuscript", 0.0))
+    qa_score = float(kind_scores.get("qa", 0.0))
+    return manuscript_score >= max(0.25, qa_score * 0.4)
