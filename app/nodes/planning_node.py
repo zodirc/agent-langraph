@@ -40,6 +40,7 @@ from app.services.mission_service import init_mission_state, should_run_mission_
 from app.services.runtime_capabilities import build_runtime_capabilities
 from app.services.state_store import get_state_store
 from app.services.stream_progress import report_progress
+from app.services.tool_registry import get_tool_registry
 
 
 def _outline_status_for_planning(state: AgentState, payload: dict[str, Any]) -> dict[str, Any]:
@@ -152,6 +153,24 @@ def planning_node(state: AgentState) -> AgentState:
             return updated
 
         replan_feedback = payload.get("route_audit_replan_feedback")
+        plan_validation_feedback = payload.get("plan_validation_feedback")
+        goal_for_planning = str(
+            payload.get("goal") or payload.get("query") or payload.get("question") or ""
+        )
+        mission_block_early = payload.get("mission") or state.get("mission") or {}
+        from app.domain.packs.registry import resolve_mission_pack
+
+        planning_pack = resolve_mission_pack(
+            mission_kind=str(mission_block_early.get("kind") or ""),
+            task_type=str(state.get("task_type") or ""),
+            payload=payload,
+        )
+        runtime_caps = build_runtime_capabilities(
+            goal=goal_for_planning,
+            domain=str(planning_pack.name or ""),
+            risk_level=str(payload.get("risk_level") or "LOW"),
+            pack_tools=list(planning_pack.tools or []) or None,
+        )
         user_content = json.dumps(
             {
                 "task_type": state.get("task_type"),
@@ -168,9 +187,10 @@ def planning_node(state: AgentState) -> AgentState:
                 "risk_level": payload.get("risk_level", "LOW"),
                 "use_tools": payload.get("use_tools", True),
                 "needs_search": payload.get("needs_search", True),
-                "runtime_capabilities": build_runtime_capabilities(),
+                "runtime_capabilities": runtime_caps,
                 "existing_mission": payload.get("mission") or state.get("mission"),
                 "route_audit_replan_feedback": replan_feedback,
+                "plan_validation_feedback": plan_validation_feedback,
             },
             ensure_ascii=False,
         )
@@ -291,6 +311,18 @@ def planning_node(state: AgentState) -> AgentState:
             }
         raw_tools = [str(tool) for tool in result.get("selected_tools", [])]
         all_tools, dropped_tools = normalize_selected_tools(raw_tools)
+        from app.services.tool_selection import validate_tool_selection
+
+        user_role = str(payload.get("user_role") or "user")
+        valid_tools, selection_issues = validate_tool_selection(
+            all_tools,
+            tool_params,
+            get_tool_registry(),
+            user_role,
+        )
+        if selection_issues:
+            dropped_tools = list(dict.fromkeys(list(dropped_tools or []) + selection_issues))
+        all_tools = valid_tools
         exec_tools, writing_tools = split_execution_tools(all_tools)
 
         goal = str(payload.get("goal") or "")
@@ -440,6 +472,56 @@ def planning_node(state: AgentState) -> AgentState:
                 ),
             )
         )
+
+        from app.services.plan_validator import validate_plan
+        from app.services.turn_event_log import record_turn_event
+
+        validation = validate_plan(plan, exec_tools, payload, updated)
+        if validation.valid:
+            updated = record_turn_event(
+                updated,
+                "plan_generated",
+                "planning",
+                "planning",
+                {
+                    "steps": len(plan),
+                    "tools": exec_tools,
+                },
+            )
+        else:
+            updated = record_turn_event(
+                updated,
+                "plan_rejected",
+                "planning",
+                "planning",
+                {"issues": validation.issues, "suggestions": validation.suggestions},
+            )
+
+        max_revisions = 2
+        revisions = int(updated.get("planning_revision_count") or 0)
+        if validation.should_replan and revisions < max_revisions:
+            next_payload = dict(updated.get("input_payload") or {})
+            next_payload["plan_validation_feedback"] = {
+                "issues": validation.issues,
+                "suggestions": validation.suggestions,
+            }
+            next_payload.pop("route_audit", None)
+            return planning_node(
+                merge_state(
+                    updated,
+                    input_payload=next_payload,
+                    planning_revision_count=revisions + 1,
+                    plan=None,
+                    selected_tools=None,
+                    status=TaskStatus.NEW.value,
+                    audit_log=append_audit(
+                        updated,
+                        "planning",
+                        "plan_validation_replan",
+                        {"issues": validation.issues, "revision": revisions + 1},
+                    ),
+                )
+            )
         if should_run_mission_runtime(updated, payload) and not state.get("mission"):
             updated = init_mission_state(updated, payload)
             updated = merge_state(
@@ -452,6 +534,20 @@ def planning_node(state: AgentState) -> AgentState:
                     {"execution_mode": updated.get("execution_mode")},
                 ),
             )
+
+        from app.services.mission_orchestrator import orchestration_enabled, work_plan_from_mission
+
+        mission_for_agenda = updated.get("mission") or payload.get("mission") or {}
+        if orchestration_enabled(mission_for_agenda) and plan:
+            from app.services.task_agenda import agenda_summary, items_from_plan_steps, merge_agenda_into_work_plan
+
+            agenda_items = items_from_plan_steps(plan, tool_dag=payload.get("tool_dag"))
+            progress = dict(updated.get("progress") or {})
+            base_plan = progress.get("work_plan") or work_plan_from_mission(mission_for_agenda)
+            progress["work_plan"] = merge_agenda_into_work_plan(base_plan, agenda_items)
+            progress["agenda_summary"] = agenda_summary(progress["work_plan"])
+            updated = merge_state(updated, progress=progress)
+
         from app.services.route_audit.pipeline import run_route_audit_pipeline
 
         updated = run_route_audit_pipeline(updated)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from app.config.prompts import REFLECTION_SYSTEM
+from app.domain.decision import apply_verdict_to_reflection, build_reflection_verdict
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
 from app.services.llm_client import invoke_structured
 from app.services.state_store import get_state_store
@@ -22,6 +23,23 @@ def _turn_contract_issues(state: AgentState) -> list[str]:
     return validate_turn_contract_execution(state)
 
 
+def _event_log_issues(state: AgentState) -> list[str]:
+    from app.services.turn_event_log import get_turn_event_log
+
+    issues: list[str] = []
+    for event in get_turn_event_log(state).failure_events():
+        detail = event.detail or {}
+        if event.event_type == "plan_rejected":
+            for item in detail.get("issues") or []:
+                issues.append(f"plan_rejected: {item}")
+        elif event.event_type == "tool_blocked":
+            for item in detail.get("issues") or []:
+                issues.append(f"tool_blocked: {item}")
+        else:
+            issues.append(f"{event.event_type}: {event.subject}")
+    return issues[:5]
+
+
 def _rule_based_reflection(state: AgentState) -> dict[str, object]:
     """Critique when LLM is disabled — driven by fact_warnings and confidence."""
     reasoning = state.get("reasoning_result") or {}
@@ -31,6 +49,7 @@ def _rule_based_reflection(state: AgentState) -> dict[str, object]:
     issues: list[str] = []
     issues.extend(_route_audit_issues(state))
     issues.extend(_turn_contract_issues(state))
+    issues.extend(_event_log_issues(state))
     if warnings:
         issues.extend(str(w) for w in warnings[:5])
     if confidence < 0.6:
@@ -55,9 +74,12 @@ def reflection_node(state: AgentState) -> AgentState:
     reasoning = state.get("reasoning_result") or {}
     try:
         input_payload = state.get("input_payload") or {}
+        from app.services.turn_event_log import get_turn_event_log
+
         payload = {
             "reasoning_result": reasoning,
             "turn_facts": state.get("turn_facts"),
+            "decision_facts": get_turn_event_log(state).decision_facts(),
             "goal": input_payload.get("goal"),
             "route_audit": input_payload.get("route_audit"),
             "writing_intent": input_payload.get("writing_intent"),
@@ -91,18 +113,31 @@ def reflection_node(state: AgentState) -> AgentState:
                 "issues": list(dict.fromkeys(list(reflection.get("issues") or []) + replan_issues)),
             }
 
+        verdict = build_reflection_verdict(state, reflection)
+        reflection = apply_verdict_to_reflection(reflection, verdict)
+
+        merge_updates: dict[str, object] = {
+            "reflection_result": reflection,
+            "reflection_count": count,
+            "status": TaskStatus.REASONED.value,
+            "current_node": "reflection",
+        }
+        if reflection.get("ask_human"):
+            merge_updates["review_required"] = True
+
         updated = merge_state(
             state,
-            reflection_result=reflection,
-            reflection_count=count,
-            status=TaskStatus.REASONED.value,
-            current_node="reflection",
+            **merge_updates,
             audit_log=append_audit(
                 state,
                 "reflection",
                 "success",
                 {
                     "retry_reasoning": reflection.get("retry_reasoning"),
+                    "retry_planning": reflection.get("retry_planning"),
+                    "recommended_action": (reflection.get("verdict") or {}).get(
+                        "recommended_action"
+                    ),
                     "round": count,
                     "source": reflection.get("source"),
                 },

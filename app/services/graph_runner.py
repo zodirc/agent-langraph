@@ -374,6 +374,12 @@ class GraphRunner:
                 return run_graph(state, thread_id=thread)
             raise
 
+    def _finalize_turn(self, state: AgentState) -> AgentState:
+        from app.services.otel_export import finalize_trace_export
+
+        state = finalize_trace_export(state)
+        return finalize_turn_history(state)
+
     def start_task(
         self,
         *,
@@ -409,10 +415,13 @@ class GraphRunner:
                 mode = "single"
                 state = merge_state(state, execution_mode="single", mission=None)
         state = merge_state(state, execution_mode=mode)
+        thread = graph_thread_id(state)
+        from app.services.engineering_trace import init_trace_context
+
+        state = init_trace_context(state, thread_id=thread, tenant_id=get_tenant_id())
         get_state_store().save(state)
         if created:
             get_metrics_service().inc_task_created()
-        thread = graph_thread_id(state)
         exec_mode = (
             "supervisor"
             if mode == "supervisor" or task_type == "supervisor"
@@ -435,7 +444,7 @@ class GraphRunner:
             if quota_started:
                 get_tenant_quota_store().task_finished(tenant_id)
         final_state = _maybe_pause_for_review(final_state)
-        final_state = finalize_turn_history(final_state)
+        final_state = self._finalize_turn(final_state)
         get_state_store().save(final_state)
         get_audit_store().append_events(final_state["task_id"], final_state.get("audit_log", []))
         return final_state
@@ -486,6 +495,13 @@ class GraphRunner:
         elif mode == "exploration":
             state = merge_state(state, execution_mode="exploration")
             state = merge_state(state, execution_mode="exploration")
+        from app.services.engineering_trace import init_trace_context
+
+        state = init_trace_context(
+            state,
+            thread_id=graph_thread_id(state),
+            tenant_id=get_tenant_id(),
+        )
         get_state_store().save(state)
         yield from self._stream_single(state, created=created)
 
@@ -656,6 +672,15 @@ class GraphRunner:
                 latest = snapshot
                 if trace_enabled():
                     trace_after_node(node_name, latest)
+                from app.services.engineering_trace import record_node_span
+
+                span_status = (
+                    "error"
+                    if str(latest.get("status", "")).endswith("FAILED")
+                    or latest.get("status") == TaskStatus.DEAD_LETTER.value
+                    else "ok"
+                )
+                latest = record_node_span(latest, node_name, status=span_status)
                 if settings.STREAM_SAVE_EVERY_NODE:
                     get_state_store().save(latest)
                 if _should_emit_node_event(node_name, latest):
@@ -817,7 +842,7 @@ class GraphRunner:
                     "message": "Waiting for human review. Use POST /reviews to continue.",
                 },
             )
-        latest = finalize_turn_history(latest)
+        latest = self._finalize_turn(latest)
         latest = get_state_store().save(latest)
         get_audit_store().append_events(latest["task_id"], latest.get("audit_log", []))
         if latest.get("status") == TaskStatus.COMPLETED.value:
@@ -958,7 +983,7 @@ class GraphRunner:
         final_state = self._run_with_slot(
             lambda: self._invoke_graph_safe(resumed, thread=thread, mode="mission")
         )
-        final_state = finalize_turn_history(final_state)
+        final_state = self._finalize_turn(final_state)
         get_state_store().save(final_state)
         get_audit_store().append_events(task_id, final_state.get("audit_log", []))
         return final_state
@@ -990,7 +1015,7 @@ class GraphRunner:
             final_state = resume_supervisor_graph(resumed)
         else:
             final_state = resume_graph(resumed, thread_id=graph_thread_id(resumed))
-        final_state = finalize_turn_history(final_state)
+        final_state = self._finalize_turn(final_state)
         get_state_store().save(final_state)
         get_audit_store().append_events(task_id, final_state.get("audit_log", []))
         return final_state

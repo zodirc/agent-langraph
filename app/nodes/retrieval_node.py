@@ -25,6 +25,9 @@ def retrieval_node(state: AgentState) -> AgentState:
             knowledge: list[dict] = []
         else:
             knowledge = get_knowledge_store().hybrid_search(query)
+        from app.services.retrieval_content_sanitizer import sanitize_retrieved_batch
+
+        knowledge = sanitize_retrieved_batch(knowledge)
         memories = get_memory_store().search_for_context(
             query,
             user_id=state.get("user_id", "anonymous"),
@@ -34,6 +37,9 @@ def retrieval_node(state: AgentState) -> AgentState:
         from app.services.code_artifact_pipeline import filter_memory_hits
 
         memories = filter_memory_hits(state, memories)
+        from app.services.retrieval_content_sanitizer import sanitize_retrieved_batch
+
+        memories = sanitize_retrieved_batch(memories)
         from app.services.metrics_service import get_metrics_service
 
         get_metrics_service().inc_session_memory_retrieval(hit=bool(memories))
@@ -50,6 +56,15 @@ def retrieval_node(state: AgentState) -> AgentState:
                 "success",
                 {"knowledge_count": len(knowledge), "memory_count": len(memories)},
             ),
+        )
+        from app.services.turn_event_log import record_turn_event
+
+        updated = record_turn_event(
+            updated,
+            "artifact_retrieved",
+            "knowledge",
+            "retrieval",
+            {"knowledge_count": len(knowledge), "memory_count": len(memories), "sanitized": True},
         )
         report_retrieval_trace(updated)
         get_state_store().save(updated)

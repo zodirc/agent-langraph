@@ -61,6 +61,10 @@ class AgentState(TypedDict):
 
     memory_hits: Optional[list[dict[str, Any]]]
     turn_facts: Optional[dict[str, Any]]
+    turn_event_log: Optional[dict[str, Any]]
+    trace_context: Optional[dict[str, Any]]
+    engineering_spans: Optional[list[dict[str, Any]]]
+    trace_active_span: Optional[dict[str, Any]]
     manuscript: Optional[dict[str, Any]]
     audit_log: list[dict[str, Any]]
     errors: list[str]
@@ -126,6 +130,10 @@ def create_initial_state(
             "structured_output": None,
             "memory_hits": None,
             "turn_facts": None,
+            "turn_event_log": None,
+            "trace_context": None,
+            "engineering_spans": None,
+            "trace_active_span": None,
             "manuscript": None,
             "audit_log": [],
             "errors": [],

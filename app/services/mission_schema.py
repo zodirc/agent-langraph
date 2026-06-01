@@ -196,6 +196,17 @@ def build_mission_dict(
     return mission.to_dict()
 
 
+def resolve_step_intent_for_step(
+    state: AgentState,
+    *,
+    mission: dict[str, Any],
+) -> dict[str, Any]:
+    """Domain-agnostic step intent (alias for long_running_task runtime)."""
+    from app.services.long_running_task import resolve_step_intent
+
+    return resolve_step_intent(state, mission=mission)
+
+
 def resolve_writing_intent_for_step(
     state: AgentState,
     *,
@@ -230,102 +241,12 @@ def resolve_writing_intent_for_step(
             intent.setdefault("target_chars", policy.chars_per_step)
         return intent
 
-    action = (intervention or {}).get("action") if intervention else None
+    from app.domain.packs.registry import get_domain_pack
+    from app.services.action_resolver import select_action
 
-    ms = resolve_manuscript(state["task_id"], ms.to_dict())
-    stored_ms = state.get("manuscript") or {}
-    outline_bytes = max(int(ms.outline_bytes or 0), int(stored_ms.get("outline_bytes") or 0))
-    body_bytes = max(int(ms.body_bytes or 0), int(stored_ms.get("body_bytes") or 0))
-    outline_path = ms.outline_path or stored_ms.get("outline_path")
-    body_path = ms.body_path or stored_ms.get("body_path")
-    has_outline = bool(outline_path) and outline_bytes > 0
-    has_body = bool(body_path) and body_bytes >= int(
-        getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)
-    )
-
-    if action == "reset_body":
-        return {
-            "enabled": True,
-            "action": "reset_body",
-            "target_chars": policy.chars_per_step,
-            "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)),
-            "source": "mission_intervention",
-            "mission_step": step,
-            "chapter_index": 1,
-            "revision": ms.revision,
-            "require_read_first": True,
-        }
-
-    if action == "edit_plot":
-        spec = dict(payload.get("edit_plot_spec") or {})
-        return {
-            "enabled": False,
-            "action": "edit_plot",
-            "source": "mission_intervention",
-            "mission_step": step,
-            "edit_spec": spec,
-        }
-
-    if action == "rewrite_outline":
-        return {
-            "enabled": True,
-            "action": "write_outline",
-            "target_chars": policy.outline_max_chars,
-            "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_OUTLINE_CHARS", 80)),
-            "source": "mission_intervention",
-            "mission_step": step,
-            "revision": ms.revision,
-            "require_read_first": True,
-        }
-
-    if action == "review_outline":
-        return {
-            "enabled": False,
-            "action": "review_outline",
-            "source": "mission_intervention",
-            "mission_step": step,
-        }
-
-    if policy.first_step == "outline" and not has_outline:
-        return {
-            "enabled": True,
-            "action": "write_outline",
-            "target_chars": policy.outline_max_chars,
-            "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_OUTLINE_CHARS", 80)),
-            "source": "mission_step_policy",
-            "mission_step": step,
-        }
-
-    from app.services.manuscript_context import parse_last_chapter_index, read_body_text
-
-    last_ch = 0
-    if has_body and ms.body_path:
-        last_ch = parse_last_chapter_index(
-            read_body_text(state["task_id"], ms.body_path, state=state)
-        )
-
-    if not has_body:
-        min_body = int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200))
-        return {
-            "enabled": True,
-            "action": "write_body",
-            "target_chars": policy.chars_per_step,
-            "min_chars": min_body,
-            "source": "mission_step_policy",
-            "mission_step": step,
-            "chapter_index": 1,
-            "require_read_first": False,
-        }
-
-    return {
-        "enabled": True,
-        "action": policy.then if policy.then in ("append_body", "write_body") else "append_body",
-        "target_chars": policy.chars_per_step,
-        "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)),
-        "source": "mission_step_policy",
-        "mission_step": step,
-        "chapter_index": max(1, last_ch + 1),
-    }
+    pack = get_domain_pack(str(mission.get("kind") or "writing"))
+    selected = select_action(state, mission, pack)
+    return pack.map_action_to_intent(selected, state, mission)
 
 
 def apply_mission_step_to_payload(state: AgentState) -> dict[str, Any]:
@@ -349,6 +270,12 @@ def apply_mission_step_to_payload(state: AgentState) -> dict[str, Any]:
     intent = resolve_writing_intent_for_step(
         merge_state(state, input_payload=payload), mission=mission
     )
+    from app.domain.packs.registry import get_domain_pack
+
+    names = get_domain_pack("writing").resolve_artifact_names(
+        dict(mission.get("step_policy") or {}),
+        mission=mission,
+    )
     from app.services.mission.step_reconcile import reconcile_writing_intent
 
     intent = reconcile_writing_intent(
@@ -356,8 +283,8 @@ def apply_mission_step_to_payload(state: AgentState) -> dict[str, Any]:
         intent,
     )
     payload["writing_intent"] = intent
-    payload["novel_filename"] = policy.body_artifact
-    payload["outline_filename"] = policy.outline_artifact
+    payload["novel_filename"] = names.get("novel_filename") or policy.body_artifact
+    payload["outline_filename"] = names.get("outline_filename") or policy.outline_artifact
     payload["requested_total_chars"] = (mission.get("success_criteria") or {}).get("target")
     payload["chars_per_step"] = policy.chars_per_step
 

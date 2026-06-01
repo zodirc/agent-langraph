@@ -16,6 +16,22 @@ from app.config.settings import settings
 from app.services.metrics_service import get_metrics_service
 
 
+def _record_quality_event(
+    state: dict[str, Any] | None,
+    event_type: str,
+    status: str,
+    **detail: Any,
+) -> None:
+    """Append verify/repair quality event to state turn log (in-place)."""
+    if not isinstance(state, dict) or not state.get("task_id"):
+        return
+    from app.services.turn_event_log import get_turn_event_log
+
+    log = get_turn_event_log(state)
+    log.record(event_type, "code_artifact", "code_verify", {**detail, "status": status})
+    state["turn_event_log"] = log.to_dict()
+
+
 @dataclass(frozen=True)
 class CodeArtifactConfig:
     enabled: bool = True
@@ -345,9 +361,11 @@ def _run_compile_verify_loop(
             structured.pop("code_verify_failed", None)
             structured.pop("code_verify_degraded", None)
             get_metrics_service().inc_contract_event("code_verify_ok")
+            _record_quality_event(state, "verify_result", "ok", attempt=attempt)
             return structured
 
         get_metrics_service().inc_contract_event("code_verify_failed")
+        _record_quality_event(state, "verify_failed", "error", attempt=attempt, reports=all_reports)
         if vcfg.on_failure != "repair" or not cfg.repair_enabled:
             break
 
@@ -363,11 +381,13 @@ def _run_compile_verify_loop(
         if not repaired:
             structured["code_artifact_repair_failed"] = True
             get_metrics_service().inc_contract_event("code_repair_failed")
+            _record_quality_event(state, "repair_failed", "error", attempt=attempt)
             break
         structured = _replace_code_artifacts(structured, repaired)
         items = repaired
         structured["code_artifact_repaired"] = True
         get_metrics_service().inc_contract_event("code_repair_llm")
+        _record_quality_event(state, "repair_result", "ok", attempt=attempt)
 
     structured["code_verify_ok"] = False
     structured["code_verify_reports"] = all_reports

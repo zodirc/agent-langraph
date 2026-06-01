@@ -16,4 +16,5 @@ def test_reflection_node_rule_critique(base_state):
     result = reflection_node(state)
     assert result["reflection_count"] == 1
     assert result["reflection_result"]["retry_reasoning"] is True
+    assert result["reflection_result"]["verdict"]["recommended_action"] == "retry_same_step"
     assert result["status"] == TaskStatus.REASONED.value

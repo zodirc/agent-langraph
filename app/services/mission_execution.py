@@ -169,7 +169,8 @@ def reconcile_work_plan(state: AgentState) -> AgentState:
 
     - Mark pending/running items done when satisfied by artifact predicates
     - Drop duplicate pending items of the same kind when already satisfied
-    - Enqueue next lazy item when no pending work remains
+    - Propagate blocked dependents when an item is failed
+    - Enqueue next lazy item when no runnable work remains
     """
     from app.services.mission_orchestrator import (
         _has_pending_items,
@@ -178,12 +179,13 @@ def reconcile_work_plan(state: AgentState) -> AgentState:
         build_next_lazy_work_item,
         orchestration_enabled,
     )
+    from app.services.task_agenda import agenda_summary, ensure_agenda_fields, propagate_failure
 
     mission = state.get("mission") or {}
     if not orchestration_enabled(mission):
         return state
 
-    plan = dict(_plan(state))
+    plan = ensure_agenda_fields(dict(_plan(state)))
     items = list(plan.get("items") or [])
     if not items and plan.get("mode") != "lazy":
         return state
@@ -193,6 +195,11 @@ def reconcile_work_plan(state: AgentState) -> AgentState:
         kind = str(row.get("kind") or "")
         status = str(row.get("status") or "pending")
         if status in ("done", "cancelled", "superseded"):
+            continue
+        if status == "failed":
+            plan = propagate_failure(plan, str(row.get("id") or ""))
+            items = list(plan.get("items") or [])
+            changed = True
             continue
         if work_item_satisfied(kind, state=state, mission=mission):
             items[idx] = {
@@ -208,13 +215,9 @@ def reconcile_work_plan(state: AgentState) -> AgentState:
         kind = str(row.get("kind") or "")
         status = str(row.get("status") or "pending")
         if status == "pending" and kind in seen_pending_kinds:
-            if work_item_satisfied(kind, state=state, mission=mission):
-                row = {**row, "status": "superseded", "superseded_by": "duplicate_pending"}
-                changed = True
-            else:
-                row = {**row, "status": "superseded", "superseded_by": "duplicate_pending"}
-                changed = True
-                continue
+            row = {**row, "status": "superseded", "superseded_by": "duplicate_pending"}
+            changed = True
+            continue
         if status == "pending":
             seen_pending_kinds.add(kind)
         deduped.append(row)
@@ -224,14 +227,16 @@ def reconcile_work_plan(state: AgentState) -> AgentState:
     plan["total_items"] = len(items)
     progress = dict(state.get("progress") or {})
     progress["work_plan"] = plan
+    progress["agenda_summary"] = agenda_summary(plan)
     state = merge_state(state, progress=progress)
 
-    plan = dict(_plan(state))
+    plan = ensure_agenda_fields(dict(_plan(state)))
     if plan.get("mode") == "lazy" and not _has_pending_items(plan):
         item = build_next_lazy_work_item(state, mission)
         if item:
             progress = dict(state.get("progress") or {})
             progress["work_plan"] = append_work_items(plan, [item])
+            progress["agenda_summary"] = agenda_summary(progress["work_plan"])
             state = merge_state(state, progress=progress)
             changed = True
 

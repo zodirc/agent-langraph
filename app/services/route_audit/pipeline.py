@@ -26,6 +26,16 @@ def run_route_audit_pipeline(state: AgentState) -> AgentState:
     report_route_audit_trace(state)
     report_effective_plan_trace(state)
     state = normalize_reasoning_policy(state)
+    from app.services.turn_event_log import record_turn_event
+
+    aligned = bool((state.get("input_payload") or {}).get("route_audit", {}).get("aligned", True))
+    state = record_turn_event(
+        state,
+        "route_audited" if aligned else "route_misaligned",
+        "planning",
+        "route_audit",
+        {"aligned": aligned, "issues": (state.get("input_payload") or {}).get("route_audit", {}).get("issues")},
+    )
     if not audit.get("aligned"):
         post = audit_planned_route(state, cfg=cfg)
         post["prior_issues"] = audit.get("issues")

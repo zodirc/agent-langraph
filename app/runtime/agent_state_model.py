@@ -44,6 +44,10 @@ class AgentStateModel(BaseModel):
     structured_output: Optional[dict[str, Any]] = None
     memory_hits: Optional[list[dict[str, Any]]] = None
     turn_facts: Optional[dict[str, Any]] = None
+    turn_event_log: Optional[dict[str, Any]] = None
+    trace_context: Optional[dict[str, Any]] = None
+    engineering_spans: Optional[list[dict[str, Any]]] = None
+    trace_active_span: Optional[dict[str, Any]] = None
     manuscript: Optional[dict[str, Any]] = None
     audit_log: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)

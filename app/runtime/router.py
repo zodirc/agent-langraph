@@ -165,16 +165,21 @@ def route_after_reflection(state: AgentState) -> str:
     from app.services.route_audit.config import load_route_audit_config
 
     reflection = state.get("reflection_result") or {}
+    verdict = reflection.get("verdict") or {}
+    recommended = str(verdict.get("recommended_action") or "")
     max_rounds = int(getattr(settings, "REFLECTION_MAX_ROUNDS", 2))
     if int(state.get("reflection_count") or 0) >= max_rounds:
         return "policy"
 
-    if reflection.get("retry_planning"):
+    retry_planning = recommended == "replan" or bool(reflection.get("retry_planning"))
+    retry_reasoning = recommended == "retry_same_step" or bool(reflection.get("retry_reasoning"))
+
+    if retry_planning:
         cfg = load_route_audit_config()
         revisions = int(state.get("planning_revision_count") or 0)
         if revisions < cfg.max_planning_revisions:
             return "planning"
-    if reflection.get("retry_reasoning"):
+    if retry_reasoning:
         return "reasoning"
     return "policy"
 

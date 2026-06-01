@@ -634,6 +634,13 @@ def _record_llm_usage(
             tenant_id=tenant_id,
             user_id=user_id,
         )
+    if isinstance(trace_state, dict) and trace_state.get("task_id"):
+        from app.services.engineering_trace import init_trace_context, record_llm_span
+
+        base = init_trace_context(trace_state) if not trace_state.get("trace_context") else trace_state
+        updated = record_llm_span(base, purpose, status="ok", tokens_used=tokens)
+        trace_state["engineering_spans"] = updated.get("engineering_spans")
+        trace_state["trace_context"] = updated.get("trace_context")
 
 
 @with_retry()

@@ -49,6 +49,8 @@ def stepwise_pause(mission: dict[str, Any]) -> bool:
 
 def work_plan_from_mission(mission: dict[str, Any]) -> dict[str, Any]:
     """Empty lazy plan, or explicit plan from mission.work_plan."""
+    from app.services.task_agenda import ensure_agenda_fields
+
     explicit = mission.get("work_plan")
     if isinstance(explicit, dict) and isinstance(explicit.get("items"), list):
         items = [
@@ -59,27 +61,45 @@ def work_plan_from_mission(mission: dict[str, Any]) -> dict[str, Any]:
             for item in explicit["items"]
             if isinstance(item, dict)
         ]
-        return {
-            "version": int(explicit.get("version") or 1),
-            "mode": str(explicit.get("mode") or "explicit"),
-            "items": items,
-            "current_id": explicit.get("current_id"),
-            "completed_ids": list(explicit.get("completed_ids") or []),
-            "total_items": len(items),
+        return ensure_agenda_fields(
+            {
+                "version": int(explicit.get("version") or 1),
+                "mode": str(explicit.get("mode") or "explicit"),
+                "items": items,
+                "current_id": explicit.get("current_id"),
+                "completed_ids": list(explicit.get("completed_ids") or []),
+                "total_items": len(items),
+            }
+        )
+    return ensure_agenda_fields(
+        {
+            "version": 1,
+            "mode": "lazy",
+            "items": [],
+            "current_id": None,
+            "completed_ids": [],
+            "total_items": 0,
         }
-    return {
-        "version": 1,
-        "mode": "lazy",
-        "items": [],
-        "current_id": None,
-        "completed_ids": [],
-        "total_items": 0,
-    }
+    )
 
 
 def append_work_items(plan: dict[str, Any], new_items: list[dict[str, Any]]) -> dict[str, Any]:
+    from app.services.task_agenda import ensure_agenda_fields
+
+    plan = ensure_agenda_fields(plan)
     items = list(plan.get("items") or [])
-    items.extend(new_items)
+    last_id: Optional[str] = None
+    if items:
+        tail = items[-1]
+        if tail.get("id"):
+            last_id = str(tail["id"])
+    for item in new_items:
+        row = dict(item)
+        if not row.get("depends_on") and last_id:
+            row["depends_on"] = [last_id]
+        items.append(row)
+        if row.get("id"):
+            last_id = str(row["id"])
     return {
         **plan,
         "items": items,
@@ -88,54 +108,10 @@ def append_work_items(plan: dict[str, Any], new_items: list[dict[str, Any]]) -> 
 
 
 def build_next_lazy_work_item(state: AgentState, mission: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """Derive a single next item from step_policy + manuscript (mechanical, not NLP)."""
-    from app.services.mission_schema import resolve_writing_intent_for_step
+    """Derive a single next item from long_running_task runtime."""
+    from app.services.long_running_task import build_lazy_work_item
 
-    step = int(state.get("mission_step") or 1)
-    intent = resolve_writing_intent_for_step(state, mission=mission)
-    if not intent.get("enabled"):
-        action = str(intent.get("action") or "")
-        if action == "edit_plot":
-            return {
-                "id": f"wi-step-{step}",
-                "kind": "edit_plot",
-                "title": "edit_plot",
-                "status": "pending",
-                "params": {"edit_spec": intent.get("edit_spec") or {}},
-            }
-        if action == "human_gate":
-            return {
-                "id": f"wi-gate-{step}",
-                "kind": "human_gate",
-                "title": "human_gate",
-                "status": "pending",
-                "params": {},
-            }
-        return None
-
-    action = str(intent.get("action") or "append_body")
-    policy = StepPolicy.from_dict(mission.get("step_policy") or {})
-    if action == "write_outline":
-        kind = "write_outline"
-        title = "write_outline"
-    elif action == "write_body":
-        kind = "write_body"
-        title = "write_body"
-    else:
-        kind = "append_chapter"
-        title = f"append chapter {intent.get('chapter_index', '?')}"
-
-    return {
-        "id": f"wi-step-{step}",
-        "kind": kind,
-        "title": title,
-        "status": "pending",
-        "params": {
-            "target_chars": intent.get("target_chars") or policy.chars_per_step,
-            "chapter_index": intent.get("chapter_index"),
-            "require_read_first": intent.get("require_read_first"),
-        },
-    }
+    return build_lazy_work_item(state, mission)
 
 
 def ensure_work_plan(state: AgentState) -> AgentState:
@@ -178,23 +154,30 @@ def _plan(state: AgentState) -> dict[str, Any]:
 
 
 def _has_pending_items(plan: dict[str, Any]) -> bool:
-    return any(i.get("status") == "pending" for i in (plan.get("items") or []))
+    from app.services.task_agenda import ensure_agenda_fields, select_next_runnable_item
+
+    plan = ensure_agenda_fields(plan)
+    if select_next_runnable_item(plan):
+        return True
+    return any(
+        str(i.get("status") or "") in ("pending", "running", "blocked", "failed")
+        for i in (plan.get("items") or [])
+    )
 
 
 def get_current_work_item(state: AgentState) -> Optional[dict[str, Any]]:
-    plan = _plan(state)
+    from app.services.task_agenda import ensure_agenda_fields, select_next_runnable_item
+
+    plan = ensure_agenda_fields(_plan(state))
     items = plan.get("items") or []
     if not items:
         return None
     current_id = plan.get("current_id")
     if current_id:
         for item in items:
-            if item.get("id") == current_id and item.get("status") != "done":
+            if item.get("id") == current_id and str(item.get("status") or "") not in ("done",):
                 return item
-    for item in items:
-        if item.get("status") == "pending":
-            return item
-    return None
+    return select_next_runnable_item(plan)
 
 
 def activate_work_item(state: AgentState, item: dict[str, Any]) -> AgentState:
@@ -206,6 +189,29 @@ def activate_work_item(state: AgentState, item: dict[str, Any]) -> AgentState:
             break
     plan["items"] = items
     plan["current_id"] = item.get("id")
+    progress = dict(state.get("progress") or {})
+    progress["work_plan"] = plan
+    return merge_state(state, progress=progress)
+
+
+def mark_current_work_item_failed(
+    state: AgentState,
+    *,
+    reason: str = "step_failed",
+) -> AgentState:
+    """Mark running/current item failed and propagate blocked dependents."""
+    from app.services.task_agenda import ensure_agenda_fields, propagate_failure, set_item_status
+
+    plan = ensure_agenda_fields(_plan(state))
+    current_id = plan.get("current_id")
+    if not current_id:
+        item = get_current_work_item(state)
+        current_id = item.get("id") if item else None
+    if not current_id:
+        return state
+    plan = set_item_status(plan, str(current_id), "failed", reason=reason)
+    plan = propagate_failure(plan, str(current_id))
+    plan["current_id"] = None
     progress = dict(state.get("progress") or {})
     progress["work_plan"] = plan
     return merge_state(state, progress=progress)
@@ -262,104 +268,10 @@ def work_item_to_writing_intent(
     mission: dict[str, Any],
     mission_step: int,
 ) -> dict[str, Any]:
-    kind = str(item.get("kind") or "")
-    params = dict(item.get("params") or {})
-    policy = StepPolicy.from_dict(mission.get("step_policy") or {})
-    base = {
-        "enabled": True,
-        "source": "work_plan",
-        "mission_step": mission_step,
-        "work_item_id": item.get("id"),
-        "work_item_title": item.get("title"),
-    }
+    from app.domain.packs.registry import resolve_mission_pack
 
-    if kind == "write_outline":
-        return {
-            **base,
-            "action": "write_outline",
-            "target_chars": int(params.get("target_chars") or policy.outline_max_chars),
-            "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_OUTLINE_CHARS", 80)),
-            "require_read_first": bool(params.get("require_read_first")),
-        }
-    if kind in ("append_chapter", "append_body"):
-        return {
-            **base,
-            "action": "append_body",
-            "target_chars": int(params.get("target_chars") or policy.chars_per_step),
-            "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)),
-            "chapter_index": int(params.get("chapter_index") or 1),
-        }
-    if kind == "write_body":
-        return {
-            **base,
-            "action": "write_body",
-            "target_chars": int(params.get("target_chars") or policy.chars_per_step),
-            "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)),
-            "chapter_index": int(params.get("chapter_index") or 1),
-        }
-    if kind == "bridge_chapter":
-        return {
-            **base,
-            "action": "append_body",
-            "target_chars": int(
-                params.get("target_chars")
-                or getattr(settings, "WRITING_BRIDGE_DEFAULT_CHARS", 600)
-            ),
-            "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)),
-            "chapter_index": int(params.get("chapter_index") or 1),
-            "bridge_spec": dict(params.get("bridge_spec") or {}),
-            "phase_notes": str(params.get("phase_notes") or "bridge_chapter"),
-        }
-    if kind == "patch_recent_chapter":
-        return {
-            **base,
-            "action": "append_body",
-            "target_chars": int(params.get("target_chars") or policy.chars_per_step),
-            "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)),
-            "chapter_index": int(params.get("chapter_index") or 1),
-            "patch_instructions": list(params.get("patch_instructions") or []),
-            "phase_notes": str(params.get("phase_notes") or "patch_recent_chapter"),
-        }
-    if kind == "reconcile_outline_body":
-        return {
-            **base,
-            "action": "consistency_check",
-            "chapter_index": int(params.get("chapter_index") or 1),
-            "phase_notes": str(params.get("phase_notes") or "reconcile_outline_body"),
-        }
-    if kind == "reset_body":
-        return {
-            **base,
-            "action": "reset_body",
-            "target_chars": int(params.get("target_chars") or policy.chars_per_step),
-            "min_chars": int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200)),
-            "chapter_index": 1,
-            "require_read_first": bool(params.get("require_read_first", True)),
-        }
-    if kind == "edit_plot":
-        return {
-            **base,
-            "enabled": False,
-            "action": "edit_plot",
-            "edit_spec": params.get("edit_spec") or {},
-        }
-    if kind == "run_tools":
-        return {**base, "enabled": False, "action": "run_tools"}
-    if kind == "human_gate":
-        return {**base, "enabled": False, "action": "human_gate"}
-    if kind in (
-        "consistency_check",
-        "review_chapter",
-        "polish_chapter",
-        "chapter_summary",
-        "arc_checkpoint",
-    ):
-        return {
-            **base,
-            "action": kind,
-            "chapter_index": int(params.get("chapter_index") or 1),
-        }
-    return {**base, "enabled": False, "action": kind}
+    pack = resolve_mission_pack(mission_kind=str(mission.get("kind") or "writing"))
+    return pack.work_item_to_intent(item, mission=mission, mission_step=mission_step)
 
 
 def _apply_tools_for_edit_plot(payload: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:

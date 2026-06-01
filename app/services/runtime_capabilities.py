@@ -11,21 +11,52 @@ from app.config.settings import settings
 from app.services.tool_registry import get_tool_registry
 
 
-def build_runtime_capabilities() -> dict[str, Any]:
+def build_runtime_capabilities(
+    *,
+    goal: str = "",
+    domain: str = "",
+    risk_level: str = "LOW",
+    tool_top_k: Optional[int] = None,
+    pack_tools: Optional[list[str]] = None,
+) -> dict[str, Any]:
     """Describe what the agent can do this run (tools, paths, limits)."""
     registry = get_tool_registry()
-    tools: list[dict[str, str]] = []
-    for name in registry.list_tools():
-        spec = registry.get(name)
-        if spec is None:
-            continue
-        tools.append(
-            {
-                "name": name,
-                "description": str(spec.description or "")[:240],
-                "risk_level": str(spec.risk_level or "LOW"),
-            }
+    top_k = tool_top_k if tool_top_k is not None else int(
+        getattr(settings, "PLANNING_TOOL_TOP_K", 10)
+    )
+
+    if goal or domain or pack_tools:
+        from app.services.tool_selection import format_tools_for_prompt, retrieve_relevant_tools
+
+        relevant = retrieve_relevant_tools(
+            goal,
+            domain,
+            risk_level,
+            registry,
+            top_k=top_k,
+            pack_tools=pack_tools,
         )
+        tools = format_tools_for_prompt(relevant)
+        tool_selection_meta = {
+            "mode": "retrieval_top_k",
+            "top_k": top_k,
+            "total_available": len(registry.list_tools()),
+            "shown": len(tools),
+        }
+    else:
+        tools = []
+        for name in registry.list_tools():
+            spec = registry.get(name)
+            if spec is None:
+                continue
+            tools.append(
+                {
+                    "name": name,
+                    "description": str(spec.description or "")[:240],
+                    "risk_level": str(spec.risk_level or "LOW"),
+                }
+            )
+        tool_selection_meta = {"mode": "full_registry", "shown": len(tools)}
 
     return {
         "execution_paths": [
@@ -80,6 +111,7 @@ def build_runtime_capabilities() -> dict[str, Any]:
             "action": "Compare inferred task_kind vs planned_route; may block writing and force reasoning.",
         },
         "registered_tools": tools,
+        "tool_selection": tool_selection_meta,
         "limits": {
             "artifact_chunk_chars": int(getattr(settings, "ARTIFACT_CHUNK_CHARS", 0)),
             "max_chars_per_turn": int(getattr(settings, "ARTIFACT_MAX_CHARS_PER_TURN", 0)),

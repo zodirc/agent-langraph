@@ -12,7 +12,9 @@ from app.services.metrics_service import get_metrics_service
 from app.services.reasoning_trace import report_boundary, report_status_trace
 from app.services.state_store import get_state_store
 from app.services.tool_dag import execute_tool_stages, parse_tool_stages
+from app.services.tool_intent_guard import check_tool_params_safe
 from app.services.tool_registry import get_tool_registry
+from app.services.turn_event_log import record_turn_event
 
 
 def tool_execution_node(state: AgentState) -> AgentState:
@@ -31,16 +33,55 @@ def tool_execution_node(state: AgentState) -> AgentState:
         ]
         payload = dict(state.get("input_payload") or {})
         user_role = str(payload.get("user_role", "user"))
+        goal = str(payload.get("goal") or payload.get("query") or "")
         stages = parse_tool_stages(payload, tools)
 
         report_boundary("tool_execution", "enter", f"{len(tools)} 工具 / {len(stages)} 阶段")
 
+        blocked_results: list[dict[str, Any]] = []
+        pending_events: list[tuple[str, str, dict[str, Any]]] = []
+
         def _invoke(tool_name: str, st: AgentState) -> dict[str, Any]:
             report_status_trace("tool_execution", f"调用工具: {tool_name}")
             params = _build_tool_params(tool_name, st)
-            return registry.invoke(tool_name, params, user_role=user_role)
+            spec = registry.get(tool_name)
+            safe, issues = check_tool_params_safe(
+                tool_name,
+                params,
+                spec,
+                goal,
+                user_role=user_role,
+            )
+            if not safe:
+                pending_events.append(
+                    (
+                        "tool_blocked",
+                        tool_name,
+                        {"issues": issues, "params_keys": list(params.keys())},
+                    )
+                )
+                blocked_results.append(
+                    {
+                        "tool": tool_name,
+                        "status": "skipped",
+                        "error": "; ".join(issues),
+                        "result": {"status": "blocked", "issues": issues},
+                    }
+                )
+                return blocked_results[-1]["result"]
+            result = registry.invoke(tool_name, params, user_role=user_role)
+            pending_events.append(
+                (
+                    "tool_invoked",
+                    tool_name,
+                    {"status": "ok", "risk_level": spec.risk_level},
+                )
+            )
+            return result
 
         results = execute_tool_stages(state, stages, invoke_fn=_invoke)
+        if blocked_results:
+            results = list(results or []) + blocked_results
 
         failures = [
             r for r in results
@@ -62,9 +103,31 @@ def tool_execution_node(state: AgentState) -> AgentState:
                     "tools_run": len(results),
                     "tool_names": tools,
                     "stages": len(stages),
+                    "blocked": len(blocked_results),
                 },
             ),
         )
+        for event_type, subject, detail in pending_events:
+            updated = record_turn_event(
+                updated,
+                event_type,
+                subject,
+                "tool_execution",
+                detail,
+            )
+            if event_type == "tool_invoked":
+                from app.services.engineering_trace import record_tool_span
+
+                updated = record_tool_span(updated, subject, status="ok")
+            elif event_type == "tool_blocked":
+                from app.services.engineering_trace import record_tool_span
+
+                updated = record_tool_span(
+                    updated,
+                    subject,
+                    status="error",
+                    error="; ".join(detail.get("issues") or []),
+                )
         updated = attach_turn_facts(updated)
         get_state_store().save(updated)
         return updated

@@ -33,6 +33,7 @@ from app.services.manuscript_service import (
 )
 from app.services.manuscript_service import manuscript_has_body
 from app.services.fact_layer import attach_turn_facts
+from app.services.turn_event_log import record_turn_event
 from app.services.reasoning_trace import report_block, report_status_trace
 from app.services.state_store import get_state_store
 from app.services.stream_progress import report_progress
@@ -507,6 +508,18 @@ def writing_node(state: AgentState) -> AgentState:
             ),
         )
         updated = attach_turn_facts(updated)
+        artifact_path = ms.body_path or ms.outline_path or action
+        updated = record_turn_event(
+            updated,
+            "artifact_written",
+            str(artifact_path or action),
+            "writing",
+            {
+                "action": action,
+                "body_bytes": ms.body_bytes,
+                "outline_bytes": ms.outline_bytes,
+            },
+        )
         get_state_store().save(updated)
         return updated
     except Exception as exc:

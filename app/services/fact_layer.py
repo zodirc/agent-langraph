@@ -45,6 +45,24 @@ def _tool_outcome_line(item: dict[str, Any]) -> dict[str, Any]:
 
 def build_turn_facts(state: AgentState) -> dict[str, Any]:
     """Compile executed nodes, tools, writing, and manuscript into read-only facts."""
+    from app.services.turn_event_log import get_turn_event_log
+
+    event_log = get_turn_event_log(state)
+    if event_log.events:
+        base = _build_turn_facts_snapshot(state)
+        return {
+            **base,
+            "events": event_log.events_as_dicts(),
+            "execution_facts": event_log.execution_facts(),
+            "decision_facts": event_log.decision_facts(),
+            "quality_facts": event_log.quality_facts(),
+            "event_count": len(event_log.events),
+            "has_failures": bool(event_log.failure_events()) or bool(base.get("has_failures")),
+        }
+    return _build_turn_facts_snapshot(state)
+
+
+def _build_turn_facts_snapshot(state: AgentState) -> dict[str, Any]:
     payload = state.get("input_payload") or {}
     tool_lines = [_tool_outcome_line(item) for item in (state.get("tool_results") or [])]
     writing_intent = payload.get("writing_intent") or {}
@@ -90,7 +108,16 @@ def build_turn_facts(state: AgentState) -> dict[str, Any]:
             for line in tool_lines
         ),
         "built_at": datetime.now(timezone.utc).isoformat(),
+        "engineering_trace": _engineering_trace_digest(state),
     }
+
+
+def _engineering_trace_digest(state: AgentState) -> Optional[dict[str, Any]]:
+    if not state.get("trace_context") and not state.get("engineering_spans"):
+        return None
+    from app.services.engineering_trace import trace_summary
+
+    return trace_summary(state)
 
 
 def attach_turn_facts(state: AgentState) -> AgentState:
