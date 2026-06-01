@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent Runtime CLI</title>
-  <link rel="stylesheet" href="/static/terminal.css?v=flow-debug-11" />
+  <link rel="stylesheet" href="/static/terminal.css?v=state-debug-2" />
 </head>
 <body>
   <div class="terminal">
@@ -28,6 +28,7 @@
         <div class="flow-head">
           <h3 class="flow-title">Flow Debug</h3>
           <div class="flow-actions">
+            <button id="state-debug-btn" type="button" class="flow-btn" title="查看当前会话 AgentState">State</button>
             <button id="flow-open-btn" type="button" class="flow-btn">新窗口</button>
             <button id="flow-refresh-btn" type="button" class="flow-btn">刷新</button>
           </div>
@@ -53,6 +54,35 @@
       <button id="stop-btn" type="button" class="stop-btn" disabled>Stop</button>
     </form>
   </div>
-  <script src="/static/app.js?v=flow-debug-13"></script>
+  <dialog id="state-debug-modal" class="state-debug-modal">
+    <div class="state-debug-shell">
+      <header class="state-debug-head">
+        <div>
+          <h3 class="state-debug-title">AgentState 调试</h3>
+          <p class="state-debug-meta" id="state-debug-meta">加载中…</p>
+        </div>
+        <div class="state-debug-source-tabs" id="state-debug-source-tabs" role="tablist">
+          <button type="button" class="state-debug-source-btn selected" data-source="merged">合并</button>
+          <button type="button" class="state-debug-source-btn" data-source="live">Live</button>
+          <button type="button" class="state-debug-source-btn" data-source="store">快照</button>
+        </div>
+        <div class="state-debug-actions">
+          <label class="state-debug-toggle">
+            <input type="checkbox" id="state-debug-live" checked />
+            自动刷新
+          </label>
+          <button type="button" id="state-debug-refresh-btn" class="flow-btn">刷新</button>
+          <button type="button" id="state-debug-close-btn" class="flow-btn">关闭</button>
+        </div>
+      </header>
+      <div class="state-debug-body">
+        <aside class="state-debug-keys" id="state-debug-keys">
+          <p class="flow-empty">等待数据…</p>
+        </aside>
+        <pre class="state-debug-json" id="state-debug-json">{}</pre>
+      </div>
+    </div>
+  </dialog>
+  <script src="/static/app.js?v=state-debug-2"></script>
 </body>
 </html>

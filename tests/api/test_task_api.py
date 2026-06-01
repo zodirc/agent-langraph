@@ -51,6 +51,46 @@ def test_create_and_query_task(isolated_stores, monkeypatch):
     assert result_resp.json()["final_answer"] == "ok"
 
 
+def test_get_task_state_debug(isolated_stores, monkeypatch):
+    from app.api import task_api
+    from app.runtime.state import create_initial_state, merge_state
+
+    store = isolated_stores
+    state = merge_state(
+        create_initial_state(
+            session_id="sess-1",
+            input_payload={"goal": "debug me"},
+        ),
+        status=TaskStatus.PLANNED.value,
+        current_node="planning",
+        plan=["retrieval", "reasoning"],
+    )
+    store.save(state)
+    monkeypatch.setattr(task_api, "get_state_store", lambda: store)
+
+    client = TestClient(app)
+    resp = client.get(f"/tasks/{state['task_id']}/state")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["task_id"] == state["task_id"]
+    assert body["session_id"] == state["session_id"]
+    assert body["state"]["plan"] == ["retrieval", "reasoning"]
+    assert "field_summary" in body
+    assert "plan" in body["field_summary"]
+    assert body["store_available"] is True
+    assert body["sources"]["store"] is not None
+    assert body["live_available"] is False
+
+
+def test_get_task_state_debug_not_found(isolated_stores, monkeypatch):
+    from app.api import task_api
+
+    monkeypatch.setattr(task_api, "get_state_store", lambda: isolated_stores)
+    client = TestClient(app)
+    resp = client.get("/tasks/missing-task/state")
+    assert resp.status_code == 404
+
+
 def test_create_task_invalid_payload_returns_error(isolated_stores, monkeypatch):
     from app.services import graph_runner
 

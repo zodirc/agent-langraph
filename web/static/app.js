@@ -13,6 +13,15 @@ const flowGraphEl = document.getElementById("flow-graph");
 const flowTimelineEl = document.getElementById("flow-timeline");
 const flowRefreshBtnEl = document.getElementById("flow-refresh-btn");
 const flowOpenBtnEl = document.getElementById("flow-open-btn");
+const stateDebugBtnEl = document.getElementById("state-debug-btn");
+const stateDebugModalEl = document.getElementById("state-debug-modal");
+const stateDebugMetaEl = document.getElementById("state-debug-meta");
+const stateDebugKeysEl = document.getElementById("state-debug-keys");
+const stateDebugJsonEl = document.getElementById("state-debug-json");
+const stateDebugRefreshBtnEl = document.getElementById("state-debug-refresh-btn");
+const stateDebugCloseBtnEl = document.getElementById("state-debug-close-btn");
+const stateDebugLiveEl = document.getElementById("state-debug-live");
+const stateDebugSourceTabsEl = document.getElementById("state-debug-source-tabs");
 const themeSelectEl = document.getElementById("theme-select");
 
 let running = false;
@@ -55,6 +64,11 @@ let writingTraceHintShown = false;
 let thinkingPendingText = "";
 let thinkingFlushScheduled = false;
 let flowAutoRefreshTimer = null;
+let stateDebugAutoRefreshTimer = null;
+/** @type {null | Record<string, unknown>} */
+let stateDebugCache = null;
+let stateDebugSelectedKey = "__all__";
+let stateDebugSelectedSource = "merged";
 const flowLiveHistoryByTask = new Map();
 let flowSelectedNode = "";
 let flowPopupWin = null;
@@ -390,6 +404,176 @@ function stopFlowAutoRefresh() {
   if (!flowAutoRefreshTimer) return;
   clearInterval(flowAutoRefreshTimer);
   flowAutoRefreshTimer = null;
+}
+
+function resolveStateDebugTaskId() {
+  return activeTaskId || getSessionId();
+}
+
+function getStateDebugActiveView() {
+  if (!stateDebugCache) return null;
+  const sources = stateDebugCache.sources || {};
+  const picked = sources[stateDebugSelectedSource];
+  if (picked && picked.state) return picked;
+  return stateDebugCache;
+}
+
+function renderStateDebugSourceTabs() {
+  if (!stateDebugSourceTabsEl || !stateDebugCache) return;
+  const liveOn = Boolean(stateDebugCache.live_running);
+  const liveAvail = Boolean(stateDebugCache.live_available);
+  for (const btn of stateDebugSourceTabsEl.querySelectorAll("[data-source]")) {
+    const src = String(btn.getAttribute("data-source") || "merged");
+    btn.classList.toggle("selected", src === stateDebugSelectedSource);
+    btn.classList.toggle("live-on", src === "live" && liveOn);
+    if (src === "live") {
+      btn.disabled = !liveAvail;
+      btn.title = liveOn ? "任务正在本进程执行中" : liveAvail ? "最近一次 live 缓存" : "当前无 live 数据";
+    } else if (src === "store") {
+      btn.disabled = !stateDebugCache.store_available;
+    } else {
+      btn.disabled = false;
+    }
+  }
+}
+
+function renderStateDebugJson() {
+  if (!stateDebugJsonEl || !stateDebugCache) return;
+  const active = getStateDebugActiveView();
+  const stateObj = active?.state || stateDebugCache.state || {};
+  const payload =
+    stateDebugSelectedKey === "__all__" ? stateObj : stateObj?.[stateDebugSelectedKey];
+  try {
+    stateDebugJsonEl.textContent = JSON.stringify(payload ?? null, null, 2);
+  } catch {
+    stateDebugJsonEl.textContent = String(payload);
+  }
+}
+
+function renderStateDebugKeys() {
+  if (!stateDebugKeysEl || !stateDebugCache) return;
+  const active = getStateDebugActiveView();
+  const summary = active?.field_summary || stateDebugCache.field_summary || {};
+  const keys = Object.keys(summary).sort((a, b) => a.localeCompare(b));
+  const allSelected = stateDebugSelectedKey === "__all__" ? " selected" : "";
+  const buttons = [
+    `<button type="button" class="state-debug-key-btn${allSelected}" data-state-key="__all__">
+      <span class="key-label">__all__</span>
+      <span class="key-meta">完整 state 对象</span>
+    </button>`,
+    ...keys.map((key) => {
+      const selected = key === stateDebugSelectedKey ? " selected" : "";
+      const meta = escapeHtml(String(summary[key] || ""));
+      return `<button type="button" class="state-debug-key-btn${selected}" data-state-key="${escapeHtml(key)}">
+        <span class="key-label">${escapeHtml(key)}</span>
+        <span class="key-meta">${meta}</span>
+      </button>`;
+    }),
+  ];
+  stateDebugKeysEl.innerHTML = buttons.join("");
+  for (const btn of stateDebugKeysEl.querySelectorAll("[data-state-key]")) {
+    btn.addEventListener("click", () => {
+      stateDebugSelectedKey = String(btn.getAttribute("data-state-key") || "__all__");
+      for (const el of stateDebugKeysEl.querySelectorAll(".state-debug-key-btn")) {
+        el.classList.toggle("selected", el === btn);
+      }
+      renderStateDebugJson();
+    });
+  }
+}
+
+function updateStateDebugMeta(view) {
+  if (!stateDebugMetaEl) return;
+  const active = getStateDebugActiveView() || view;
+  const taskId = view?.task_id || resolveStateDebugTaskId();
+  const sessionId = view?.session_id || taskId;
+  const truncated = active?.truncated ? ` | 已裁剪: ${(active.truncated_fields || []).join(", ")}` : "";
+  const sourceLabel =
+    stateDebugSelectedSource === "live"
+      ? "Live"
+      : stateDebugSelectedSource === "store"
+        ? "快照"
+        : "合并";
+  const liveTag = view?.live_running
+    ? " | 🟢 live 运行中"
+    : view?.live_available
+      ? " | live 可用"
+      : "";
+  stateDebugMetaEl.textContent =
+    `[${sourceLabel}] task ${taskId} | session ${sessionId} | status ${active?.status || "-"} | node ${active?.current_node || "-"} | mode ${active?.execution_mode || "-"} | 拉取 ${active?.fetched_at || "-"}${liveTag}${truncated}`;
+}
+
+async function refreshStateDebugView() {
+  const taskId = resolveStateDebugTaskId();
+  if (!taskId || !stateDebugJsonEl) return false;
+  try {
+    const res = await fetch(`/tasks/${taskId}/state?truncate=true`, { headers: getAuthHeaders() });
+    if (res.status === 404) {
+      stateDebugCache = null;
+      if (stateDebugMetaEl) {
+        stateDebugMetaEl.textContent = `尚无任务数据 (task/session: ${taskId.slice(0, 12)}…)。请先发送一条消息。`;
+      }
+      stateDebugJsonEl.textContent = "{}";
+      if (stateDebugKeysEl) {
+        stateDebugKeysEl.innerHTML = '<p class="flow-empty">无状态</p>';
+      }
+      return false;
+    }
+    if (!res.ok) return false;
+    const view = await res.json();
+    stateDebugCache = view;
+    if (stateDebugSelectedSource === "live" && !view.live_available) {
+      stateDebugSelectedSource = view.store_available ? "store" : "merged";
+    }
+    if (stateDebugSelectedSource === "store" && !view.store_available && view.live_available) {
+      stateDebugSelectedSource = "live";
+    }
+    updateStateDebugMeta(view);
+    renderStateDebugSourceTabs();
+    renderStateDebugKeys();
+    renderStateDebugJson();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ensureStateDebugAutoRefresh() {
+  if (stateDebugAutoRefreshTimer) return;
+  stateDebugAutoRefreshTimer = setInterval(() => {
+    if (!stateDebugModalEl?.open) return;
+    if (stateDebugLiveEl && !stateDebugLiveEl.checked) return;
+    refreshStateDebugView();
+  }, 2000);
+}
+
+function stopStateDebugAutoRefresh() {
+  if (!stateDebugAutoRefreshTimer) return;
+  clearInterval(stateDebugAutoRefreshTimer);
+  stateDebugAutoRefreshTimer = null;
+}
+
+async function openStateDebugModal() {
+  if (!stateDebugModalEl) return;
+  stateDebugSelectedKey = "__all__";
+  stateDebugSelectedSource = running ? "merged" : "store";
+  if (typeof stateDebugModalEl.showModal === "function") {
+    stateDebugModalEl.showModal();
+  } else {
+    stateDebugModalEl.setAttribute("open", "");
+  }
+  ensureStateDebugAutoRefresh();
+  await refreshStateDebugView();
+}
+
+function closeStateDebugModal() {
+  if (!stateDebugModalEl) return;
+  if (typeof stateDebugModalEl.close === "function") {
+    stateDebugModalEl.close();
+  } else {
+    stateDebugModalEl.removeAttribute("open");
+  }
+  stopStateDebugAutoRefresh();
 }
 
 function updateStopButtonState() {
@@ -1905,6 +2089,46 @@ if (stopBtnEl) {
 if (flowRefreshBtnEl) {
   flowRefreshBtnEl.addEventListener("click", async () => {
     await refreshFlowPanel();
+  });
+}
+
+if (stateDebugSourceTabsEl) {
+  stateDebugSourceTabsEl.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-source]");
+    if (!btn || btn.disabled) return;
+    stateDebugSelectedSource = String(btn.getAttribute("data-source") || "merged");
+    renderStateDebugSourceTabs();
+    updateStateDebugMeta(stateDebugCache);
+    renderStateDebugKeys();
+    renderStateDebugJson();
+  });
+}
+
+if (stateDebugBtnEl) {
+  stateDebugBtnEl.addEventListener("click", async () => {
+    await openStateDebugModal();
+  });
+}
+
+if (stateDebugRefreshBtnEl) {
+  stateDebugRefreshBtnEl.addEventListener("click", async () => {
+    await refreshStateDebugView();
+  });
+}
+
+if (stateDebugCloseBtnEl) {
+  stateDebugCloseBtnEl.addEventListener("click", () => {
+    closeStateDebugModal();
+  });
+}
+
+if (stateDebugModalEl) {
+  stateDebugModalEl.addEventListener("close", () => {
+    stopStateDebugAutoRefresh();
+  });
+  stateDebugModalEl.addEventListener("cancel", (ev) => {
+    ev.preventDefault();
+    closeStateDebugModal();
   });
 }
 

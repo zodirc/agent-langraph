@@ -27,6 +27,8 @@ _WRITE_ACTIONS = frozenset(
 
 def contract_from_payload(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
     block = payload.get("turn_contract")
+    if block is None:
+        return None
     if isinstance(block, dict) and block.get("primary_op"):
         return dict(block)
     return None
@@ -49,7 +51,14 @@ def contract_blocks_writing(payload: dict[str, Any]) -> bool:
 
 
 def contract_tool_names(payload: dict[str, Any]) -> list[str]:
-    contract = contract_from_payload(payload) or {}
+    contract = contract_from_payload(payload)
+    if contract is None:
+        return [
+            str(t)
+            for t in (payload.get("selected_tools") or [])
+            if str(t) not in WRITING_TOOL_NAMES
+        ]
+
     tools = list(contract.get("tools") or [])
     if tools:
         return [str(t) for t in tools if str(t) not in WRITING_TOOL_NAMES]
@@ -60,10 +69,6 @@ def contract_tool_names(payload: dict[str, Any]) -> list[str]:
         tool = str(op.get("tool") or "").strip()
         if tool and tool not in WRITING_TOOL_NAMES and tool not in out:
             out.append(tool)
-    payload_tools = list(payload.get("selected_tools") or [])
-    for t in payload_tools:
-        if str(t) not in WRITING_TOOL_NAMES and str(t) not in out:
-            out.append(str(t))
     return out
 
 
@@ -342,6 +347,10 @@ def apply_turn_contract_to_payload(
     tools = contract_tool_names(out)
     if tools:
         out["selected_tools"] = tools
+        out["tool_stages"] = payload.get("tool_stages")
+    else:
+        out["selected_tools"] = None
+        out["tool_stages"] = None
     if contract.get("override_step_policy"):
         stages = payload.get("tool_stages")
         if not stages and "read_text_artifact" in tools and "edit_text_artifact" in tools:
@@ -365,6 +374,9 @@ def finalize_turn_execution_plan(
         result, payload, steer_planning_turn=steer_planning_turn
     )
     contract = build_turn_contract(result, payload, steer_planning_turn=steer_planning_turn)
+    from app.services.turn_contract_lifecycle import sanitize_turn_contract
+
+    contract = sanitize_turn_contract(contract, payload, state)
     payload = apply_turn_contract_to_payload(payload, contract)
 
     if str(mission.get("kind") or "").lower() == "writing":
@@ -383,6 +395,10 @@ def finalize_turn_execution_plan(
     else:
         non_writing, _ = split_execution_tools(exec_tools)
         exec_tools = non_writing
+
+    from app.services.turn_contract_lifecycle import clear_contract_replan_requirement
+
+    payload = clear_contract_replan_requirement(payload)
 
     return payload, exec_tools
 
@@ -502,6 +518,41 @@ def planning_fallback_from_state(state: dict[str, Any] | None) -> Optional[dict[
             "risk_level": "LOW",
             "parser_fallback": True,
             "fallback_reason": "rewrite_outline_queue",
+        }
+
+    from app.services.turn_contract_lifecycle import contract_replan_required
+
+    def _outline_work_pending() -> bool:
+        for row in items:
+            if not isinstance(row, dict):
+                continue
+            status = str(row.get("status") or "pending")
+            if status not in ("pending", "active", "running"):
+                continue
+            kind = str(row.get("kind") or "")
+            title = str(row.get("title") or "").lower()
+            if kind == "write_outline":
+                return True
+            if kind == "plan_step" and "outline" in title:
+                return True
+        return False
+
+    policy = mission.get("step_policy") if isinstance(mission.get("step_policy"), dict) else {}
+    first_step = str(policy.get("first_step") or "outline")
+    needs_outline = outline_bytes <= 0 and first_step in ("outline", "write_outline")
+
+    if contract_replan_required(payload) and (needs_outline or _outline_work_pending()):
+        return {
+            "plan": ["write outline via writing"],
+            "selected_tools": [],
+            "writing_intent": {
+                "enabled": True,
+                "action": "write_outline",
+            },
+            "skip_retrieval": True,
+            "risk_level": "LOW",
+            "parser_fallback": True,
+            "fallback_reason": "contract_replan_write_outline",
         }
 
     if payload.get("execution_grant"):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.config.settings import settings
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
 from app.services.artifact_content import generate_artifact_content, needs_generated_content
 from app.services.fact_layer import attach_turn_facts
@@ -363,5 +364,21 @@ def _resolve_artifact_filename(
         first_name = sorted(names)[0]
         if first_name:
             return resolve_read_paths(state, first_name)
+
+    mission = state.get("mission") or payload.get("mission") or {}
+    if str(mission.get("kind") or "").lower() == "writing" and tool_name == "read_text_artifact":
+        policy = mission.get("step_policy") or {}
+        outline_name = str(
+            policy.get("outline_artifact")
+            or getattr(settings, "MANUSCRIPT_DEFAULT_OUTLINE", "outline.txt")
+        )
+        task_id = str(state["task_id"])
+        files = list_task_artifacts(task_id)
+        names = {str(item.get("filename") or "") for item in files}
+        if outline_name in names:
+            return resolve_read_paths(state, outline_name)
+        body_name = str(policy.get("body_artifact") or "novel.txt")
+        if body_name in names:
+            return resolve_read_paths(state, body_name)
 
     return resolve_read_paths(state, "output.md")

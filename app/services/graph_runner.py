@@ -35,6 +35,7 @@ from app.services.stream_progress import (
     set_trace_handler,
     set_writing_handler,
 )
+from app.services.live_task_state import clear_live, register_live, touch_live
 from app.services.state_store import get_state_store
 from app.services.graph_execution_pool import (
     GraphExecutionRejected,
@@ -541,6 +542,7 @@ class GraphRunner:
         interrupted_for_review = False
         started_at = time.monotonic()
         task_id = state["task_id"]
+        register_live(state)
         progress_q: queue.SimpleQueue[str] = queue.SimpleQueue()
         trace_q: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
         answer_q: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
@@ -670,6 +672,7 @@ class GraphRunner:
 
                 node_name, snapshot = item
                 latest = snapshot
+                touch_live(latest)
                 if trace_enabled():
                     trace_after_node(node_name, latest)
                 from app.services.engineering_trace import record_node_span
@@ -757,6 +760,7 @@ class GraphRunner:
             set_writing_handler(None)
             if worker is not threading.current_thread():
                 worker.join(timeout=2.0)
+            clear_live(task_id)
 
         yield from self._stream_finalize(latest, interrupted_for_review)
 
@@ -788,9 +792,12 @@ class GraphRunner:
 
         latest = state
         interrupted_for_review = False
+        task_id = state["task_id"]
+        register_live(state)
         try:
             for node_name, snapshot in stream_supervisor_graph(state):
                 latest = snapshot
+                touch_live(latest)
                 get_state_store().save(latest)
                 if node_name == "supervisor_decompose":
                     yield _format_stream_event(
@@ -812,6 +819,8 @@ class GraphRunner:
         except Exception as exc:
             yield from self._stream_error(latest, exc)
             return
+        finally:
+            clear_live(task_id)
 
         yield from self._stream_finalize(latest, interrupted_for_review)
 

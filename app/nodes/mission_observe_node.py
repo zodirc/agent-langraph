@@ -28,6 +28,9 @@ def mission_observe_node(state: AgentState) -> AgentState:
         payload["observation"] = obs
         state = merge_state(state, observation=obs, input_payload=payload)
     state = update_progress_from_observation(state)
+    from app.services.turn_contract_lifecycle import apply_non_recoverable_failure_lifecycle
+
+    state = apply_non_recoverable_failure_lifecycle(state)
     from app.services.mission_execution import reconcile_work_plan
 
     state = reconcile_work_plan(state)

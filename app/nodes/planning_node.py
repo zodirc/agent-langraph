@@ -206,38 +206,50 @@ def planning_node(state: AgentState) -> AgentState:
             },
             ensure_ascii=False,
         )
-        system_prompt = build_planning_system_prompt(state)
-        if trace_enabled():
-            raw = stream_llm_trace(
-                stream_structured(
+        from app.services.turn_contract import planning_fallback_from_state
+        from app.services.turn_contract_lifecycle import contract_replan_required
+
+        result: dict[str, Any] | None = None
+        if contract_replan_required(payload):
+            fb = planning_fallback_from_state(
+                merge_state(state, input_payload=payload, manuscript=ms.to_dict())
+            )
+            if fb:
+                result = dict(fb)
+
+        if result is None:
+            system_prompt = build_planning_system_prompt(state)
+            if trace_enabled():
+                raw = stream_llm_trace(
+                    stream_structured(
+                        "planning",
+                        system_prompt,
+                        user_content,
+                        budget_ctx=budget_ctx,
+                        trace_state=state,
+                        stream_node="planning",
+                        stream_phase="planning_llm",
+                    ),
+                    node="planning",
+                    phase="planning_llm",
+                    field="plan",
+                    extra_fields=["risk_level"] if trace_verbose() else None,
+                )
+                result = extract_json_with_repair(
+                    "planning",
+                    raw,
+                    prefer_keys=("plan",),
+                    trace_state=state,
+                    budget_ctx=budget_ctx,
+                )
+            else:
+                result = invoke_structured(
                     "planning",
                     system_prompt,
                     user_content,
                     budget_ctx=budget_ctx,
                     trace_state=state,
-                    stream_node="planning",
-                    stream_phase="planning_llm",
-                ),
-                node="planning",
-                phase="planning_llm",
-                field="plan",
-                extra_fields=["risk_level"] if trace_verbose() else None,
-            )
-            result = extract_json_with_repair(
-                "planning",
-                raw,
-                prefer_keys=("plan",),
-                trace_state=state,
-                budget_ctx=budget_ctx,
-            )
-        else:
-            result = invoke_structured(
-                "planning",
-                system_prompt,
-                user_content,
-                budget_ctx=budget_ctx,
-                trace_state=state,
-            )
+                )
 
         payload_patch = result.pop("_input_payload_patch", None)
         if payload_patch:

@@ -11,6 +11,9 @@ def mission_init_node(state: AgentState) -> AgentState:
     payload = dict(state.get("input_payload") or {})
     if not state.get("mission"):
         state = init_mission_state(state, payload)
+    from app.services.turn_contract_lifecycle import reconcile_turn_contract_execution
+
+    state = reconcile_turn_contract_execution(state)
     updated = merge_state(
         state,
         current_node="mission_init",

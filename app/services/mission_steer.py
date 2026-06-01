@@ -29,7 +29,11 @@ def _now_iso() -> str:
 
 
 def steer_requires_planning(payload: dict[str, Any]) -> bool:
-    """True until the planning LLM has run once after user steer."""
+    """True until planning runs after steer or after contract invalidation."""
+    from app.services.turn_contract_lifecycle import contract_replan_required
+
+    if contract_replan_required(payload):
+        return True
     return bool(payload.get("require_planning_after_steer")) and not payload.get(
         "steer_planning_done"
     )
@@ -53,7 +57,12 @@ def steer_needs_planning_llm(
 
 
 def apply_steer_planning_gate(payload: dict[str, Any]) -> dict[str, Any]:
-    out = dict(payload)
+    from app.services.turn_contract_lifecycle import (
+        REASON_STEER,
+        invalidate_turn_contract_payload,
+    )
+
+    out = invalidate_turn_contract_payload(dict(payload), REASON_STEER)
     out["require_planning_after_steer"] = True
     out["steer_planning_done"] = False
     out.pop("skip_planning_llm", None)
@@ -61,7 +70,9 @@ def apply_steer_planning_gate(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def complete_steer_planning(payload: dict[str, Any]) -> dict[str, Any]:
-    out = dict(payload)
+    from app.services.turn_contract_lifecycle import clear_contract_replan_requirement
+
+    out = clear_contract_replan_requirement(dict(payload))
     out["steer_planning_done"] = True
     out["require_planning_after_steer"] = False
     return out

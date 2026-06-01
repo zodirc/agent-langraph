@@ -10,6 +10,21 @@ import yaml
 from app.services.secrets import secrets_provider
 
 
+def _bootstrap_dotenv() -> None:
+    """Load project .env for local uvicorn; do not override explicit process env."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    root = Path(__file__).resolve().parents[2]
+    env_path = root / ".env"
+    if env_path.is_file():
+        load_dotenv(env_path, override=False)
+
+
+_bootstrap_dotenv()
+
+
 def _resolve_env(value: str) -> str:
     """Replace ${VAR} and ${VAR:default} placeholders."""
     pattern = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")

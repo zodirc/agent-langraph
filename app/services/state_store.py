@@ -25,6 +25,8 @@ _PAYLOAD_VOLATILE_KEYS = (
     "execution_grant",
     "last_execution_grant",
     "require_planning_after_steer",
+    "require_planning_after_contract_invalidation",
+    "turn_contract_invalidation",
     "steer_planning_done",
     "steer_watch_outcome",
     "steer_intent_pending_confirm",
@@ -206,6 +208,7 @@ class StateStore:
                         now,
                     ),
                 )
+            self._touch_live(state)
             return state
 
         with self._connect() as conn:
@@ -234,7 +237,14 @@ class StateStore:
                 ),
             )
             conn.commit()
+        self._touch_live(state)
         return state
+
+    @staticmethod
+    def _touch_live(state: AgentState) -> None:
+        from app.services.live_task_state import touch_live_if_active
+
+        touch_live_if_active(str(state["task_id"]), state)
 
     def load(self, task_id: str, *, read_only: bool = False) -> Optional[AgentState]:
         if uses_postgres():

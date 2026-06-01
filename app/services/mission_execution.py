@@ -58,7 +58,12 @@ def issue_execution_grant_to_payload(
     source: str = "resume",
 ) -> dict[str, Any]:
     """Grant one mission_act; clear steer gates so resume is not blocked by stale DB flags."""
-    out = dict(payload)
+    from app.services.turn_contract_lifecycle import (
+        REASON_EXECUTION_GRANT,
+        invalidate_turn_contract_payload,
+    )
+
+    out = invalidate_turn_contract_payload(dict(payload), REASON_EXECUTION_GRANT)
     out["execution_grant"] = {
         "issued_at": _now_iso(),
         "source": str(source),

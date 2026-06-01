@@ -159,6 +159,13 @@ def run_subgraph_writing(state: AgentState) -> AgentState:
     from app.services.turn_contract import contract_blocks_writing
 
     state = prepare_state_for_mission_act(state)
+    from app.services.turn_contract_lifecycle import reconcile_turn_contract_execution
+
+    state = reconcile_turn_contract_execution(state)
+    from app.services.mission_steer import mission_must_run_planning
+
+    if mission_must_run_planning(state):
+        return run_pipeline_request(state)
     if _forced_stop_requested(state):
         return merge_state(state, status="MISSION_PAUSED", current_node="mission_act")
     payload = dict(state.get("input_payload") or {})
@@ -302,6 +309,12 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
         return run_pipeline_request(state)
 
     from app.services.turn_contract import contract_blocks_writing
+    from app.services.turn_contract_lifecycle import reconcile_turn_contract_execution
+
+    state = reconcile_turn_contract_execution(state)
+    payload = state.get("input_payload") or {}
+    if mission_must_run_planning(state):
+        return run_pipeline_request(state)
 
     mission = state.get("mission") or {}
     executor = str(step_decision.get("next_executor") or "pipeline:request")

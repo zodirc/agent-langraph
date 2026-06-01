@@ -14,6 +14,8 @@ from app.services.graph_runner import get_graph_runner
 from app.services.graph_execution_pool import GraphExecutionRejected
 from app.services.tenant_quota import TenantQuotaExceeded
 from app.services.input_guard import sanitize_input_payload
+from app.services.live_task_state import get_live
+from app.services.state_debug_view import build_task_state_debug_response
 from app.services.state_store import get_state_store
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -391,6 +393,31 @@ def stream_resume_task(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/{task_id}/state")
+def get_task_state_debug(
+    task_id: str,
+    truncate: bool = True,
+    _principal: AuthPrincipal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """
+    Full AgentState snapshot for the current task (session id == task id in copilot mode).
+
+    Used by Web CLI state inspector.
+
+    Returns store (DB), live (in-process stream), and merged views when available.
+    """
+    store_state = get_state_store().load(task_id, read_only=True)
+    live_entry = get_live(task_id)
+    if not store_state and not live_entry:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    return build_task_state_debug_response(
+        task_id=task_id,
+        store_state=store_state,
+        live_entry=live_entry,
+        truncate=truncate,
+    )
 
 
 @router.get("/{task_id}/status", response_model=TaskStatusResponse)

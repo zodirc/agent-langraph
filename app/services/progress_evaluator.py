@@ -284,6 +284,24 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
         )
 
     if observation.get("has_failures") and failures < max_failures:
+        from app.services.turn_contract_lifecycle import (
+            contract_replan_required,
+            detect_non_recoverable_step_failure,
+        )
+
+        payload_for_replan = state.get("input_payload") or stored.get("input_payload") or {}
+        if contract_replan_required(payload_for_replan):
+            return EvalResult(
+                done=False,
+                reason="non_recoverable failure: replan required before next step",
+                action="continue",
+            )
+        if detect_non_recoverable_step_failure(state):
+            return EvalResult(
+                done=False,
+                reason="non_recoverable failure pending replan",
+                action="continue",
+            )
         return EvalResult(
             done=False,
             reason="last step had failures",
