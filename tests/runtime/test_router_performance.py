@@ -1,4 +1,5 @@
-from app.runtime.router import route_after_planning, should_reflect
+from app.nodes.tool_node import tool_execution_node
+from app.runtime.router import route_after_planning, route_after_tool, should_reflect
 from app.runtime.state import TaskStatus, create_initial_state, merge_state
 
 
@@ -63,6 +64,34 @@ def test_route_after_planning_mission_contract_ends_single_graph(base_state):
         execution_mode="mission",
     )
     assert route_after_planning(state) == "end"
+
+
+def test_route_after_tool_non_retryable_skips_tool_loop(base_state):
+    state = merge_state(
+        base_state,
+        selected_tools=["read_text_artifact"],
+        input_payload={
+            **base_state["input_payload"],
+            "tool_params": {"read_text_artifact": {"filename": "missing-outline.txt"}},
+        },
+    )
+    failed = tool_execution_node(state)
+    assert failed["status"] == TaskStatus.TOOL_FAILED.value
+    assert route_after_tool(failed) == "reasoning"
+    assert route_after_planning(failed) == "reasoning"
+
+
+def test_route_after_tool_retryable_still_retries_tool_execution(base_state):
+    state = merge_state(
+        base_state,
+        selected_tools=["missing_tool"],
+        retry_count=0,
+        status=TaskStatus.TOOL_FAILED.value,
+        current_node="tool_execution",
+        errors=["tool_execution: boom"],
+        audit_log=[{"node": "tool_execution", "action": "error", "detail": "boom"}],
+    )
+    assert route_after_tool(state) == "tool_execution"
 
 
 def test_should_reflect_skips_when_mission_runtime(base_state):

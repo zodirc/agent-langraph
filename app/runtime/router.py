@@ -33,6 +33,24 @@ def _effective_selected_tools(state: AgentState) -> list[str]:
     return contract_tool_names(state.get("input_payload") or {})
 
 
+def _is_non_retryable_tool_failure(state: AgentState) -> bool:
+    """True when tool_execution recorded a failure that must not be retried."""
+    for err in state.get("errors") or []:
+        if "tool_execution(non_retryable)" in str(err):
+            return True
+    log = state.get("audit_log") or []
+    if log and str(log[-1].get("action") or "") == "non_retryable_error":
+        return True
+    for item in state.get("tool_results") or []:
+        if item.get("status") not in ("error", "skipped") and not item.get("error"):
+            continue
+        if item.get("non_retryable") or (item.get("result") or {}).get("non_retryable"):
+            return True
+        if str(item.get("error_code") or "") == "artifact_not_found":
+            return True
+    return False
+
+
 def route_after_retrieval(state: AgentState) -> str:
     """Skip tool_execution when no registered tools were selected."""
     if str(state.get("status", "")) == TaskStatus.FAILED.value:
@@ -48,6 +66,9 @@ def route_after_tool(state: AgentState) -> str:
     """Retry tool node or route to dead letter (architecture §22)."""
     status = str(state.get("status", ""))
     if status == TaskStatus.TOOL_FAILED.value:
+        # Non-retryable failures (e.g. missing artifact) must not loop tool_execution.
+        if _is_non_retryable_tool_failure(state):
+            return "reasoning"
         if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
             return "dead_letter"
         return "tool_execution"
@@ -76,9 +97,11 @@ def route_after_planning(state: AgentState) -> str:
     if (
         status == TaskStatus.TOOL_FAILED.value
         and str(state.get("current_node") or "") == "tool_execution"
-        and state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT
     ):
-        return "dead_letter"
+        if _is_non_retryable_tool_failure(state):
+            return "reasoning"
+        if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
+            return "dead_letter"
 
     payload = state.get("input_payload") or {}
     # Main graph stops at planning and hands off to mission_graph (mission_step < 1).
