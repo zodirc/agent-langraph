@@ -263,6 +263,21 @@ def build_writing_intent(
     continue_turn = session_turn > 1 or is_continue_writing_goal(goal)
     has_body = bool(manuscript.body_path) and manuscript.body_bytes > 0
 
+    action_aliases = {
+        "write": "write_body",
+        "draft": "write_body",
+        "append": "append_body",
+        "continue": "append_body",
+        "outline": "write_outline",
+        "polish": "polish_chapter",
+        "rewrite": "polish_chapter",
+        "review": "review_chapter",
+        "summary": "chapter_summary",
+    }
+    raw_action = str(intent.get("action") or "").strip().lower()
+    if raw_action:
+        intent["action"] = action_aliases.get(raw_action, raw_action)
+
     if intent.get("action"):
         action = str(intent["action"])
     elif "append_text_artifact" in writing_tools or (continue_turn and has_body):
@@ -283,7 +298,10 @@ def build_writing_intent(
     if has_body and manuscript.body_path:
         body_text = read_body_text(manuscript.task_id, manuscript.body_path)
         last_ch = parse_last_chapter_index(body_text)
-        intent.setdefault("chapter_index", max(1, last_ch + 1))
+        if action in ("polish_chapter", "review_chapter", "chapter_summary"):
+            intent.setdefault("chapter_index", max(1, last_ch))
+        else:
+            intent.setdefault("chapter_index", max(1, last_ch + 1))
 
     requested = parse_requested_chars(goal)
     if intent.get("target_chars") is None:

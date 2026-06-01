@@ -61,6 +61,26 @@ def test_build_writing_intent_append_on_continue():
     assert intent["action"] == "append_body"
 
 
+def test_build_writing_intent_polish_from_llm_intent():
+    from app.services.manuscript_service import Manuscript
+
+    m = Manuscript(
+        task_id="t2",
+        body_path="novel.txt",
+        body_bytes=5000,
+    )
+    intent = build_writing_intent(
+        goal="请优化一下",
+        selected_tools=["append_text_artifact"],
+        manuscript=m,
+        session_turn=2,
+        llm_intent={"enabled": True, "action": "rewrite"},
+    )
+    assert intent["enabled"] is True
+    assert intent["action"] == "polish_chapter"
+    assert intent["chapter_index"] == 1
+
+
 def test_split_execution_tools():
     exec_tools, writing = split_execution_tools(
         ["read_text_artifact", "append_text_artifact", "calculator"]

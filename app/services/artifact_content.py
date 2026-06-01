@@ -266,6 +266,7 @@ def _build_append_chunks(
 
     from app.services.mission_steer import has_pending_steer
 
+    planned_chunks = max(1, min(max_chunks, (budget + chunk_size - 1) // chunk_size))
     while remaining > 0 and len(chunks) < max_chunks:
         if has_pending_steer(str(state["task_id"])):
             report_status_trace(
@@ -279,7 +280,7 @@ def _build_append_chunks(
         )
         report_status_trace(
             "writing",
-            f"第 {len(chunks) + 1}/{max_chunks} 段：约 {this_size} 字，剩余 {remaining} 字",
+            f"第 {len(chunks) + 1}/{planned_chunks} 段：约 {this_size} 字，剩余 {remaining} 字",
         )
         tail_chars = int(getattr(settings, "MANUSCRIPT_TAIL_EXCERPT_CHARS", 2400))
         state_for_chunk = state
@@ -311,7 +312,7 @@ def _build_append_chunks(
                     "aborting append loop"
                 )
         chunks.append(piece)
-        remaining -= max(len(piece), this_size // 2)
+        remaining = max(0, remaining - len(piece))
         rolling_body = (
             f"{rolling_body.rstrip()}\n\n{piece}" if rolling_body.strip() else piece
         )

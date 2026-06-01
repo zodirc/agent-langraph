@@ -395,10 +395,20 @@ def planning_node(state: AgentState) -> AgentState:
             )
         else:
             llm_intent = (
-                result.get("writing_intent")
+                dict(result.get("writing_intent"))
                 if isinstance(result.get("writing_intent"), dict)
                 else None
             )
+            if llm_intent is None:
+                llm_intent = {}
+            if not llm_intent.get("action"):
+                raw_action = str(
+                    result.get("writing_action") or result.get("writing_mode") or ""
+                ).strip()
+                if raw_action:
+                    llm_intent["action"] = raw_action
+            if not llm_intent:
+                llm_intent = None
             payload["writing_intent"] = build_writing_intent(
                 goal=goal,
                 selected_tools=writing_tools or all_tools,
