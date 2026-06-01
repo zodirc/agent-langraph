@@ -5,7 +5,10 @@ from typing import Optional
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.config.settings import settings
+import app.config.settings as settings_module
+
+# Backward-compatible alias for tests/older imports.
+settings = settings_module.settings
 from app.services.auth_service import AuthPrincipal, get_auth_service
 from app.services.rate_limit import enforce_rate_limits
 from app.services.tenant_context import apply_tenant_headers, set_tenant_id
@@ -18,12 +21,12 @@ def get_current_principal(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> AuthPrincipal:
     apply_tenant_headers(dict(request.headers))
-    if settings.MULTI_TENANT_ENABLED:
+    if settings_module.settings.MULTI_TENANT_ENABLED:
         tid = request.headers.get("X-Tenant-Id")
         if tid:
             set_tenant_id(tid)
 
-    if not settings.AUTH_ENABLED:
+    if not settings_module.settings.AUTH_ENABLED:
         header_user = request.headers.get("X-User-Id")
         principal = AuthPrincipal(
             user_id=header_user or "anonymous",

@@ -26,7 +26,7 @@ from app.api.schedule_api import router as schedule_router
 from app.api.tenant_api import router as tenant_router
 from app.api.task_api import router as task_router
 from app.api.tools_api import router as tools_router
-from app.config.settings import settings
+import app.config.settings as settings_module
 from app.services.knowledge_seed import seed_default_knowledge
 from app.services.knowledge_store import get_knowledge_store
 from app.services.langsmith_setup import configure_langsmith
@@ -47,7 +47,7 @@ class DevStaticFiles(StaticFiles):
 
     async def get_response(self, path: str, scope):  # type: ignore[override]
         response: Response = await super().get_response(path, scope)
-        if settings.APP_ENV == "development":
+        if settings_module.settings.APP_ENV == "development":
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -61,24 +61,24 @@ async def lifespan(_app: FastAPI):
     tool_counts = bootstrap_tools()
     get_scheduler_service().start()
     get_review_timeout_service().start()
-    if settings.A2A_SELF_URL:
+    if settings_module.settings.A2A_SELF_URL:
         from app.services.agent_registry import get_agent_registry
         from app.services.a2a_dispatch import runtime_agent_card
 
-        get_agent_registry().register(runtime_agent_card(), settings.A2A_SELF_URL)
+        get_agent_registry().register(runtime_agent_card(), settings_module.settings.A2A_SELF_URL)
     logger.info(
         "Agent runtime started",
         extra={
-            "env": settings.APP_ENV,
-            "auth_enabled": settings.AUTH_ENABLED,
+            "env": settings_module.settings.APP_ENV,
+            "auth_enabled": settings_module.settings.AUTH_ENABLED,
             "knowledge_docs": get_knowledge_store().count(),
             "seeded": seeded,
             "http_tools": tool_counts.get("http", 0),
             "mcp_tools": tool_counts.get("mcp", 0),
-            "knowledge_backend": settings.KNOWLEDGE_BACKEND,
-            "queue_backend": settings.QUEUE_BACKEND,
-            "storage_backend": settings.STORAGE_BACKEND,
-            "checkpoint_backend": settings.CHECKPOINT_BACKEND,
+            "knowledge_backend": settings_module.settings.KNOWLEDGE_BACKEND,
+            "queue_backend": settings_module.settings.QUEUE_BACKEND,
+            "storage_backend": settings_module.settings.STORAGE_BACKEND,
+            "checkpoint_backend": settings_module.settings.CHECKPOINT_BACKEND,
         },
     )
     yield
@@ -111,7 +111,7 @@ app.include_router(feedback_router)
 app.include_router(a2a_router)
 
 if (WEB_DIR / "static").exists():
-    static_cls = DevStaticFiles if settings.APP_ENV == "development" else StaticFiles
+    static_cls = DevStaticFiles if settings_module.settings.APP_ENV == "development" else StaticFiles
     app.mount("/static", static_cls(directory=WEB_DIR / "static"), name="static")
 
 

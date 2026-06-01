@@ -228,7 +228,25 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 
 ---
 
-## 十、关键命令
+## 十、SRDL（受控 ReAct / 自路由审议回路）
+
+| 项 | 状态 | 说明 |
+|----|------|------|
+| 状态 `react_loop` / trace | ✅ | `app/domain/react_loop.py`，`AgentState.react_loop` |
+| 入口判定 | ✅ | `should_enter_react_loop`（启发式 + `force_react_loop` / `disable_react_loop`） |
+| Single 子图 | ✅ | `react_deliberate` → `execute` → `observe` → `finalize` → `reasoning` |
+| 动作白名单 | ✅ | retrieve / memory / tool / reason / replan / finish |
+| 审计事件 | ✅ | `react_audit.py` + `turn_event_log` |
+| 制度升级建议 | ✅ | `route_recommendation`（系统裁决，非 mid-loop 切图） |
+| 配置 | ✅ | `config.yaml` → `react_loop.*`（**enabled: true**） |
+| Prometheus | ✅ | `agent_react_*` counters/histogram（`finalize_loop` 导出） |
+| 单测 / 集成 | ✅ | `test_react_entry.py`、`test_react_loop_runner.py`、`test_react_graph_flow.py` |
+
+启用：默认 `react_loop.enabled: true`；可关闭或对单次请求设 `input_payload.disable_react_loop: true` / `force_react_loop: true`。
+
+---
+
+## 十一、关键命令
 
 ```bash
 # 开源冒烟
@@ -247,10 +265,11 @@ bash scripts/create_tenant_storage.sh drop acme
 
 ---
 
-## 十一、修订记录
+## 十二、修订记录
 
 | 日期 | 说明 |
 |------|------|
+| 2026-06-01 | SRDL：受控 ReAct 子图、配置项与测试 |
 | 2026-05-26 | 初版：对齐 Batch 0–4 仓库实现与测试覆盖 |
 | 2026-05-26 | 增补 §七 Mission 写作阶段、autonomous、步数预算与 steer |
 | 2026-05-26 | 增补 steer 双阶段确认、结构化 `confirm`、session turn 规划闸门与 state_store payload 持久化 |

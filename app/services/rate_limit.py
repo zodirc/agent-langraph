@@ -10,7 +10,10 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 
-from app.config.settings import settings
+import app.config.settings as settings_module
+
+# Backward-compatible alias for tests/older imports.
+settings = settings_module.settings
 
 logger = logging.getLogger(__name__)
 
@@ -102,20 +105,21 @@ def rate_limit_key_ip(request: Request) -> str:
 
 
 def enforce_rate_limits(request: Request, user_id: str) -> None:
-    if not settings.RATE_LIMIT_ENABLED:
+    # Read the latest settings (tests may monkeypatch app.config.settings.settings).
+    if not settings_module.settings.RATE_LIMIT_ENABLED:
         return
     limiter = get_rate_limiter()
-    window = settings.RATE_LIMIT_WINDOW_SEC
+    window = settings_module.settings.RATE_LIMIT_WINDOW_SEC
     user_key = rate_limit_key_user(request, user_id)
     ip_key = rate_limit_key_ip(request)
 
-    if not limiter.check(user_key, settings.RATE_LIMIT_USER_PER_MIN, window):
+    if not limiter.check(user_key, settings_module.settings.RATE_LIMIT_USER_PER_MIN, window):
         raise HTTPException(
             status_code=429,
-            detail=f"Rate limit exceeded: {settings.RATE_LIMIT_USER_PER_MIN} requests per {window}s (user)",
+            detail=f"Rate limit exceeded: {settings_module.settings.RATE_LIMIT_USER_PER_MIN} requests per {window}s (user)",
         )
-    if not limiter.check(ip_key, settings.RATE_LIMIT_IP_PER_MIN, window):
+    if not limiter.check(ip_key, settings_module.settings.RATE_LIMIT_IP_PER_MIN, window):
         raise HTTPException(
             status_code=429,
-            detail=f"Rate limit exceeded: {settings.RATE_LIMIT_IP_PER_MIN} requests per {window}s (IP)",
+            detail=f"Rate limit exceeded: {settings_module.settings.RATE_LIMIT_IP_PER_MIN} requests per {window}s (IP)",
         )

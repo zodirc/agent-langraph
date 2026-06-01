@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 from typing import Any
 
@@ -9,8 +10,9 @@ from app.config.settings import settings
 class MetricsService:
     """Lightweight metrics (Prometheus when enabled, in-memory otherwise) §14.2."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, registry: Any | None = None) -> None:
         self._lock = threading.Lock()
+        self._registry: Any | None = registry
         self._tenant_cost_usd: dict[str, float] = {}
         self._context_compress_ratios: list[tuple[str, float]] = []
         self._counters: dict[str, float] = {
@@ -31,112 +33,184 @@ class MetricsService:
             "session_memory_queries": 0,
             "session_memory_hits": 0,
             "contract_events": 0,
+            "react_loop_entered": 0,
+            "react_loop_finished": 0,
+            "react_loop_aborted": 0,
         }
         self._prometheus = None
         self._histograms: dict[str, Any] = {}
         if settings.METRICS_ENABLED:
             try:
-                from prometheus_client import Counter, Gauge, Histogram
+                from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
+
+                # Under pytest, MetricsService may be re-instantiated multiple times.
+                # Use an isolated registry to prevent "Duplicated timeseries" errors.
+                if self._registry is None and os.environ.get("PYTEST_CURRENT_TEST"):
+                    self._registry = CollectorRegistry()
+
+                # Tests may instantiate MetricsService multiple times; use a dedicated registry
+                # to avoid "Duplicated timeseries" errors unless the caller wants the default.
+                prom_kwargs: dict[str, Any] = {}
+                if self._registry is not None:
+                    prom_kwargs["registry"] = self._registry
 
                 self._prometheus = {
-                    "tasks_created": Counter("agent_tasks_created_total", "Tasks created"),
+                    "tasks_created": Counter(
+                        "agent_tasks_created_total", "Tasks created", **prom_kwargs
+                    ),
                     "tasks_completed": Counter(
-                        "agent_tasks_completed_total", "Tasks completed"
+                        "agent_tasks_completed_total", "Tasks completed", **prom_kwargs
                     ),
                     "tasks_dead_letter": Counter(
-                        "agent_tasks_dead_letter_total", "Tasks sent to DLQ"
+                        "agent_tasks_dead_letter_total", "Tasks sent to DLQ", **prom_kwargs
                     ),
                     "node_executions": Counter(
-                        "agent_node_executions_total", "Node executions", ["node"]
+                        "agent_node_executions_total",
+                        "Node executions",
+                        ["node"],
+                        **prom_kwargs,
                     ),
                     "llm_invoke": Counter(
                         "agent_llm_invoke_total",
                         "LLM invocations",
                         ["purpose", "model", "status"],
+                        **prom_kwargs,
                     ),
                     "llm_tokens": Counter(
                         "agent_llm_tokens_total",
                         "LLM tokens",
                         ["purpose", "kind"],
+                        **prom_kwargs,
                     ),
                     "llm_cost_usd": Counter(
                         "agent_llm_cost_usd_total",
                         "Estimated LLM cost in USD",
                         ["tenant_id", "user_id"],
+                        **prom_kwargs,
                     ),
                     "tenant_tasks": Counter(
                         "agent_tenant_tasks_total",
                         "Tasks per tenant",
                         ["tenant_id"],
+                        **prom_kwargs,
                     ),
                     "tenant_tokens": Counter(
                         "agent_tenant_tokens_total",
                         "LLM tokens per tenant",
                         ["tenant_id"],
+                        **prom_kwargs,
                     ),
                     "tenant_quota_exceeded": Counter(
                         "agent_tenant_quota_exceeded_total",
                         "Tenant quota exceeded events",
                         ["tenant_id", "resource"],
+                        **prom_kwargs,
                     ),
                     "budget_exhausted": Counter(
                         "agent_budget_exhausted_total",
                         "Budget exhausted events",
                         ["purpose"],
+                        **prom_kwargs,
                     ),
                     "tool_invocations": Counter(
                         "agent_tool_invocations_total",
                         "Tool invocations",
                         ["tool", "status"],
+                        **prom_kwargs,
                     ),
                     "graph_rejected": Counter(
                         "agent_graph_rejected_total",
                         "Graph executions rejected (backpressure)",
+                        **prom_kwargs,
                     ),
                     "checkpoint_corrupt": Counter(
                         "agent_checkpoint_corrupt_total",
                         "Corrupt checkpoints detected",
+                        **prom_kwargs,
                     ),
                     "checkpoint_reset": Counter(
                         "agent_checkpoint_reset_total",
                         "Checkpoint thread resets",
                         ["reason"],
+                        **prom_kwargs,
                     ),
                     "llm_error": Counter(
                         "agent_llm_error_total",
                         "LLM errors by category",
                         ["category"],
+                        **prom_kwargs,
                     ),
                     "reasoning_parser_events": Counter(
                         "agent_reasoning_parser_events_total",
                         "Reasoning parser repair/fallback events",
                         ["kind"],
+                        **prom_kwargs,
                     ),
                 }
                 self._prometheus["graph_queue_active"] = Gauge(
                     "agent_graph_queue_active",
                     "Active graph executions",
+                    **prom_kwargs,
                 )
                 self._prometheus["graph_queue_waiting"] = Gauge(
                     "agent_graph_queue_waiting",
                     "Graph executions waiting for slot",
+                    **prom_kwargs,
                 )
                 self._prometheus["llm_circuit_state"] = Gauge(
                     "agent_llm_circuit_state",
                     "LLM circuit breaker (1=open/half_open active path)",
                     ["name", "state"],
+                    **prom_kwargs,
                 )
                 self._histograms["node_duration"] = Histogram(
                     "agent_node_duration_seconds",
                     "Node execution duration",
                     ["node"],
                     buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 15.0, 30.0, 60.0, 120.0),
+                    **prom_kwargs,
                 )
                 self._histograms["context_compress_ratio"] = Histogram(
                     "agent_context_compress_ratio",
                     "Context compression ratio (1 - after/before chars)",
                     ["method"],
                     buckets=(0.1, 0.25, 0.4, 0.5, 0.6, 0.75, 0.9, 1.0),
+                    **prom_kwargs,
+                )
+                self._prometheus["react_loop_outcomes"] = Counter(
+                    "agent_react_loop_outcomes_total",
+                    "SRDL loop completions",
+                    ["status", "exit_path"],
+                    **prom_kwargs,
+                )
+                self._prometheus["react_action_selected"] = Counter(
+                    "agent_react_action_total",
+                    "SRDL actions selected or executed",
+                    ["action"],
+                    **prom_kwargs,
+                )
+                self._prometheus["react_action_blocked"] = Counter(
+                    "agent_react_action_blocked_total",
+                    "SRDL actions blocked (not in whitelist)",
+                    ["action"],
+                    **prom_kwargs,
+                )
+                self._prometheus["react_replan"] = Counter(
+                    "agent_react_replan_total",
+                    "SRDL replan events",
+                    **prom_kwargs,
+                )
+                self._prometheus["react_runtime_upgrade"] = Counter(
+                    "agent_react_runtime_upgrade_total",
+                    "SRDL approved runtime upgrade suggestions",
+                    ["runtime"],
+                    **prom_kwargs,
+                )
+                self._histograms["react_loop_steps"] = Histogram(
+                    "agent_react_loop_steps",
+                    "Steps completed in one SRDL loop",
+                    buckets=(0, 1, 2, 3, 4, 5, 6, 8),
+                    **prom_kwargs,
                 )
             except ImportError:
                 pass
@@ -319,6 +393,7 @@ class MetricsService:
                     "agent_rag_rerank_latency_seconds",
                     "RAG rerank latency",
                     ["backend"],
+                    **({"registry": self._registry} if self._registry is not None else {}),
                 )
             except ImportError:
                 return
@@ -335,6 +410,7 @@ class MetricsService:
                     "agent_mcp_server_health",
                     "MCP server health (1=healthy)",
                     ["name"],
+                    **({"registry": self._registry} if self._registry is not None else {}),
                 )
             except ImportError:
                 return
@@ -351,6 +427,7 @@ class MetricsService:
                     "agent_mcp_eviction_total",
                     "MCP server evictions",
                     ["name", "reason"],
+                    **({"registry": self._registry} if self._registry is not None else {}),
                 )
             except ImportError:
                 return
@@ -367,6 +444,7 @@ class MetricsService:
                 self._prometheus[key] = Gauge(
                     f"agent_rag_recall_at_{k}",
                     f"RAG recall at {k}",
+                    **({"registry": self._registry} if self._registry is not None else {}),
                 )
             except ImportError:
                 return
@@ -381,6 +459,7 @@ class MetricsService:
                     "agent_rag_faithfulness_score",
                     "RAG faithfulness score",
                     buckets=(0.1, 0.3, 0.5, 0.7, 0.8, 0.9, 1.0),
+                    **({"registry": self._registry} if self._registry is not None else {}),
                 )
             except ImportError:
                 return
@@ -397,6 +476,7 @@ class MetricsService:
                     "agent_embedding_incompatibility_total",
                     "Embedding index incompatibility detections",
                     ["stored_model", "current_model"],
+                    **({"registry": self._registry} if self._registry is not None else {}),
                 )
             except ImportError:
                 return
@@ -414,12 +494,60 @@ class MetricsService:
                     "agent_db_pool_connections",
                     "DB pool connections",
                     ["state"],
+                    **({"registry": self._registry} if self._registry is not None else {}),
                 )
             self._db_pool_gauge.labels(state="active").set(active)
             self._db_pool_gauge.labels(state="idle").set(idle)
             self._db_pool_gauge.labels(state="waiting").set(waiting)
         except ImportError:
             pass
+
+    def inc_react_loop_entered(self) -> None:
+        """Task entered bounded SRDL after planning."""
+        self._inc("react_loop_entered")
+
+    def inc_react_action_blocked(self, action: str) -> None:
+        if self._prometheus and "react_action_blocked" in self._prometheus:
+            self._prometheus["react_action_blocked"].labels(action=action[:40]).inc()
+
+    def record_react_loop_outcome(
+        self,
+        *,
+        status: str,
+        exit_path: str,
+        step_count: int,
+        action_distribution: dict[str, int] | None = None,
+        replan_count: int = 0,
+        runtime_upgrade: str | None = None,
+    ) -> None:
+        """Emit Prometheus metrics when an SRDL loop closes."""
+        status_key = (status or "unknown")[:20]
+        exit_key = (exit_path or "unknown")[:40]
+        if status_key == "finished":
+            self._inc("react_loop_finished")
+        elif status_key == "aborted":
+            self._inc("react_loop_aborted")
+
+        if self._prometheus and "react_loop_outcomes" in self._prometheus:
+            self._prometheus["react_loop_outcomes"].labels(
+                status=status_key, exit_path=exit_key
+            ).inc()
+        if "react_loop_steps" in self._histograms:
+            self._histograms["react_loop_steps"].observe(max(0, step_count))
+        if action_distribution and self._prometheus and "react_action_selected" in self._prometheus:
+            for action, count in action_distribution.items():
+                labels = self._prometheus["react_action_selected"].labels(
+                    action=str(action)[:40]
+                )
+                for _ in range(max(0, int(count))):
+                    labels.inc()
+        if replan_count > 0 and self._prometheus and "react_replan" in self._prometheus:
+            for _ in range(replan_count):
+                self._prometheus["react_replan"].inc()
+        if runtime_upgrade and self._prometheus and "react_runtime_upgrade" in self._prometheus:
+            self._prometheus["react_runtime_upgrade"].labels(
+                runtime=str(runtime_upgrade)[:20]
+            ).inc()
 
     def inc_policy_review(self) -> None:
         self._inc("policy_reviews")

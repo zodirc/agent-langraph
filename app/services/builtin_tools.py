@@ -196,7 +196,7 @@ def _register_artifact_and_utility(registry: ToolRegistry) -> None:
                 },
             },
             output_schema={"type": "object"},
-            required_role="user",
+            required_role="admin",
             risk_level="LOW",
             handler=handle_edit_text_artifact,
         )

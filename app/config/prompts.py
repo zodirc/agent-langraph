@@ -9,6 +9,8 @@ from app.config.prompt_templates import (
     MISSION_DECIDE_ROLE,
     MISSION_WRITING_DECIDE_ROLE,
     PLANNING_ROLE,
+    REACT_DELIBERATE_ROLE,
+    REACT_INTERMEDIATE_REASON_ROLE,
     REASONING_COT_SUFFIX,
     REASONING_REACT_SUFFIX,
     REASONING_ROLE,
@@ -72,6 +74,8 @@ REASONING_SYSTEM = build_reasoning_system_prompt("direct")
 REFLECTION_SYSTEM = agent_system_prompt(REFLECTION_ROLE)
 MISSION_DECIDE_SYSTEM = agent_system_prompt(MISSION_DECIDE_ROLE)
 MISSION_WRITING_DECIDE_SYSTEM = agent_system_prompt(MISSION_WRITING_DECIDE_ROLE)
+REACT_DELIBERATE_SYSTEM = agent_system_prompt(REACT_DELIBERATE_ROLE)
+REACT_INTERMEDIATE_REASON_SYSTEM = agent_system_prompt(REACT_INTERMEDIATE_REASON_ROLE)
 
 
 def build_planning_system_prompt(state: dict | None = None) -> str:

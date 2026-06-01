@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import json
 from typing import Any
 
@@ -17,6 +18,10 @@ JUDGE_SYSTEM = (
 
 def judge_task_state(task_state: dict[str, Any], *, goal: str = "") -> dict[str, Any]:
     """Score task state; returns rule-based scores when model disabled."""
+    # Offline evals should be deterministic and must not depend on live model keys.
+    # Under pytest, always fall back to the rule judge.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return _rule_judge(task_state)
     if not settings.MODEL_ENABLED:
         return _rule_judge(task_state)
 

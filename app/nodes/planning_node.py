@@ -69,6 +69,18 @@ def planning_node(state: AgentState) -> AgentState:
     Writes: plan, selected_tools, writing_intent, manuscript, status, current_node, audit_log
     """
     try:
+        # If we're re-invoked from a snapshot where tool execution already exhausted retries,
+        # do not "heal" the failure by re-planning and completing the task.
+        # Let router send the run to dead_letter.
+        from app.config.settings import settings
+
+        if (
+            str(state.get("status") or "") == TaskStatus.TOOL_FAILED.value
+            and str(state.get("current_node") or "") == "tool_execution"
+            and state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT
+        ):
+            return merge_state(state, current_node="planning")
+
         state = init_task_budget(state)
         budget_ctx = budget_context_from_state(state)
         payload_early = dict(state.get("input_payload") or {})

@@ -89,6 +89,9 @@ class AgentState(TypedDict):
     subtasks: Optional[list[dict[str, Any]]]
     worker_results: Optional[dict[str, Any]]
 
+    # Self-Routed Deliberation Loop (SRDL) — bounded ReAct in single runtime
+    react_loop: Optional[dict[str, Any]]
+
 
 def create_initial_state(
     *,
@@ -151,6 +154,7 @@ def create_initial_state(
             "execution_mode": "single",
             "subtasks": None,
             "worker_results": None,
+            "react_loop": None,
         }
     )
 
@@ -184,7 +188,15 @@ def merge_state(state: AgentState, **updates: Any) -> AgentState:
             merged[key] = incoming if len(incoming) >= len(current) else current
             continue
         if (
-            key in ("input_payload", "progress", "mission", "manuscript", "observation", "mission_control")
+            key in (
+                "input_payload",
+                "progress",
+                "mission",
+                "manuscript",
+                "observation",
+                "mission_control",
+                "react_loop",
+            )
             and isinstance(value, dict)
             and isinstance(merged.get(key), dict)
         ):

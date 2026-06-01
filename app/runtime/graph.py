@@ -16,10 +16,20 @@ from app.nodes.planning_node import planning_node
 from app.nodes.policy_node import policy_node
 from app.nodes.reasoning_node import reasoning_node
 from app.nodes.reflection_node import reflection_node
+from app.nodes.react_deliberate_node import react_deliberate_node
+from app.nodes.react_execute_node import react_execute_node
+from app.nodes.react_finalize_node import react_finalize_node
+from app.nodes.react_observe_node import react_observe_node
 from app.nodes.rejected_node import rejected_node
 from app.nodes.retrieval_node import retrieval_node
 from app.nodes.tool_node import tool_execution_node
 from app.nodes.writing_node import writing_node
+from app.runtime.react_router import (
+    route_after_react_deliberate,
+    route_after_react_execute,
+    route_after_react_finalize,
+    route_after_react_observe,
+)
 from app.runtime.router import (
     route_after_output_guard,
     route_after_planning,
@@ -51,6 +61,10 @@ def build_agent_graph() -> StateGraph:
     workflow.add_node("dead_letter", dead_letter_node)
     workflow.add_node("output", output_node)
     workflow.add_node("memory_writeback", memory_writeback_node)
+    workflow.add_node("react_deliberate", react_deliberate_node)
+    workflow.add_node("react_execute", react_execute_node)
+    workflow.add_node("react_observe", react_observe_node)
+    workflow.add_node("react_finalize", react_finalize_node)
 
     workflow.set_entry_point("planning")
 
@@ -62,9 +76,43 @@ def build_agent_graph() -> StateGraph:
             "tool_execution": "tool_execution",
             "writing": "writing",
             "reasoning": "reasoning",
+            "react_deliberate": "react_deliberate",
             "planning": "planning",
             "dead_letter": "dead_letter",
             "end": END,
+        },
+    )
+    workflow.add_conditional_edges(
+        "react_deliberate",
+        route_after_react_deliberate,
+        {
+            "react_execute": "react_execute",
+            "react_finalize": "react_finalize",
+            "reflection": "reflection",
+            "reasoning": "reasoning",
+        },
+    )
+    workflow.add_edge("react_execute", "react_observe")
+    workflow.add_conditional_edges(
+        "react_observe",
+        route_after_react_observe,
+        {
+            "react_deliberate": "react_deliberate",
+            "react_finalize": "react_finalize",
+            "planning": "planning",
+            "reflection": "reflection",
+            "dead_letter": "dead_letter",
+        },
+    )
+    workflow.add_conditional_edges(
+        "react_finalize",
+        route_after_react_finalize,
+        {
+            "reasoning": "reasoning",
+            "planning": "planning",
+            "reflection": "reflection",
+            "human_review": "human_review",
+            "dead_letter": "dead_letter",
         },
     )
     workflow.add_conditional_edges(

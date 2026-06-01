@@ -211,6 +211,7 @@ Runtime 只依赖 `ManuscriptService` 接口，不依赖中文正则。
 | 来源 | 说明 |
 |------|------|
 | **懒加载**（默认） | `work_plan.mode=lazy`，每步由 `step_policy` 生成一个工作项；`autonomous` 时在单轮内连续执行，`interactive`+`stepwise` 时每步 `MISSION_PAUSED`（`pause_reason=step_checkpoint`）；继续执行需 **execution grant**（见 [`MISSION_EXECUTION_CONTROL.md`](MISSION_EXECUTION_CONTROL.md)） |
+| **agenda / DAG 扩展** | 规划产出的 `plan[]` 与 `tool_dag` 可以进一步投影为 dependency-aware agenda：见 [`items_from_plan_steps()`](../app/services/task_agenda.py:148)、[`merge_agenda_into_work_plan()`](../app/services/task_agenda.py:210)、[`select_next_runnable_item()`](../app/services/task_agenda.py:69)。这意味着 mission 内部已不再只支持线性顺序队列，而开始支持依赖、阻塞、局部重规划。 |
 | **写作阶段（模型自选）** | `mission.writing_llm_decide=true` 时，每步 `mission_decide` 选择 `writing_phase`（写/审/润色/摘要/一致性/卷检查点），非固定流水线 |
 
 ### 写作阶段（`writing_phase`）

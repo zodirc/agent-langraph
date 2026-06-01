@@ -303,6 +303,33 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
         chapter_index=chapter,
     )
 
+    def _detect_outline_change_severity() -> str:
+        """
+        Prefer outline diff severity carried by the last outline rewrite.
+        Fallback: use outline-body alignment change_level if present.
+        """
+        payload = state.get("input_payload") or {}
+        diff = payload.get("outline_diff") or {}
+        sev = str(diff.get("severity") or "").lower()
+        if sev in ("trivial", "minor", "moderate", "major"):
+            return sev
+        alignment = payload.get("outline_body_alignment") or {}
+        change_level = str(alignment.get("change_level") or "").lower()
+        if change_level in ("minor", "moderate", "major"):
+            # Normalize to diff severity vocabulary.
+            return "minor" if change_level == "minor" else change_level
+        return "moderate"
+
+    def _max_micro_tune_rounds(severity: str) -> int:
+        # C: trivial/minor = 1, moderate = 2, major = 3
+        if severity in ("trivial", "minor"):
+            return 1
+        if severity == "moderate":
+            return 2
+        if severity == "major":
+            return 3
+        return 2
+
     if action == "consistency_check":
         result = _invoke_phase_structured(
             "Return JSON: issues (list), severity (low|medium|high), pass (bool), summary (string).",
@@ -365,41 +392,103 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
     if action == "polish_chapter":
         if not chapter_text:
             raise ValueError(f"polish_chapter: no text for chapter {chapter}")
+        # Writing micro-tune loop: repeat polish up to C( severity ) rounds,
+        # using quality gate to decide early exit.
+        from app.services.writing_quality import rubric_passes_gate, score_chapter_quality
+        from app.services.artifact_tools import task_artifact_dir
+
         reviews = load_chapter_reviews(task_id)
         rev = (reviews.get("reviews") or {}).get(_chapter_key(chapter)) or {}
-        polish = _invoke_phase_structured(
-            "Return JSON with key polished_text: full revised chapter in Chinese, same header, "
-            "fix issues only, keep plot beats.",
-            {
-                "phase": "polish_chapter",
-                "chapter_index": chapter,
-                "chapter_text": chapter_text[:14000],
-                "review": rev,
-                "outline_for_chapter": outline_slice,
-            },
-        )
-        polished = str(polish.get("polished_text") or "").strip()
-        if len(polished) < 100:
-            raise ValueError("polish_chapter: model returned insufficient text")
-        edit_out = handle_edit_text_artifact(
-            {
-                "task_id": task_id,
-                "filename": body_name,
-                "old_text": chapter_text,
-                "new_text": polished,
-                "replace_all": False,
-            }
-        )
-        ms.body_bytes = int(edit_out.get("bytes") or ms.body_bytes)
+        severity = _detect_outline_change_severity()
+        max_rounds = _max_micro_tune_rounds(severity)
+
+        min_delta_abs = int(getattr(settings, "WRITING_RECONCILE_MIN_PATCH_CHARS", 80))
+        rounds_used = 0
+        gate_passed = False
+        no_progress = False
+        last_polished = ""
+        last_edit_out: dict[str, Any] = {}
+        gate_rubric: dict[str, Any] = {}
+
+        body_path = task_artifact_dir(task_id) / str(body_name)
+        for round_idx in range(1, max_rounds + 1):
+            rounds_used = round_idx
+            # Refresh the latest chapter text for safe incremental edits.
+            body_text = read_body_text(task_id, body_name, state=state)
+            chapter_text = extract_chapter_text(body_text, chapter)
+            if not chapter_text:
+                raise ValueError(f"polish_chapter: no text for chapter {chapter}")
+            prev_text = extract_chapter_text(body_text, chapter - 1) if chapter > 1 else ""
+
+            before_bytes = body_path.stat().st_size if body_path.exists() else 0
+            polish = _invoke_phase_structured(
+                "Return JSON with key polished_text: full revised chapter in Chinese, same header, "
+                "fix issues only, keep plot beats.",
+                {
+                    "phase": "polish_chapter",
+                    "chapter_index": chapter,
+                    "chapter_text": chapter_text[:14000],
+                    "review": rev,
+                    "outline_for_chapter": outline_slice,
+                },
+            )
+            polished = str(polish.get("polished_text") or "").strip()
+            if len(polished) < 100:
+                raise ValueError("polish_chapter: model returned insufficient text")
+
+            edit_out = handle_edit_text_artifact(
+                {
+                    "task_id": task_id,
+                    "filename": body_name,
+                    "old_text": chapter_text,
+                    "new_text": polished,
+                    "replace_all": False,
+                }
+            )
+            ms.body_bytes = int(edit_out.get("bytes") or ms.body_bytes)
+            after_bytes = body_path.stat().st_size if body_path.exists() else before_bytes
+            delta_abs = abs(after_bytes - before_bytes)
+            no_progress = delta_abs < min_delta_abs
+
+            # Heuristic quality gate (avoid extra LLM calls inside the loop).
+            updated_body_text = read_body_text(task_id, body_name, state=state)
+            updated_chapter_text = extract_chapter_text(updated_body_text, chapter)
+            rubric = score_chapter_quality(
+                chapter_text=updated_chapter_text,
+                prev_chapter_text=prev_text,
+                outline_slice=outline_slice or "",
+                story_bible_excerpt=bible,
+                use_llm=False,
+            )
+            gate_rubric = rubric.to_dict()
+            gate_passed = rubric_passes_gate(rubric)
+            last_polished = polished
+            last_edit_out = edit_out
+
+            if gate_passed:
+                break
+            if no_progress and round_idx >= 1 and rounds_used < max_rounds:
+                # Micro-tune produced too small a structural change and gate still fails:
+                # stop early to avoid endless back-and-forth.
+                break
+
         state = mark_phase_done(state, chapter, "polish_chapter")
         return _finish_phase(
             state,
             action,
             chapter,
-            {"polished_chars": len(polished), "edit": edit_out},
+            {
+                "polished_chars": len(last_polished),
+                "edit": last_edit_out,
+                "micro_tune_severity": severity,
+                "micro_tune_rounds": rounds_used,
+                "micro_tune_gate_passed": gate_passed,
+                "micro_tune_no_progress": no_progress,
+                "micro_tune_gate_rubric": gate_rubric,
+            },
             ms,
             tool_results_extra=[
-                {"tool": "edit_text_artifact", "status": "ok", "result": edit_out},
+                {"tool": "edit_text_artifact", "status": "ok", "result": last_edit_out},
             ],
         )
 

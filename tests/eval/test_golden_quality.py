@@ -30,8 +30,10 @@ def test_baseline_files_have_tasks(filename: str) -> None:
 
 
 def test_integration_samples_have_input() -> None:
-    path = _EVAL_DIR / "integration_baseline.json"
+    # integration_baseline.json stores aggregated pass rates (dict keyed by id).
+    # The executable integration samples live in integration_cases.json.
+    path = _EVAL_DIR / "integration_cases.json"
     data = json.loads(path.read_text(encoding="utf-8"))
-    for sample in data.get("tasks") or []:
+    for sample in data.get("cases") or []:
         assert "input" in sample
         assert "expected_status" in sample

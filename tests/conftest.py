@@ -96,6 +96,11 @@ llm:
   circuit_breaker_enabled: false
 context_compress:
   semantic_enabled: false
+react_loop:
+  enabled: false
+  max_steps: 4
+  replan_enabled: true
+  llm_decide: false
 """
     config_path = tmp_data_dir / "config.yaml"
     config_path.write_text(config_content, encoding="utf-8")
@@ -140,6 +145,9 @@ context_compress:
     import app.services.skill_registry as skill_registry_module
     import app.services.mcp_manager as mcp_manager_module
     import app.services.mcp_bridge as mcp_bridge_module
+    import app.services.react_entry as react_entry_module
+    import app.services.react_loop_runner as react_loop_runner_module
+    import app.services.runtime_router as runtime_router_module
 
     for mod in (
         graph_pool_module,
@@ -154,6 +162,9 @@ context_compress:
         skill_registry_module,
         mcp_manager_module,
         mcp_bridge_module,
+        react_entry_module,
+        react_loop_runner_module,
+        runtime_router_module,
     ):
         monkeypatch.setattr(mod, "settings", settings)
     return settings
@@ -245,6 +256,10 @@ def isolated_stores(test_settings: Settings, monkeypatch: pytest.MonkeyPatch) ->
     import app.nodes.mission_observe_node as mission_observe_module
     import app.nodes.mission_eval_node as mission_eval_module
     import app.nodes.mission_finalize_node as mission_finalize_module
+    import app.nodes.react_deliberate_node as react_deliberate_module
+    import app.nodes.react_execute_node as react_execute_module
+    import app.nodes.react_observe_node as react_observe_module
+    import app.nodes.react_finalize_node as react_finalize_module
     import app.services.graph_runner as graph_runner_module
 
     for module in (
@@ -263,6 +278,10 @@ def isolated_stores(test_settings: Settings, monkeypatch: pytest.MonkeyPatch) ->
         mission_observe_module,
         mission_eval_module,
         mission_finalize_module,
+        react_deliberate_module,
+        react_execute_module,
+        react_observe_module,
+        react_finalize_module,
     ):
         monkeypatch.setattr(module, "get_state_store", lambda: state_store)
     monkeypatch.setattr(output_node_module, "get_audit_store", lambda: audit_store)

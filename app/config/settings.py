@@ -412,6 +412,24 @@ class Settings:
         reasoning_cfg = raw.get("reasoning", {})
         self.REASONING_MODE = str(reasoning_cfg.get("mode", "direct")).lower()
 
+        react_cfg = raw.get("react_loop", {})
+        if not isinstance(react_cfg, dict):
+            react_cfg = {}
+        self.REACT_LOOP_ENABLED = _coerce_bool(react_cfg.get("enabled", False))
+        self.REACT_LOOP_MAX_STEPS = int(react_cfg.get("max_steps", 4))
+        self.REACT_LOOP_MAX_STEPS_COMPLEX = int(react_cfg.get("max_steps_complex", 6))
+        self.REACT_LOOP_MAX_REPLAN = int(react_cfg.get("max_replan", 2))
+        self.REACT_LOOP_MAX_FAILURES = int(react_cfg.get("max_failures", 2))
+        self.REACT_LOOP_REPLAN_ENABLED = _coerce_bool(react_cfg.get("replan_enabled", True))
+        self.REACT_LOOP_LLM_DECIDE = _coerce_bool(react_cfg.get("llm_decide", False))
+        allowed_raw = react_cfg.get("allowed_actions")
+        self.REACT_LOOP_ALLOWED_ACTIONS = (
+            [str(a) for a in allowed_raw] if isinstance(allowed_raw, list) else []
+        )
+        self.REACT_ROUTE_RECOMMEND_MIN_CONFIDENCE = float(
+            react_cfg.get("route_recommend_min_confidence", 0.75)
+        )
+
         resource_cfg = raw.get("resource", {})
         self.DEFAULT_TOKEN_BUDGET = int(resource_cfg.get("default_token_budget", 0))
         self.DEFAULT_COST_BUDGET = float(resource_cfg.get("default_cost_budget", 0))

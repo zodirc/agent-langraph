@@ -103,6 +103,25 @@ flowchart TB
 - `write_outline` ⇔ `outline_path` 存在且 `outline_bytes >= MANUSCRIPT_MIN_OUTLINE_CHARS`
 - `append_body` / `write_body` ⇔ `body_path` 存在且 `body_bytes >= MANUSCRIPT_MIN_BODY_CHARS`
 
+### agenda / DAG 扩展（最新）
+
+最近一轮升级后，`work_plan` 不再只被视作「线性懒加载队列」，而是开始向 **dependency-aware agenda** 演进：核心实现位于 [`task_agenda.py`](../app/services/task_agenda.py)。它解决的不是“下一步叫什么”，而是“多个计划项之间能否并行表达依赖、失败后如何阻塞传播、局部重规划如何只重置一段切片”。
+
+当前 agenda 层新增了几类关键能力：
+
+- [`ensure_agenda_fields()`](../app/services/task_agenda.py:16)：把 `depends_on`、`status`、`agenda_version` 规范化，确保旧 `work_plan` 也能升级为 agenda 视图。
+- [`runnable_items()`](../app/services/task_agenda.py:57) / [`select_next_runnable_item()`](../app/services/task_agenda.py:69)：从“只看队头”升级为“找依赖已满足的可运行项”。
+- [`propagate_failure()`](../app/services/task_agenda.py:112)：某个 item 失败后，把依赖它的后继项批量标记为 `blocked`，避免继续执行下游步骤。
+- [`local_replan_slice()`](../app/services/task_agenda.py:233)：只重置失败节点及其受影响分支，而不是把整份 `work_plan` 全量打回重来。
+- [`items_from_plan_steps()`](../app/services/task_agenda.py:148)：可从 planning 产出的自然语言 `plan[]` 构造 agenda item；若 planning 还给出 `tool_dag`，则进一步生成 tool-step DAG，把工具依赖边写进 `depends_on`。
+
+这意味着 Mission control 里的「计划」开始分成两层：
+
+- **控制面 work_plan**：仍然是持久化、resume、checkpoint、UI 展示的主载体。
+- **执行面 agenda**：在其上表达依赖、阻塞、局部重规划与 tool DAG。
+
+因此，当前项目已经不再只有“stepwise 写作队列”，而是具备了把 planning 结果投影成 **agenda + DAG** 的基础能力。对外描述时，更准确的说法应是：Mission Runtime 仍以 `work_plan` 为事实投影，但其内部执行语义已经升级为 **可表达依赖关系的 agenda queue**，而不是纯顺序列表。
+
 ---
 
 ## 输出策略（finalize）

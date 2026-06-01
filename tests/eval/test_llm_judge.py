@@ -6,6 +6,10 @@ from tests.eval.llm_judge import judge_task_state
 
 
 def test_rule_judge_when_model_disabled() -> None:
+    # Make test robust to local env keys/config by forcing model off.
+    from app.config.settings import settings
+
+    settings.MODEL_ENABLED = False
     state = {
         "final_answer": "A detailed answer about the topic.",
         "reasoning_result": {"confidence": 0.8},

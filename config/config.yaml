@@ -333,6 +333,18 @@ reflection:
 reasoning:
   mode: direct   # direct | cot | react
 
+# Self-Routed Deliberation Loop (SRDL) — bounded ReAct in single runtime
+react_loop:
+  enabled: true           # bounded SRDL (受控 ReAct) for complex single-runtime QA
+  max_steps: 4
+  max_steps_complex: 6
+  max_replan: 2
+  max_failures: 2
+  replan_enabled: true
+  llm_decide: false       # when true, uses routing LLM for deliberate (fallback: rules)
+  route_recommend_min_confidence: 0.75
+  # allowed_actions: []   # empty = phase1 + optional phase2 defaults
+
 resource:
   default_token_budget: ${DEFAULT_TOKEN_BUDGET:0}
   default_cost_budget: ${DEFAULT_COST_BUDGET:0}

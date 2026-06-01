@@ -8,6 +8,7 @@ from app.services.retrieval_policy import (
     should_route_to_retrieval_after_planning,
 )
 from app.services.route_audit.apply import writing_gate_allowed
+from app.services.react_entry import should_enter_react_loop
 from app.services.turn_contract import contract_blocks_writing, contract_tool_names
 
 
@@ -69,12 +70,25 @@ def route_after_planning(state: AgentState) -> str:
     if status == TaskStatus.FAILED.value:
         return _failed_route(state, "planning")
 
+    # If the graph is re-invoked from a snapshot where the last node failed
+    # (e.g. tool execution exhausted retries), don't silently restart the normal
+    # planning route and mark the task as completed.
+    if (
+        status == TaskStatus.TOOL_FAILED.value
+        and str(state.get("current_node") or "") == "tool_execution"
+        and state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT
+    ):
+        return "dead_letter"
+
     payload = state.get("input_payload") or {}
     # Main graph stops at planning and hands off to mission_graph (mission_step < 1).
     # Inside mission_act's inline pipeline, mission_step is already bumped — continue.
     if should_use_mission_runtime(payload, str(state.get("execution_mode") or "")):
         if int(state.get("mission_step") or 0) < 1:
             return "end"
+
+    if should_enter_react_loop(state):
+        return "react_deliberate"
 
     plan = state.get("plan") or []
     selected_tools = _effective_selected_tools(state)
