@@ -65,3 +65,46 @@ def test_adapt_tool_calls():
     draft = adapt_raw_response(raw)
     assert draft.content == "章节内容"
     assert draft.source == "tool"
+
+
+def test_adapt_or_retry_thinking_only(monkeypatch):
+    from app.services import llm_gateway as gw
+
+    thinking_only = type(
+        "Msg",
+        (),
+        {
+            "content": [{"type": "thinking", "thinking": "plan only"}],
+            "tool_calls": [],
+        },
+    )()
+    ok = type(
+        "Msg",
+        (),
+        {
+            "content": '{"content": "第一章正文"}',
+            "tool_calls": [],
+        },
+    )()
+
+    calls: list[str] = []
+
+    def fake_sync(llm, *, system, user, preferred):
+        calls.append(preferred)
+        return thinking_only
+
+    def fake_text(llm, system, user):
+        calls.append("json_retry")
+        return ok
+
+    monkeypatch.setattr(gw, "_invoke_artifact_sync", fake_sync)
+    monkeypatch.setattr(gw, "_invoke_text", fake_text)
+
+    draft = gw._adapt_or_retry_thinking_only(
+        object(),
+        system="sys",
+        user="{}",
+        preferred="tool",
+    )
+    assert draft.content == "第一章正文"
+    assert calls == ["tool", "json_retry"]

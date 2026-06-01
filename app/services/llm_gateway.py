@@ -277,6 +277,67 @@ def _writing_system_prompt() -> str:
     )
 
 
+_THINKING_ONLY_RETRY_SYSTEM_SUFFIX = (
+    "\n\nCRITICAL: Your last response had only internal thinking blocks and no usable text. "
+    f"Emit either a `{ARTIFACT_TOOL_NAME}` tool call with full Chinese prose in `content`, "
+    'or exactly one JSON object {"content": "<full chapter or outline text>"}. '
+    "Never reply with thinking-only blocks."
+)
+
+
+def is_thinking_only_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "thinking blocks" in msg or "thinking-only" in msg
+
+
+def _invoke_artifact_sync(
+    llm: Any,
+    *,
+    system: str,
+    user: str,
+    preferred: str,
+) -> Any:
+    """Non-stream invoke (tool-first with json_text fallback on tool errors)."""
+    if preferred == "tool":
+        try:
+            return _invoke_with_tool(llm, system, user)
+        except Exception as exc:
+            message = str(exc).lower()
+            if "timeout" in message or "rate" in message or "529" in message or "503" in message:
+                raise RetryableError(str(exc)) from exc
+            report_status_trace("writing", f"gateway: tool invoke failed ({exc}), fallback json")
+            return _invoke_text(llm, system, user)
+    return _invoke_text(llm, system, user)
+
+
+def _adapt_or_retry_thinking_only(
+    llm: Any,
+    *,
+    system: str,
+    user: str,
+    preferred: str,
+) -> ArtifactDraft:
+    """Parse model output; on thinking-only, one json_text retry (like planning stream fallback)."""
+    try:
+        response = _invoke_artifact_sync(llm, system=system, user=user, preferred=preferred)
+        return adapt_raw_response(response)
+    except ValueError as exc:
+        if not is_thinking_only_error(exc):
+            raise
+        get_metrics_service().inc_contract_event("gateway_thinking_retry")
+        report_status_trace(
+            "writing",
+            "gateway: 模型仅返回 thinking，强制 JSON 正文重试…",
+        )
+        retry_system = system + _THINKING_ONLY_RETRY_SYSTEM_SUFFIX
+        retry_user = (
+            user
+            + '\n\n"output_contract": "emit_visible_json_content_field_only_no_thinking_blocks"'
+        )
+        response = _invoke_text(llm, retry_system, retry_user)
+        return adapt_raw_response(response)
+
+
 @with_retry()
 def _invoke_with_tool(llm: Any, system: str, user: str) -> Any:
     from langchain_core.messages import HumanMessage, SystemMessage
@@ -472,22 +533,12 @@ def invoke_artifact_draft(
             )
 
     report_status_trace("writing", "gateway: invoking model (tool-first)…")
-    try:
-        if preferred == "tool":
-            response = _invoke_with_tool(llm, system, user)
-        else:
-            response = _invoke_text(llm, system, user)
-    except Exception as exc:
-        message = str(exc).lower()
-        if "timeout" in message or "rate" in message or "529" in message or "503" in message:
-            raise RetryableError(str(exc)) from exc
-        if preferred == "tool":
-            report_status_trace("writing", f"gateway: tool invoke failed ({exc}), fallback json")
-            response = _invoke_text(llm, system, user)
-        else:
-            raise
-
-    draft = adapt_raw_response(response)
+    draft = _adapt_or_retry_thinking_only(
+        llm,
+        system=system,
+        user=user,
+        preferred=preferred,
+    )
     if writing_stream_enabled() and draft.content:
         emit_full_content_deltas(fname, draft.content, target_chars=target_chars)
     return draft
