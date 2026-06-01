@@ -114,13 +114,17 @@ def _auto_switch_primary_kind(
     structural: dict[str, bool],
 ) -> tuple[str, float, str | None]:
     """
-    Dynamically promote mixed-scene QA turns to manuscript when writing evidence is strong.
+    Dynamically promote mixed-scene turns to manuscript when writing evidence is strong.
 
-    This avoids single-label lock-in where `qa` suppresses actionable rewrite intents.
+    This avoids single-label lock-in where `qa` / `retry_recovery` suppress rewrite intents.
     """
-    if primary != "qa":
+    if primary not in ("qa", "retry_recovery"):
         return primary, confidence, None
     if structural.get("code_filename_in_tools"):
+        return primary, confidence, None
+    code_score = float(scores.get("code", 0.0))
+    base_score = float(scores.get(primary, 0.0))
+    if code_score >= max(0.3, base_score * 0.7):
         return primary, confidence, None
 
     writing_intent = bool(structural.get("writing_intent_enabled"))
@@ -129,11 +133,15 @@ def _auto_switch_primary_kind(
         or structural.get("manuscript_default_body")
         or structural.get("mission_writing")
     )
+    if bool(structural.get("writing_tools_selected")) and not bool(
+        structural.get("manuscript_body_exists")
+    ):
+        # Tool-only write intent without existing manuscript body is often code artifact flow.
+        return primary, confidence, None
     if not (writing_intent and manuscript_anchor):
         return primary, confidence, None
 
-    qa_score = float(scores.get("qa", 0.0))
     manuscript_score = float(scores.get("manuscript", 0.0))
-    promoted = max(manuscript_score, max(0.45, qa_score + 0.05))
+    promoted = max(manuscript_score, max(0.45, base_score + 0.05))
     scores["manuscript"] = round(promoted, 4)
-    return "manuscript", float(scores["manuscript"]), "qa"
+    return "manuscript", float(scores["manuscript"]), primary

@@ -134,3 +134,29 @@ def test_qa_with_existing_manuscript_allows_writing_sub_intent():
     assert audit["inferred_kind"] == "manuscript"
     assert audit["aligned"] is True
     assert audit["writing_blocked"] is False
+
+
+def test_retry_recovery_with_manuscript_rewrite_auto_switches():
+    state = {
+        "task_id": "t-route-audit-retry-write",
+        "session_id": "s-route-audit-retry-write",
+        "input_payload": {
+            "goal": "重新试试，继续润色并重写这篇小说正文",
+            "writing_intent": {"enabled": True, "action": "write_body"},
+            "manuscript": {"body_path": "novel.txt", "body_bytes": 10119},
+            "session_outcomes": [
+                {"turn": 2, "outcome": "failed", "reason": "route conflict"},
+            ],
+        },
+        "selected_tools": [],
+        "plan": ["rewrite manuscript body"],
+        "skip_retrieval": True,
+        "manuscript": {"body_path": "novel.txt", "body_bytes": 10119},
+    }
+    inferred = infer_task_kind(state)
+    assert inferred["primary_kind"] == "manuscript"
+    assert inferred.get("switched_from") == "retry_recovery"
+    audit = audit_planned_route(state)
+    assert audit["planned_route"] == "writing_manuscript"
+    assert audit["inferred_kind"] == "manuscript"
+    assert audit["aligned"] is True
