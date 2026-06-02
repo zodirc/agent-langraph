@@ -20,7 +20,6 @@ from app.nodes.output_node import output_node
 from app.nodes.policy_node import policy_node
 from app.nodes.rejected_node import rejected_node
 from app.runtime.checkpointer import create_checkpointer
-from app.runtime.langgraphics_wrap import resolve_compiled_graph
 from app.runtime.graph_cache import cached_graph_compiler
 from app.runtime.exploration_router import route_after_explore_prune
 from app.runtime.router import route_after_output_guard, route_after_policy_to_guard
@@ -101,7 +100,7 @@ def run_exploration_graph(
     *,
     thread_id: Optional[str] = None,
 ) -> AgentState:
-    graph = resolve_compiled_graph(get_compiled_exploration_graph, "exploration")
+    graph = get_compiled_exploration_graph()
     config = {"configurable": {"thread_id": thread_id or graph_thread_id(state)}}
     result = graph.invoke(state, config)
     if isinstance(result, dict):
@@ -114,7 +113,7 @@ def stream_exploration_graph(
     *,
     thread_id: Optional[str] = None,
 ) -> Iterator[tuple[str, AgentState]]:
-    graph = resolve_compiled_graph(get_compiled_exploration_graph, "exploration")
+    graph = get_compiled_exploration_graph()
     config = {"configurable": {"thread_id": thread_id or graph_thread_id(state)}}
     latest: AgentState = state
     for chunk in graph.stream(state, config, stream_mode="updates"):

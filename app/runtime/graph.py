@@ -5,7 +5,6 @@ from typing import Any, Iterator, Optional, cast
 from langgraph.graph import END, StateGraph
 
 from app.runtime.checkpointer import create_checkpointer
-from app.runtime.langgraphics_wrap import resolve_compiled_graph
 from app.runtime.graph_cache import cached_graph_compiler
 from app.nodes.dead_letter_node import dead_letter_node
 from app.nodes.human_review_node import human_review_node
@@ -213,7 +212,7 @@ def run_graph(
     thread_id: Optional[str] = None,
 ) -> AgentState:
     """Execute graph until completion or human-review interrupt."""
-    graph = resolve_compiled_graph(get_compiled_graph, "agent")
+    graph = get_compiled_graph()
     config = {"configurable": {"thread_id": thread_id or graph_thread_id(state)}}
     result = graph.invoke(state, config)
     if isinstance(result, dict):
@@ -227,7 +226,7 @@ def resume_graph(
     thread_id: Optional[str] = None,
 ) -> AgentState:
     """Resume graph after human review feedback is attached."""
-    graph = resolve_compiled_graph(get_compiled_graph, "agent")
+    graph = get_compiled_graph()
     config = {"configurable": {"thread_id": thread_id or graph_thread_id(state)}}
     result = graph.invoke(state, config)
     if isinstance(result, dict):
@@ -241,7 +240,7 @@ def stream_graph(
     thread_id: Optional[str] = None,
 ) -> Iterator[tuple[str, AgentState]]:
     """Yield (node_name, state_snapshot) for each completed node."""
-    graph = resolve_compiled_graph(get_compiled_graph, "agent")
+    graph = get_compiled_graph()
     config = {"configurable": {"thread_id": thread_id or graph_thread_id(state)}}
     latest: AgentState = state
 

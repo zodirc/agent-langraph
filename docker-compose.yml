@@ -39,8 +39,6 @@ services:
         condition: service_healthy
     ports:
       - "${HOST_PORT:-8000}:8000"   # 若 8000 被占用：HOST_PORT=8001 docker compose up -d
-      - "${LANGGRAPHICS_PORT:-8764}:8764"   # LangGraphics UI（需 LANGGRAPHICS_ENABLED=true）
-      - "${LANGGRAPHICS_WS_PORT:-8765}:8765"
     environment:
       CONFIG_PATH: /app/config/config.docker.yaml
       APP_ENV: production
@@ -48,11 +46,17 @@ services:
       STORAGE_BACKEND: postgres
       DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/${POSTGRES_DB:-agent}
       CHECKPOINT_BACKEND: postgres
-      # 模型（也可写在 .env）
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
-      MODEL_NAME: ${MODEL_NAME:-claude-sonnet-4-5}
+      # 模型（见 .env.example：MODEL_PROVIDER + 对应厂商 API Key）
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-anthropic}
+      MODEL_NAME: ${MODEL_NAME:-}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
       MODEL_ENABLED: ${MODEL_ENABLED:-true}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      ZHIPUAI_API_KEY: ${ZHIPUAI_API_KEY:-}
       APP_SECRET_KEY: ${APP_SECRET_KEY:-change-me}
       # 生产 compose 默认开启认证（APP_ENV=production + require_in_production）
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
@@ -67,7 +71,6 @@ services:
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       RATE_LIMIT_REDIS: ${RATE_LIMIT_REDIS:-false}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      LANGGRAPHICS_ENABLED: ${LANGGRAPHICS_ENABLED:-false}
     volumes:
       - agent_data:/data   # Chroma 向量库、artifact、日志（不含 SQLite 业务库）
     restart: unless-stopped

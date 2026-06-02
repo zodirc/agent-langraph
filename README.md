@@ -294,7 +294,7 @@ observability:
 ```bash
 cd agent-langraph   # 你的克隆目录
 cp .env.example .env
-# 编辑 .env，至少设置 ANTHROPIC_API_KEY（无 Key 时仍可运行，走本地规则推理）
+# 编辑 .env：MODEL_PROVIDER + 对应 API Key（见 .env.example；无 Key 时走本地规则推理）
 ```
 
 ### 2. 一键启动

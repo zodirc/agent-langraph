@@ -27,7 +27,6 @@ from app.services.reasoning_trace import (
     trace_enabled,
 )
 from app.services.writing_stream import writing_stream_enabled
-from app.runtime.langgraphics_wrap import langgraphics_enabled, langgraphics_status
 from app.services.stream_progress import (
     set_answer_handler,
     set_progress_handler,
@@ -507,26 +506,6 @@ class GraphRunner:
         yield from self._stream_single(state, created=created)
 
     def _stream_single(self, state: AgentState, *, created: bool = True) -> Iterator[str]:
-        lg = langgraphics_status()
-        if langgraphics_enabled():
-            yield _format_stream_event(
-                "langgraphics",
-                {
-                    "task_id": state["task_id"],
-                    "url": lg.get("url"),
-                    "message": "LangGraphics 已启用：请在浏览器打开下方链接，提交任务后可看到节点实时高亮",
-                },
-            )
-        elif lg.get("package_installed") and not lg.get("configured"):
-            yield _format_stream_event(
-                "langgraphics",
-                {
-                    "task_id": state["task_id"],
-                    "url": None,
-                    "message": "LangGraphics 未开启：设置 LANGGRAPHICS_ENABLED=true 并重建容器，然后访问 http://localhost:8764",
-                },
-            )
-
         yield _format_stream_event(
             "task_created",
             {

@@ -5,7 +5,6 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 
 from app.runtime.checkpointer import create_checkpointer
-from app.runtime.langgraphics_wrap import resolve_compiled_graph
 from app.runtime.graph_cache import cached_graph_compiler
 from app.nodes.reasoning_node import reasoning_node
 from app.nodes.retrieval_node import retrieval_node
@@ -51,7 +50,7 @@ get_compiled_worker_graph = cached_graph_compiler(build_worker_graph, compile_fn
 
 def run_worker_graph(state: AgentState) -> AgentState:
     """Execute worker subgraph for a single subtask."""
-    graph = resolve_compiled_graph(get_compiled_worker_graph, "worker")
+    graph = get_compiled_worker_graph()
     config = {"configurable": {"thread_id": state["task_id"]}}
     latest = state
     for chunk in graph.stream(state, config, stream_mode="updates"):

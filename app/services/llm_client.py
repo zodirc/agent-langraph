@@ -498,15 +498,10 @@ def _prefer_keys_for_purpose(purpose: str) -> tuple[str, ...] | None:
 
 
 def _normalize_anthropic_base_url(base_url: str) -> str:
-    """
-    ChatAnthropic appends /v1/messages; strip it if config already points at that path.
-    Direct HTTP probes use the full .../v1/messages URL unchanged.
-    """
-    url = (base_url or "").strip().rstrip("/")
-    suffix = "/v1/messages"
-    if url.endswith(suffix):
-        return url[: -len(suffix)] or url
-    return url
+    """Backward-compatible alias; see ``app.llm.factory.normalize_anthropic_base_url``."""
+    from app.llm.factory import normalize_anthropic_base_url
+
+    return normalize_anthropic_base_url(base_url)
 
 
 def _max_tokens_for_purpose(purpose: str) -> int:
@@ -528,21 +523,26 @@ def _resolve_model_name(budget_ctx: Any | None = None) -> str:
     return settings.MODEL_NAME
 
 
-@lru_cache(maxsize=16)
-def _get_llm_cached(purpose: str, model_name: str, max_tokens: int) -> Any:
+@lru_cache(maxsize=32)
+def _get_llm_cached(
+    purpose: str,
+    provider: str,
+    model_name: str,
+    max_tokens: int,
+) -> Any:
     if not settings.MODEL_ENABLED:
         return None
-    from langchain_anthropic import ChatAnthropic
+    from app.llm.factory import create_chat_model
 
-    return ChatAnthropic(
-        model=model_name,
+    return create_chat_model(
+        provider=provider,
+        model_name=model_name,
         api_key=settings.MODEL_API_KEY,
-        base_url=_normalize_anthropic_base_url(settings.MODEL_BASE_URL) or None,
+        base_url=settings.MODEL_BASE_URL,
         max_tokens=max_tokens,
         temperature=settings.MODEL_TEMPERATURE,
         max_retries=settings.MODEL_MAX_RETRIES,
         timeout=settings.MODEL_TIMEOUT,
-        streaming=True,
     )
 
 
@@ -553,7 +553,7 @@ def get_llm(purpose: str = "default", *, budget_ctx: Any | None = None) -> Any:
     max_tokens = _max_tokens_for_purpose(purpose)
     if budget_ctx is not None and getattr(budget_ctx, "model_downgrade", False):
         max_tokens = min(max_tokens, int(getattr(settings, "BUDGET_DOWNGRADE_MAX_TOKENS", 2048)))
-    return _get_llm_cached(purpose, model_name, max_tokens)
+    return _get_llm_cached(purpose, settings.MODEL_PROVIDER, model_name, max_tokens)
 
 
 # Backward compat for tests that clear LLM cache
@@ -577,6 +577,7 @@ def _cache_key(purpose: str, system_prompt: str, user_content: str) -> str:
             "system_prompt": system_prompt,
             "user_content": user_content,
             "model": settings.MODEL_NAME,
+            "provider": settings.MODEL_PROVIDER,
             "enabled": settings.MODEL_ENABLED,
         },
         ensure_ascii=False,

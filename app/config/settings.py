@@ -69,13 +69,29 @@ class Settings:
             os.environ.get("SECRETS_BACKEND") or str(raw.get("secrets", {}).get("backend", "env"))
         ).lower()
 
+        from app.llm.registry import (
+            default_model_name,
+            normalize_provider_id,
+            resolve_model_api_key,
+            resolve_model_base_url,
+        )
+
         model = raw.get("model", {})
-        self.MODEL_PROVIDER = str(model.get("provider", "anthropic"))
-        self.MODEL_NAME = str(model.get("name", "claude-sonnet-4-5"))
-        self.MODEL_BASE_URL = str(model.get("base_url", "https://api.anthropic.com"))
-        self.MODEL_API_KEY = secrets.get("ANTHROPIC_API_KEY") or secrets.get("MODEL_API_KEY") or str(
-            model.get("api_key", "")
-        ).strip()
+        self.MODEL_PROVIDER = normalize_provider_id(
+            os.environ.get("MODEL_PROVIDER") or str(model.get("provider", "anthropic"))
+        )
+        yaml_api_key = str(model.get("api_key", "")).strip()
+        self.MODEL_API_KEY = resolve_model_api_key(
+            self.MODEL_PROVIDER, secrets, yaml_api_key=yaml_api_key
+        )
+        configured_base = str(model.get("base_url", "")).strip()
+        if os.environ.get("MODEL_BASE_URL"):
+            configured_base = os.environ.get("MODEL_BASE_URL", "").strip()
+        self.MODEL_BASE_URL = resolve_model_base_url(self.MODEL_PROVIDER, configured_base)
+        self.MODEL_NAME = default_model_name(
+            self.MODEL_PROVIDER,
+            os.environ.get("MODEL_NAME") or str(model.get("name", "")),
+        )
         self.MODEL_ENABLED = _coerce_bool(model.get("enabled", True)) and bool(self.MODEL_API_KEY)
         self.MODEL_TEMPERATURE = float(model.get("temperature", 0))
         self.MODEL_MAX_TOKENS = int(model.get("max_tokens", 4096))
@@ -153,22 +169,6 @@ class Settings:
         self.WRITING_PARTIAL_ON_DISCONNECT = _coerce_bool(
             writing_gen.get("partial_commit_on_disconnect", True)
         )
-
-        langgraphics_cfg = raw.get("langgraphics", {})
-        self.LANGGRAPHICS_ENABLED = _coerce_bool(langgraphics_cfg.get("enabled", False))
-        self.LANGGRAPHICS_HOST = str(langgraphics_cfg.get("host", "127.0.0.1"))
-        self.LANGGRAPHICS_PORT = int(langgraphics_cfg.get("port", 8764))
-        self.LANGGRAPHICS_WS_PORT = int(langgraphics_cfg.get("ws_port", 8765))
-        self.LANGGRAPHICS_OPEN_BROWSER = _coerce_bool(
-            langgraphics_cfg.get("open_browser", True)
-        )
-        self.LANGGRAPHICS_DIRECTION = str(langgraphics_cfg.get("direction", "TB"))
-        self.LANGGRAPHICS_MODE = str(langgraphics_cfg.get("mode", "auto"))
-        self.LANGGRAPHICS_INSPECT = str(langgraphics_cfg.get("inspect", "tree"))
-        self.LANGGRAPHICS_PUBLIC_HOST = str(
-            langgraphics_cfg.get("public_host")
-            or os.environ.get("LANGGRAPHICS_PUBLIC_HOST", "")
-        ).strip()
 
         self.LLM_RETRY_BASE_DELAY = float(performance.get("llm_retry_base_delay", 0.5))
         self.DB_SAVE_MAX_RETRIES = int(performance.get("db_save_max_retries", 3))

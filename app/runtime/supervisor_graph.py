@@ -5,7 +5,6 @@ from typing import Any, Iterator, Optional, cast
 from langgraph.graph import END, StateGraph
 
 from app.runtime.checkpointer import create_checkpointer
-from app.runtime.langgraphics_wrap import resolve_compiled_graph
 from app.runtime.graph_cache import cached_graph_compiler
 from app.nodes.human_review_node import human_review_node
 from app.nodes.memory_writeback_node import memory_writeback_node
@@ -85,7 +84,7 @@ def resume_supervisor_graph(
     *,
     thread_id: Optional[str] = None,
 ) -> AgentState:
-    graph = resolve_compiled_graph(get_compiled_supervisor_graph, "supervisor")
+    graph = get_compiled_supervisor_graph()
     config = {"configurable": {"thread_id": thread_id or state["task_id"]}}
     result = graph.invoke(state, config)
     if isinstance(result, dict):
@@ -98,7 +97,7 @@ def run_supervisor_graph(
     *,
     thread_id: Optional[str] = None,
 ) -> AgentState:
-    graph = resolve_compiled_graph(get_compiled_supervisor_graph, "supervisor")
+    graph = get_compiled_supervisor_graph()
     config = {"configurable": {"thread_id": thread_id or state["task_id"]}}
     result = graph.invoke(state, config)
     if isinstance(result, dict):
@@ -112,7 +111,7 @@ def stream_supervisor_graph(
     thread_id: Optional[str] = None,
 ) -> Iterator[tuple[str, AgentState]]:
     """Yield (node_name, state_snapshot) for supervisor graph execution."""
-    graph = resolve_compiled_graph(get_compiled_supervisor_graph, "supervisor")
+    graph = get_compiled_supervisor_graph()
     config = {"configurable": {"thread_id": thread_id or state["task_id"]}}
     latest: AgentState = state
 

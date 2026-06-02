@@ -2,11 +2,13 @@
 # Docker Compose 部署请改 config.docker.yaml（CONFIG_PATH=/app/config/config.docker.yaml）。
 
 model:
-  provider: anthropic
-  name: ${MODEL_NAME:claude-sonnet-4-5}
-  # LangChain 会自动拼 /v1/messages；勿重复写后缀（代码也会自动剥离）
-  base_url: ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
-  api_key: ${ANTHROPIC_API_KEY:}
+  # anthropic | openai | deepseek | glm | openai_compat（自定义 OpenAI 兼容代理）
+  provider: ${MODEL_PROVIDER:anthropic}
+  name: ${MODEL_NAME:}
+  # 留空则按 provider 使用默认 base_url；也可用 MODEL_BASE_URL 覆盖
+  base_url: ${MODEL_BASE_URL:}
+  # 密钥优先读各厂商环境变量（见 .env.example），其次 MODEL_API_KEY
+  api_key: ${MODEL_API_KEY:}
   enabled: ${MODEL_ENABLED:true}
   temperature: 0
   max_tokens: 8192
@@ -124,19 +126,6 @@ performance:
     buffer_stall_trace_chars: 8000      # 超过且 content 未出时附带诊断前缀
     buffer_stall_preview_chars: 200
     partial_commit_on_disconnect: true  # 断流时若有 partial content 则提交
-
-# LangGraphics — live LangGraph graph UI (https://github.com/proactive-agent/langgraphics)
-# Requires Python >=3.10 and: pip install "langgraphics>=0.1.0b3"
-langgraphics:
-  enabled: false
-  host: 127.0.0.1
-  public_host: localhost
-  port: 8764
-  ws_port: 8765
-  open_browser: true
-  direction: TB   # TB | LR
-  mode: auto      # auto | manual
-  inspect: tree   # off | tree | full
 
 mission:
   auto_from_planning: true              # 规划 LLM 可自动写入 mission 合同（可被显式覆盖）

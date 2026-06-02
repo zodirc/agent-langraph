@@ -45,7 +45,6 @@
 | AgentState Pydantic | **beta** | partial | ✅ | 顶层模型 + 图边界校验 + `ci_mypy.sh` |
 | A2A registry + HTTP forward | **beta** | on | ✅ | `a2a.http_forward_enabled` |
 | LangSmith tracing | **experimental** | off | ✅ | `observability.langsmith_enabled` |
-| LangGraphics live UI | **experimental** | off | ✅ | `langgraphics.enabled` |
 | Celery queue | **beta** | off | ✅ | `queue.backend=memory` default |
 | OCR / multimodal anti-hallucination | **experimental** | — | ❌ | 未实现 |
 | PG HA (Patroni/pgpool) | **experimental** | — | ❌ | 无 failover 集成测试 |

@@ -6,7 +6,6 @@ from app.config.settings import settings
 from app.services.health_checks import run_all_checks
 from app.services.knowledge_store import get_knowledge_store
 from app.services.tool_registry import get_tool_registry
-from app.runtime.langgraphics_wrap import langgraphics_status
 
 router = APIRouter(tags=["health"])
 
@@ -49,6 +48,5 @@ def health_full() -> dict[str, object]:
         "queue_backend": settings.QUEUE_BACKEND,
         "rate_limit_enabled": settings.RATE_LIMIT_ENABLED,
         "secrets_backend": settings.SECRETS_BACKEND,
-        "langgraphics": langgraphics_status(),
         "checks": checks["checks"],
     }

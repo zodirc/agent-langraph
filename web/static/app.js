@@ -4,9 +4,6 @@ const inputEl = document.getElementById("command-input");
 const stopBtnEl = document.getElementById("stop-btn");
 const envBadge = document.getElementById("env-badge");
 const sessionBadgeEl = document.getElementById("session-badge");
-const langgraphicsMetaEl = document.getElementById("langgraphics-meta");
-const langgraphicsLinkEl = document.getElementById("langgraphics-link");
-const langgraphicsFrameEl = document.getElementById("langgraphics-frame");
 const flowMetaEl = document.getElementById("flow-meta");
 const flowTaskEl = document.getElementById("flow-task");
 const flowGraphEl = document.getElementById("flow-graph");
@@ -648,7 +645,6 @@ function updateSessionBadge(sessionId) {
   const short = `${id.slice(0, 8)}…`;
   sessionBadgeEl.textContent = `session ${short}`;
   sessionBadgeEl.title = `会话 ID（完整）: ${id}\n/new 可开启新会话`;
-  updateLanggraphicsPanel();
 }
 
 function applyTheme(theme) {
@@ -658,59 +654,6 @@ function applyTheme(theme) {
   if (themeSelectEl) themeSelectEl.value = t;
   localStorage.setItem(THEME_KEY, t);
   syncFlowPopup();
-}
-
-function buildSessionLanggraphicsUrl(baseUrl, sessionId) {
-  if (!baseUrl) return "";
-  try {
-    const url = new URL(baseUrl, window.location.origin);
-    const lgHost = (url.hostname || "").trim().toLowerCase();
-    const pageHost = (window.location.hostname || "").trim();
-    const loopbackHosts = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
-
-    // If backend exposes a loopback host, rewrite to the current page host.
-    // This keeps ports/path from LangGraphics while adapting host to deployment access path.
-    if (loopbackHosts.has(lgHost) && pageHost) {
-      url.hostname = pageHost;
-    }
-    // Current LangGraphics deployment is global on port 8764 and does not
-    // support session-specific query routing.
-    url.searchParams.delete("session_id");
-    return url.toString();
-  } catch {
-    return baseUrl;
-  }
-}
-
-function updateLanggraphicsPanel() {
-  if (!langgraphicsMetaEl || !langgraphicsLinkEl || !langgraphicsFrameEl) return;
-  const baseUrl = window.__langgraphicsUrl || "";
-  const sessionId = localStorage.getItem(SESSION_KEY) || "";
-  const sessionUrl = buildSessionLanggraphicsUrl(baseUrl, sessionId);
-  if (!sessionUrl) {
-    langgraphicsMetaEl.textContent = "LangGraphics 未开启或未配置";
-    langgraphicsLinkEl.hidden = true;
-    langgraphicsFrameEl.hidden = true;
-    langgraphicsFrameEl.removeAttribute("src");
-    return;
-  }
-  const short = `${sessionId.slice(0, 8)}…`;
-  let hostInfo = "";
-  try {
-    hostInfo = new URL(sessionUrl).host;
-  } catch {
-    hostInfo = "";
-  }
-  langgraphicsMetaEl.textContent = hostInfo
-    ? `当前会话: ${short} | 图地址: ${hostInfo} (全局图)`
-    : `当前会话: ${short} (全局图)`;
-  langgraphicsLinkEl.hidden = false;
-  langgraphicsLinkEl.href = sessionUrl;
-  langgraphicsLinkEl.textContent = "在新窗口打开会话图";
-  if (langgraphicsFrameEl.getAttribute("src") !== sessionUrl) {
-    langgraphicsFrameEl.src = sessionUrl;
-  }
-  langgraphicsFrameEl.hidden = false;
 }
 
 function startNewSession() {
@@ -1115,57 +1058,14 @@ function setRunning(value) {
   updateStopButtonState();
 }
 
-function formatLanggraphicsHealth(lg) {
-  if (!lg) return "";
-  if (lg.enabled && lg.url) {
-    return ` | LG:${lg.url}`;
-  }
-  if (lg.package_installed && !lg.configured) {
-    return " | LG:off(LANGGRAPHICS_ENABLED=false)";
-  }
-  if (!lg.package_installed) {
-    return " | LG:未安装";
-  }
-  return "";
-}
-
-async function showLanggraphicsHelp() {
-  try {
-    const res = await fetch("/health");
-    const data = await res.json();
-    const lg = data.langgraphics || {};
-    if (lg.enabled && lg.url) {
-      appendLine(`LangGraphics 已启用: ${lg.url}`, "system");
-      appendLine("  先打开链接，再提交任务；执行时节点会高亮。", "system");
-      return;
-    }
-    if (lg.package_installed) {
-      appendLine("LangGraphics 包已安装，但未开启。", "system");
-      appendLine("  Docker: 在 .env 设 LANGGRAPHICS_ENABLED=true", "system");
-      appendLine("  然后: HOST_PORT=8001 docker compose up -d --build", "system");
-      appendLine("  浏览器: http://localhost:8764", "system");
-      return;
-    }
-    appendLine("LangGraphics 未安装（需 Python>=3.10，见 docs/LANGGRAPHICS.md）", "system");
-  } catch (e) {
-    appendLine(`langgraphics status failed: ${e}`, "error");
-  }
-}
-
 async function fetchHealth() {
   try {
     const res = await fetch("/health");
     const data = await res.json();
-    const lg = data.langgraphics || {};
-    healthBadgeBase = `${data.env} | auth:${data.auth_enabled} | kb:${data.knowledge_docs}${formatLanggraphicsHealth(lg)}`;
+    healthBadgeBase = `${data.env} | auth:${data.auth_enabled} | kb:${data.knowledge_docs}`;
     if (!running) envBadge.textContent = healthBadgeBase;
-    if (lg.enabled && lg.url) {
-      window.__langgraphicsUrl = lg.url;
-    }
-    updateLanggraphicsPanel();
   } catch {
     envBadge.textContent = "offline";
-    updateLanggraphicsPanel();
   }
 }
 
@@ -1690,17 +1590,6 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
     }
   } else if (eventType === "worker") {
     appendLine(`  worker ${payload.domain}: ${payload.status} — ${payload.summary || ""}`, "node");
-  } else if (eventType === "langgraphics") {
-    // Avoid repeating LangGraphics setup hints on every session turn / resume.
-    if (payload.continued) return;
-    const msg = payload.message || "";
-    if (msg) appendLine(msg, "system");
-    if (payload.url) {
-      window.__langgraphicsUrl = payload.url;
-      updateLanggraphicsPanel();
-      appendLine(`LangGraphics UI: ${payload.url}`, "system");
-      appendLine("  （需在提交任务后才会出现节点动画；仅打开页面而无任务时可能为空图）", "system");
-    }
   } else if (eventType === "progress") {
     updateProgressLine(payload);
   } else if (eventType === "trace") {
@@ -1952,7 +1841,6 @@ function printHelp() {
   appendLine("  /reject <id>     Reject human review", "system");
   appendLine("  /supervisor <text>  Multi-agent supervisor task (SSE)", "system");
   appendLine("  /risk high <text> Run high-risk task (triggers review)", "system");
-  appendLine("  /langgraphics       显示 LangGraph 可视化地址与开启说明（可选）", "system");
   appendLine("  /login <user> <pass>  Obtain JWT (when auth enabled)", "system");
   appendLine("  /logout           Clear stored token", "system");
 }
@@ -2028,10 +1916,6 @@ async function handleCommand(raw) {
   if (text === "/logout") {
     localStorage.removeItem(TOKEN_KEY);
     appendLine("logged out", "system");
-    return;
-  }
-  if (text === "/langgraphics" || text.startsWith("/langgraphics ")) {
-    await showLanggraphicsHelp();
     return;
   }
   if (text.startsWith("/login")) {
