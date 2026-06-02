@@ -16,7 +16,7 @@ COPY config/ ./config/
 COPY web/ ./web/
 COPY knowledge/ ./knowledge/
 
-RUN mkdir -p /data/db /data/vectorstore /data/logs /data/code_verify
+RUN mkdir -p /data/db /data/vectorstore /data/logs /data/code_verify /data/models/sentence-transformers
 
 # 与 docker-compose.yml 一致；宿主机通过 -e / --env-file 覆盖
 ENV CONFIG_PATH=/app/config/config.docker.yaml \

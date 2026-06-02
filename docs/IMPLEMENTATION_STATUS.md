@@ -317,6 +317,7 @@ pytest tests/services/test_react_entry.py tests/services/test_react_loop_runner.
 
 | 日期 | 说明 |
 |------|------|
+| 2026-06-02 | 检索链路优化：`knowledge.top_k` 提升到 8、默认启用 lexical rerank、关键词检索升级为 BM25 + CJK token（含中文 bigram）、`fetch_k_multiplier` 扩候选池、向量检索前置 tenant/domain 过滤、`max_chunks_per_doc` 去重；文档见 `docs/RETRIEVAL_OPTIMIZATION.md`。 |
 | 2026-06-02 | 近 3 次提交增量对齐：① mission/tools 会话文件工具集（grep/replace/touch/mkdir/ls/read/write/append/move/copy/rm 两阶段 dry_run token）；② Writing Pack 工具白名单扩展 + mission 工具型 work item（`patch_recent_chapter`/`consistency_check`）可选自动注入（`auto_tool_injection` 默认 false，`work_item.params.auto_tools` 可覆盖）；③ Web CLI 增加会话文件侧栏、目录导航/面包屑、双击文件实时预览与保存编辑接口。 |
 | 2026-06-02 | 新增 Web UI 现代化方案文档 `WEB_UI_MODERNIZATION.md`（待实施） |
 | 2026-06-01 | 对齐近期代码：SRDL、turn_event_log、agenda / DAG、confirmation gates、execution grant、route audit、reasoning isolation |

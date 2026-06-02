@@ -24,4 +24,4 @@ pytest-asyncio>=0.24.0
 mypy>=1.8.0
 
 # Optional: RAG cross-encoder rerank (rag.rerank_backend=cross_encoder)
-# sentence-transformers>=3.0.0
+sentence-transformers>=3.0.0

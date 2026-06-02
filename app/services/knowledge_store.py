@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import re
 from app.services.sqlite_compat import sqlite3
 import uuid
 from pathlib import Path
@@ -12,6 +14,7 @@ from app.services.db import ensure_embedding_meta_table, postgres_connection, us
 from app.services.embedding_service import embed_text
 
 logger = logging.getLogger(__name__)
+_TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 
 
 def _current_tenant_id() -> Optional[str]:
@@ -56,6 +59,19 @@ def _domain_matches(metadata: dict[str, Any], domains: Optional[set[str]]) -> bo
     if not domains:
         return True
     return _doc_domain(metadata) in domains
+
+
+def _tokenize_text(text: str) -> list[str]:
+    tokens: list[str] = []
+    for raw in _TOKEN_RE.findall((text or "").lower()):
+        item = raw.strip()
+        if not item:
+            continue
+        tokens.append(item)
+        if any("\u4e00" <= ch <= "\u9fff" for ch in item) and len(item) > 1:
+            # CJK bigrams improve recall for no-space Chinese queries.
+            tokens.extend(item[i : i + 2] for i in range(len(item) - 1))
+    return tokens
 
 
 class _ChromaVectorIndex:
@@ -387,22 +403,52 @@ class KnowledgeStore:
         domains: Optional[set[str]] = None,
     ) -> list[dict[str, Any]]:
         limit = top_k or settings.RETRIEVAL_TOP_K
-        tokens = [t.lower() for t in query.split() if t.strip()]
+        query_tokens = _tokenize_text(query)
         rows = self._fetchall("SELECT * FROM knowledge_docs")
+        filtered_rows: list[Any] = []
+        corpus_tokens: list[list[str]] = []
+        doc_freq: dict[str, int] = {}
+        avg_doc_len = 0.0
 
-        scored: list[dict[str, Any]] = []
         for row in rows:
             meta = json.loads(row["metadata"])
             if not _tenant_matches(meta):
                 continue
             if not _domain_matches(meta, domains):
                 continue
-            haystack = f"{row['title']} {row['content']}".lower()
-            if not tokens:
-                score = 0.1
+            filtered_rows.append(row)
+            row_tokens = _tokenize_text(f"{row['title']} {row['content']}")
+            corpus_tokens.append(row_tokens)
+            avg_doc_len += len(row_tokens)
+            for token in set(row_tokens):
+                doc_freq[token] = doc_freq.get(token, 0) + 1
+
+        doc_count = max(len(filtered_rows), 1)
+        avg_doc_len = (avg_doc_len / doc_count) if filtered_rows else 1.0
+        bm25_k1 = float(getattr(settings, "RAG_BM25_K1", 1.5))
+        bm25_b = float(getattr(settings, "RAG_BM25_B", 0.75))
+
+        scored: list[dict[str, Any]] = []
+        for idx, row in enumerate(filtered_rows):
+            meta = json.loads(row["metadata"])
+            row_tokens = corpus_tokens[idx]
+            if not query_tokens:
+                score = 0.05
             else:
-                score = sum(1 for token in tokens if token in haystack) / len(tokens)
-            if tokens and score <= 0:
+                token_tf: dict[str, int] = {}
+                for t in row_tokens:
+                    token_tf[t] = token_tf.get(t, 0) + 1
+                score = 0.0
+                row_len = max(len(row_tokens), 1)
+                for token in query_tokens:
+                    tf = token_tf.get(token, 0)
+                    if tf <= 0:
+                        continue
+                    df = doc_freq.get(token, 0)
+                    idf = math.log(1.0 + ((doc_count - df + 0.5) / (df + 0.5)))
+                    denom = tf + bm25_k1 * (1.0 - bm25_b + bm25_b * (row_len / avg_doc_len))
+                    score += idf * ((tf * (bm25_k1 + 1.0)) / max(denom, 1e-8))
+            if query_tokens and score <= 0:
                 continue
             scored.append(
                 {
@@ -428,9 +474,10 @@ class KnowledgeStore:
         if not self._vector or not self._vector.available:
             return []
         hits = self._vector.search(query, limit)
+        filtered = [h for h in hits if _tenant_matches(h.get("metadata") or {})]
         if not domains:
-            return hits
-        return [h for h in hits if _domain_matches(h.get("metadata") or {}, domains)]
+            return filtered
+        return [h for h in filtered if _domain_matches(h.get("metadata") or {}, domains)]
 
     def search(
         self,
@@ -557,7 +604,10 @@ class KnowledgeStore:
         domains: Optional[set[str]] = None,
     ) -> list[dict[str, Any]]:
         limit = top_k or settings.RETRIEVAL_TOP_K
-        fetch_k = max(limit, settings.RAG_RERANK_CANDIDATE_K) if settings.RAG_RERANK_ENABLED else limit
+        multiplier = max(1, int(getattr(settings, "RAG_FETCH_K_MULTIPLIER", 4)))
+        fetch_k = limit * multiplier
+        if settings.RAG_RERANK_ENABLED:
+            fetch_k = max(fetch_k, settings.RAG_RERANK_CANDIDATE_K)
         self._check_embedding_compatibility()
         vector_hits = self.vector_search(query, top_k=fetch_k, domains=domains)
         keyword_hits = self.keyword_search(query, top_k=fetch_k, domains=domains)
@@ -572,9 +622,7 @@ class KnowledgeStore:
             from app.services.reranker import rerank
 
             merged = rerank(query, merged, top_k=limit)
-        merged = [h for h in merged if _tenant_matches(h.get("metadata") or {})]
-        if domains:
-            merged = [h for h in merged if _domain_matches(h.get("metadata") or {}, domains)]
+        merged = _limit_per_doc(merged, max_per_doc=int(getattr(settings, "RAG_MAX_CHUNKS_PER_DOC", 2)))
         return merged[:limit]
 
     def count(self) -> int:
@@ -604,6 +652,22 @@ def _rrf_merge(
         doc = dict(docs[doc_id])
         doc["rrf_score"] = score
         result.append(doc)
+    return result
+
+
+def _limit_per_doc(hits: list[dict[str, Any]], *, max_per_doc: int) -> list[dict[str, Any]]:
+    if max_per_doc <= 0:
+        return hits
+    seen: dict[str, int] = {}
+    result: list[dict[str, Any]] = []
+    for hit in hits:
+        meta = hit.get("metadata") if isinstance(hit.get("metadata"), dict) else {}
+        group = str(meta.get("parent_doc_id") or hit.get("doc_id") or "")
+        count = seen.get(group, 0)
+        if count >= max_per_doc:
+            continue
+        seen[group] = count + 1
+        result.append(hit)
     return result
 
 

@@ -270,6 +270,11 @@ class Settings:
         }
         self.QDRANT_URL = str(knowledge.get("qdrant_url", "")).strip()
         self.QDRANT_PATH = str(knowledge.get("qdrant_path", "")).strip()
+        self.LOCAL_EMBEDDING_MODEL_NAME = str(
+            knowledge.get("local_embedding_model_name", "sentence-transformers/all-MiniLM-L6-v2")
+        ).strip()
+        self.LOCAL_EMBEDDING_DEVICE = str(knowledge.get("local_embedding_device", "cpu")).strip()
+        self.LOCAL_EMBEDDING_CACHE_DIR = str(knowledge.get("local_embedding_cache_dir", "")).strip()
 
         rag = raw.get("rag", {})
         if not isinstance(rag, dict):
@@ -288,6 +293,10 @@ class Settings:
         self.RAG_RERANK_MODEL = str(rag.get("rerank_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"))
         self.RAG_COHERE_API_KEY = secrets.get("COHERE_API_KEY") or str(rag.get("cohere_api_key", "")).strip()
         self.RAG_COHERE_RERANK_MODEL = str(rag.get("cohere_rerank_model", "rerank-english-v3.0"))
+        self.RAG_BM25_K1 = float(rag.get("bm25_k1", 1.5))
+        self.RAG_BM25_B = float(rag.get("bm25_b", 0.75))
+        self.RAG_FETCH_K_MULTIPLIER = int(rag.get("fetch_k_multiplier", 4))
+        self.RAG_MAX_CHUNKS_PER_DOC = int(rag.get("max_chunks_per_doc", 2))
         self.RAG_EVAL_RECALL_AT_K = int(rag.get("eval_recall_at_k", 5))
         self.RAG_EVAL_MIN_RECALL = float(rag.get("eval_min_recall", 0.8))
         self.RAG_EVAL_MIN_MRR = float(rag.get("eval_min_mrr", 0.5))

@@ -41,12 +41,25 @@ app:
 knowledge:
   backend: chroma
   content_dir: knowledge
-  embedding_model: default
+  embedding_model: local_minilm
   embedding_api_key: ${VOYAGE_API_KEY:}
-  top_k: 3
+  local_embedding_model_name: sentence-transformers/all-MiniLM-L6-v2
+  local_embedding_device: cpu
+  local_embedding_cache_dir: /data/models/sentence-transformers
+  top_k: 8
   similarity_threshold: 0.3
   collection_name: agent_knowledge
   qdrant_path: /data/vectorstore/qdrant
+
+rag:
+  rerank_enabled: true
+  rerank_backend: lexical
+  rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+  rerank_candidate_k: 24
+  fetch_k_multiplier: 4
+  bm25_k1: 1.5
+  bm25_b: 0.75
+  max_chunks_per_doc: 2
 
 auth:
   # Compose 默认 APP_ENV=production；生产应开启认证（compose 默认 AUTH_ENABLED=true）

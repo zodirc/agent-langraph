@@ -59,7 +59,7 @@ export SERVICE_API_KEY=your-service-key
 - `POST /knowledge/documents` — SQLite + 向量索引（Chroma / Qdrant）
 - `GET /knowledge/search?q=...&mode=hybrid|vector|keyword`
 - 配置 `knowledge.backend`: `chroma` | `qdrant`
-- 配置 `knowledge.embedding_model`: `voyage-3`（需 `VOYAGE_API_KEY`）或 `default`（本地确定性向量）
+- 配置 `knowledge.embedding_model`: `voyage-3`（需 `VOYAGE_API_KEY`）、`local_minilm`（容器内本地模型）或 `default`（本地确定性向量兜底）
 
 ## 核心 API
 
@@ -120,6 +120,7 @@ export SERVICE_API_KEY=your-service-key
 | [`docs/CONFIRMATION_GATES.md`](docs/CONFIRMATION_GATES.md) | Intent / Outcome 双阶段确认门闸、预览策略、gate registry |
 | [`docs/MISSION_EXECUTION_CONTROL.md`](docs/MISSION_EXECUTION_CONTROL.md) | execution grant、pause_reason、resume / steer 控制面 |
 | [`docs/SESSION_TURN_POLICY.md`](docs/SESSION_TURN_POLICY.md) | session turn 规划闸门、机械续写、mission active 场景决策 |
+| [`docs/RETRIEVAL_OPTIMIZATION.md`](docs/RETRIEVAL_OPTIMIZATION.md) | 知识检索优化：BM25、CJK token、候选扩展、rerank 默认开启 |
 | [`docs/CODE_ARTIFACT_PIPELINE.md`](docs/CODE_ARTIFACT_PIPELINE.md) | 编译校验、stderr 驱动 LLM 修复、composed_at_end 流式 |
 | [`docs/DISPLAY_AND_DELIVERY.md`](docs/DISPLAY_AND_DELIVERY.md) | 代码缩进保留、流式 artifacts、delivery 与记忆写回门控 |
 | [`docs/WEB_UI_MODERNIZATION.md`](docs/WEB_UI_MODERNIZATION.md) | Web 对话界面现代化（React/Vite、Docker 构建、分阶段实施） |

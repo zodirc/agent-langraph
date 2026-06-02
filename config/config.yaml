@@ -43,9 +43,12 @@ knowledge:
     common: knowledge/common
     code: knowledge/code
     writing: knowledge/writing
-  embedding_model: voyage-3   # voyage-3 | default (local hash fallback)
+  embedding_model: voyage-3   # voyage-3 | local_minilm | default (local hash fallback)
   embedding_api_key: ${VOYAGE_API_KEY}
-  top_k: 3
+  local_embedding_model_name: sentence-transformers/all-MiniLM-L6-v2
+  local_embedding_device: cpu
+  local_embedding_cache_dir: ./data/models/sentence-transformers
+  top_k: 8
   similarity_threshold: 0.3
   collection_name: agent_knowledge
   qdrant_url: ${QDRANT_URL:}
@@ -483,10 +486,14 @@ context_compress:
   min_ratio: 0.5   # CI gate: mean compression ratio must be >= this for long histories
 
 rag:
-  rerank_enabled: false
+  rerank_enabled: true
   rerank_backend: lexical          # lexical | cross_encoder | cohere
   rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
-  rerank_candidate_k: 15
+  rerank_candidate_k: 24
+  fetch_k_multiplier: 4
+  bm25_k1: 1.5
+  bm25_b: 0.75
+  max_chunks_per_doc: 2
   cohere_api_key: ${COHERE_API_KEY:}
   cohere_rerank_model: rerank-english-v3.0
   citation_enabled: false

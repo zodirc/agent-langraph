@@ -10,10 +10,11 @@ import httpx
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
+_sentence_transformer_model: Any = None
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Generate embeddings (Voyage API or deterministic local fallback)."""
+    """Generate embeddings (Voyage API, local MiniLM, or deterministic fallback)."""
     if not texts:
         return []
     model = settings.EMBEDDING_MODEL.lower()
@@ -22,6 +23,11 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
             return _voyage_embed(texts, model)
         except Exception as exc:
             logger.warning("Voyage embedding failed, using local fallback: %s", exc)
+    if model in ("local_minilm", "all-minilm-l6-v2", "mini_lm"):
+        try:
+            return _local_minilm_embed(texts)
+        except Exception as exc:
+            logger.warning("Local MiniLM embedding failed, using hash fallback: %s", exc)
     return [_local_embedding(text) for text in texts]
 
 
@@ -54,6 +60,32 @@ def _local_embedding(text: str, dim: int = 384) -> list[float]:
         values.append((byte / 255.0) * 2.0 - 1.0)
     norm = math.sqrt(sum(v * v for v in values)) or 1.0
     return [v / norm for v in values]
+
+
+def _get_sentence_transformer():
+    global _sentence_transformer_model
+    if _sentence_transformer_model is not None:
+        return _sentence_transformer_model
+    from sentence_transformers import SentenceTransformer
+
+    model_name = settings.LOCAL_EMBEDDING_MODEL_NAME or "sentence-transformers/all-MiniLM-L6-v2"
+    _sentence_transformer_model = SentenceTransformer(
+        model_name,
+        device=settings.LOCAL_EMBEDDING_DEVICE or "cpu",
+        cache_folder=settings.LOCAL_EMBEDDING_CACHE_DIR or None,
+    )
+    return _sentence_transformer_model
+
+
+def _local_minilm_embed(texts: list[str]) -> list[list[float]]:
+    model = _get_sentence_transformer()
+    vectors = model.encode(
+        texts,
+        normalize_embeddings=True,
+        convert_to_numpy=True,
+        show_progress_bar=False,
+    )
+    return [vec.astype(float).tolist() for vec in vectors]
 
 
 class EmbeddingFunction:
