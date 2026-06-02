@@ -24,4 +24,7 @@ pytest-asyncio>=0.24.0
 mypy>=1.8.0
 
 # Optional: RAG cross-encoder rerank (rag.rerank_backend=cross_encoder)
+# Docker 镜像在 Dockerfile 中预装 CPU 版 torch；本地 Linux 若只要 CPU：
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt
 sentence-transformers>=3.0.0

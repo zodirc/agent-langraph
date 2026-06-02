@@ -12,6 +12,8 @@
 
 services:
   agent:
+    ports:
+      - "${HOST_PORT:-8001}:8000"
     environment:
       APP_ENV: development
       AUTH_ENABLED: ${AUTH_ENABLED:-false}
@@ -31,3 +33,5 @@ services:
       - --reload
       - --reload-dir
       - /app/app
+  caddy:
+    profiles: ["prod"]

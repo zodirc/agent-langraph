@@ -1,0 +1,9 @@
+{
+  # Use internal CA for localhost/self-host scenarios.
+  local_certs
+}
+
+{$PUBLIC_DOMAIN:localhost} {
+  encode gzip
+  reverse_proxy agent:8000
+}

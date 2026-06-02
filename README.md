@@ -15,8 +15,8 @@ HOST_PORT=8001 docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 
 | 入口 | 说明 |
 |------|------|
-| **Web CLI** | http://localhost:8000/ |
-| **监控面板** | http://localhost:8000/dashboard |
+| **Web CLI** | https://localhost/（生产 compose）/ http://localhost:8001/（dev compose） |
+| **监控面板** | https://localhost/dashboard（生产 compose）/ http://localhost:8001/dashboard（dev compose） |
 | **独立 CLI** | `python -m app.cli --local run "你的任务"` |
 | **HTTP API** | 见下方 API 列表 |
 | **Scheduler** | `POST /schedules`（Cron） |
@@ -310,10 +310,10 @@ docker compose up -d --build
 
 | 地址 | 说明 |
 |------|------|
-| http://localhost:8000/ | Web CLI（提交任务） |
-| http://localhost:8000/dashboard | 监控面板 |
-| http://localhost:8000/health | 健康检查 |
-| http://localhost:8000/docs | OpenAPI 文档 |
+| https://localhost/ | Web CLI（提交任务） |
+| https://localhost/dashboard | 监控面板 |
+| https://localhost/health | 健康检查 |
+| https://localhost/docs | OpenAPI 文档 |
 
 ### 4. 常用命令
 
@@ -434,7 +434,7 @@ docker compose -f docker-compose.yml -f docker-compose.redis.yml up -d --build
 登录后请求需带 JWT 与一致的 `X-Tenant-Id`（见 [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) §4.1）。
 
 ```bash
-curl -s -X POST http://localhost:8000/auth/login \
+curl -ks -X POST https://localhost/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"'"$ADMIN_PASSWORD"'"}'
 # 使用返回的 access_token + X-Tenant-Id
