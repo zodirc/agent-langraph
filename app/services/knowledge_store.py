@@ -61,6 +61,20 @@ def _domain_matches(metadata: dict[str, Any], domains: Optional[set[str]]) -> bo
     return _doc_domain(metadata) in domains
 
 
+def _chunk_row_id(parent_doc_id: str, chunk_index: int) -> str:
+    return f"{parent_doc_id}__c{chunk_index:04d}"
+
+
+def _is_parent_catalog_row(metadata: dict[str, Any]) -> bool:
+    return bool(metadata.get("is_parent"))
+
+
+def _is_searchable_row(metadata: dict[str, Any]) -> bool:
+    if _is_parent_catalog_row(metadata):
+        return False
+    return True
+
+
 def _tokenize_text(text: str) -> list[str]:
     tokens: list[str] = []
     for raw in _TOKEN_RE.findall((text or "").lower()):
@@ -315,19 +329,17 @@ class KnowledgeStore:
         with self._connect() as conn:
             return conn.execute(query, params).fetchone()
 
-    def upsert_document(
+    def _upsert_row(
         self,
+        doc_id: str,
         title: str,
         content: str,
-        metadata: Optional[dict[str, Any]] = None,
-        doc_id: Optional[str] = None,
-    ) -> str:
-        from datetime import datetime, timezone
-
-        did = doc_id or str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        meta = _stamp_tenant_metadata(metadata)
-        params = (did, title, content, json.dumps(meta), now)
+        metadata: dict[str, Any],
+        created_at: str,
+        *,
+        index_vector: bool,
+    ) -> None:
+        params = (doc_id, title, content, json.dumps(metadata), created_at)
         if uses_postgres():
             with postgres_connection() as conn:
                 conn.execute(
@@ -352,11 +364,10 @@ class KnowledgeStore:
                     params,
                 )
                 conn.commit()
-        if self._vector and getattr(self._vector, "available", False):
-            self._vector.upsert(did, title, content, meta)
-        return did
+        if index_vector and self._vector and getattr(self._vector, "available", False):
+            self._vector.upsert(doc_id, title, content, metadata)
 
-    def delete_document(self, doc_id: str) -> bool:
+    def _delete_row(self, doc_id: str) -> bool:
         if uses_postgres():
             with postgres_connection() as conn:
                 result = conn.execute(
@@ -373,27 +384,208 @@ class KnowledgeStore:
             self._vector.delete(doc_id)
         return deleted
 
+    def _iter_all_rows(self) -> list[Any]:
+        return self._fetchall("SELECT * FROM knowledge_docs")
+
+    def _child_chunk_ids(self, parent_doc_id: str) -> list[str]:
+        prefix = f"{parent_doc_id}__c"
+        ids: list[str] = []
+        for row in self._iter_all_rows():
+            row_id = str(row["doc_id"])
+            if row_id.startswith(prefix):
+                ids.append(row_id)
+                continue
+            meta = json.loads(row["metadata"])
+            if str(meta.get("parent_doc_id") or "") == parent_doc_id and meta.get("is_chunk"):
+                ids.append(row_id)
+        return ids
+
+    def _delete_chunks_for_parent(self, parent_doc_id: str) -> None:
+        for chunk_id in self._child_chunk_ids(parent_doc_id):
+            self._delete_row(chunk_id)
+
+    def _should_chunk(self, content: str, metadata: dict[str, Any]) -> bool:
+        if not getattr(settings, "RAG_CHUNK_ENABLED", True):
+            return False
+        if metadata.get("is_chunk") or metadata.get("skip_chunking"):
+            return False
+        min_chars = int(getattr(settings, "RAG_CHUNK_MIN_CHARS", 600))
+        return len((content or "").strip()) >= min_chars
+
+    def upsert_document(
+        self,
+        title: str,
+        content: str,
+        metadata: Optional[dict[str, Any]] = None,
+        doc_id: Optional[str] = None,
+    ) -> str:
+        from datetime import datetime, timezone
+
+        from app.services.knowledge_chunker import chunk_document
+
+        did = doc_id or str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        meta = _stamp_tenant_metadata(metadata)
+        domain = _doc_domain(meta)
+        meta.setdefault("domain", domain)
+
+        self._delete_chunks_for_parent(did)
+
+        if not self._should_chunk(content, meta):
+            self._delete_row(did)
+            single_meta = {**meta, "is_parent": False, "is_chunk": False}
+            self._upsert_row(did, title, content, single_meta, now, index_vector=True)
+            return did
+
+        chunks = chunk_document(title, content, domain=domain, metadata=meta)
+        if len(chunks) <= 1:
+            self._delete_row(did)
+            only = chunks[0] if chunks else None
+            body = only.body if only else content
+            single_meta = {
+                **meta,
+                "is_parent": False,
+                "is_chunk": False,
+                "section_title": only.section_title if only else "",
+                "chunk_index": 0,
+                "token_count": only.token_count if only else 0,
+            }
+            self._upsert_row(did, title, body, single_meta, now, index_vector=True)
+            return did
+
+        parent_meta = {**meta, "is_parent": True, "is_chunk": False, "chunk_count": len(chunks)}
+        self._upsert_row(did, title, content, parent_meta, now, index_vector=False)
+
+        for spec in chunks:
+            chunk_id = _chunk_row_id(did, spec.chunk_index)
+            chunk_title = f"{title} — {spec.section_title}" if spec.section_title else title
+            chunk_meta = {
+                **meta,
+                "is_parent": False,
+                "is_chunk": True,
+                "parent_doc_id": did,
+                "chunk_index": spec.chunk_index,
+                "section_title": spec.section_title,
+                "token_count": spec.token_count,
+                "chunk_count": len(chunks),
+            }
+            self._upsert_row(
+                chunk_id,
+                chunk_title,
+                spec.embed_text,
+                chunk_meta,
+                now,
+                index_vector=True,
+            )
+        return did
+
+    def delete_document(self, doc_id: str) -> bool:
+        self._delete_chunks_for_parent(doc_id)
+        return self._delete_row(doc_id)
+
     def get_document(self, doc_id: str) -> Optional[dict[str, Any]]:
         row = self._fetchone("SELECT * FROM knowledge_docs WHERE doc_id = ?", (doc_id,))
         if not row:
             return None
+        meta = json.loads(row["metadata"])
+        if _is_parent_catalog_row(meta):
+            return {
+                "doc_id": row["doc_id"],
+                "title": row["title"],
+                "content": row["content"],
+                "metadata": meta,
+                "created_at": row["created_at"],
+            }
+        child_ids = self._child_chunk_ids(doc_id)
+        if not child_ids:
+            return {
+                "doc_id": row["doc_id"],
+                "title": row["title"],
+                "content": row["content"],
+                "metadata": meta,
+                "created_at": row["created_at"],
+            }
+        parts: list[tuple[int, str]] = []
+        for child_id in child_ids:
+            child = self._fetchone("SELECT * FROM knowledge_docs WHERE doc_id = ?", (child_id,))
+            if not child:
+                continue
+            child_meta = json.loads(child["metadata"])
+            idx = int(child_meta.get("chunk_index", 0))
+            parts.append((idx, str(child["content"])))
+        merged = "\n\n".join(text for _, text in sorted(parts, key=lambda item: item[0]))
         return {
-            "doc_id": row["doc_id"],
+            "doc_id": doc_id,
             "title": row["title"],
-            "content": row["content"],
-            "metadata": json.loads(row["metadata"]),
+            "content": merged or row["content"],
+            "metadata": {**meta, "assembled_from_chunks": True, "chunk_count": len(parts)},
             "created_at": row["created_at"],
         }
 
     def list_documents(self, limit: int = 50) -> list[dict[str, Any]]:
         rows = self._fetchall(
-            "SELECT doc_id, title, created_at FROM knowledge_docs ORDER BY created_at DESC LIMIT ?",
-            (limit,),
+            "SELECT doc_id, title, metadata, created_at FROM knowledge_docs ORDER BY created_at DESC",
         )
-        return [
-            {"doc_id": row["doc_id"], "title": row["title"], "created_at": row["created_at"]}
-            for row in rows
-        ]
+        docs: list[dict[str, Any]] = []
+        seen_parents: set[str] = set()
+        for row in rows:
+            meta = json.loads(row["metadata"])
+            if meta.get("is_chunk"):
+                parent = str(meta.get("parent_doc_id") or "")
+                if parent and parent not in seen_parents:
+                    seen_parents.add(parent)
+                    docs.append(
+                        {
+                            "doc_id": parent,
+                            "title": row["title"].split(" — ", 1)[0],
+                            "created_at": row["created_at"],
+                        }
+                    )
+                continue
+            if _is_parent_catalog_row(meta):
+                docs.append(
+                    {
+                        "doc_id": row["doc_id"],
+                        "title": row["title"],
+                        "created_at": row["created_at"],
+                    }
+                )
+                continue
+            if str(meta.get("parent_doc_id") or ""):
+                continue
+            docs.append(
+                {
+                    "doc_id": row["doc_id"],
+                    "title": row["title"],
+                    "created_at": row["created_at"],
+                }
+            )
+        return docs[:limit]
+
+    def get_chunk_by_parent_index(self, parent_doc_id: str, chunk_index: int) -> Optional[dict[str, Any]]:
+        row = self._fetchone(
+            "SELECT * FROM knowledge_docs WHERE doc_id = ?",
+            (_chunk_row_id(parent_doc_id, chunk_index),),
+        )
+        if not row:
+            for candidate in self._iter_all_rows():
+                meta = json.loads(candidate["metadata"])
+                if (
+                    str(meta.get("parent_doc_id") or "") == parent_doc_id
+                    and int(meta.get("chunk_index", -1)) == chunk_index
+                ):
+                    row = candidate
+                    break
+        if not row:
+            return None
+        meta = json.loads(row["metadata"])
+        return {
+            "doc_id": row["doc_id"],
+            "title": row["title"],
+            "content": row["content"],
+            "metadata": meta,
+            "created_at": row["created_at"],
+        }
 
     def keyword_search(
         self,
@@ -412,6 +604,8 @@ class KnowledgeStore:
 
         for row in rows:
             meta = json.loads(row["metadata"])
+            if not _is_searchable_row(meta):
+                continue
             if not _tenant_matches(meta):
                 continue
             if not _domain_matches(meta, domains):
@@ -623,7 +817,43 @@ class KnowledgeStore:
 
             merged = rerank(query, merged, top_k=limit)
         merged = _limit_per_doc(merged, max_per_doc=int(getattr(settings, "RAG_MAX_CHUNKS_PER_DOC", 2)))
+        merged = self._expand_adjacent_chunks(merged)
         return merged[:limit]
+
+    def _expand_adjacent_chunks(self, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not getattr(settings, "RAG_CHUNK_ADJACENCY_ENABLED", True):
+            return hits
+        radius = max(0, int(getattr(settings, "RAG_CHUNK_ADJACENCY_RADIUS", 1)))
+        if radius <= 0:
+            return hits
+
+        seen_ids = {str(h.get("doc_id") or "") for h in hits}
+        expanded: list[dict[str, Any]] = list(hits)
+        for hit in hits:
+            meta = hit.get("metadata") if isinstance(hit.get("metadata"), dict) else {}
+            parent = str(meta.get("parent_doc_id") or "")
+            if not parent or not meta.get("is_chunk"):
+                continue
+            center = int(meta.get("chunk_index", 0))
+            for offset in range(-radius, radius + 1):
+                if offset == 0:
+                    continue
+                neighbor = self.get_chunk_by_parent_index(parent, center + offset)
+                if not neighbor:
+                    continue
+                nid = str(neighbor.get("doc_id") or "")
+                if not nid or nid in seen_ids:
+                    continue
+                seen_ids.add(nid)
+                neighbor_hit = {
+                    **neighbor,
+                    "score": float(hit.get("rerank_score") or hit.get("score") or hit.get("rrf_score") or 0.0)
+                    * 0.85,
+                    "metadata": neighbor.get("metadata") or {},
+                    "source": "adjacency",
+                }
+                expanded.append(neighbor_hit)
+        return expanded
 
     def count(self) -> int:
         row = self._fetchone("SELECT COUNT(*) AS c FROM knowledge_docs")

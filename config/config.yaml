@@ -494,6 +494,16 @@ rag:
   bm25_k1: 1.5
   bm25_b: 0.75
   max_chunks_per_doc: 2
+  chunk_enabled: true
+  chunk_min_chars: 600
+  chunk_max_chars: 1200
+  chunk_overlap_chars: 150
+  chunk_max_chars_writing: 1000
+  chunk_overlap_chars_writing: 120
+  chunk_max_chars_code: 900
+  chunk_overlap_chars_code: 80
+  chunk_adjacency_enabled: true
+  chunk_adjacency_radius: 1
   cohere_api_key: ${COHERE_API_KEY:}
   cohere_rerank_model: rerank-english-v3.0
   citation_enabled: false

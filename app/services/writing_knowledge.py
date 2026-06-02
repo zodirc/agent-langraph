@@ -47,7 +47,9 @@ def _truncate_excerpt(text: str, max_chars: int = _MAX_EXCERPT_CHARS) -> str:
 
 def _is_writing_knowledge_hit(hit: dict[str, Any]) -> bool:
     doc_id = str(hit.get("doc_id") or "")
-    if doc_id in WRITING_KNOWLEDGE_DOC_IDS:
+    meta = hit.get("metadata") if isinstance(hit.get("metadata"), dict) else {}
+    parent_id = str(meta.get("parent_doc_id") or "")
+    if doc_id in WRITING_KNOWLEDGE_DOC_IDS or parent_id in WRITING_KNOWLEDGE_DOC_IDS:
         return True
     title = str(hit.get("title") or "")
     return any(marker in title for marker in _TITLE_MARKERS)
@@ -66,10 +68,11 @@ def _excerpt_from_retrieved(state: AgentState | dict) -> Optional[str]:
     for hit in state.get("retrieved_knowledge") or []:
         if not isinstance(hit, dict) or not _is_writing_knowledge_hit(hit):
             continue
-        doc_id = str(hit.get("doc_id") or hit.get("title") or "")
-        if doc_id in seen:
+        meta = hit.get("metadata") if isinstance(hit.get("metadata"), dict) else {}
+        group_id = str(meta.get("parent_doc_id") or hit.get("doc_id") or hit.get("title") or "")
+        if group_id in seen:
             continue
-        seen.add(doc_id)
+        seen.add(group_id)
         content = str(hit.get("content") or "").strip()
         if content:
             parts.append(content)
