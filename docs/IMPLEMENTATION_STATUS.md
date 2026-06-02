@@ -145,6 +145,35 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/tasks ...
 curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 ```
 
+### 4.1 多租户 / 鉴权 / 计量（2026-06 加固）
+
+| 项 | 状态 | 说明 |
+|----|------|------|
+| JWT / API Key 携带 `tenant_id` | ✅ | `auth_service.py`；登录响应返回租户 |
+| 请求头租户与 principal 一致性校验 | ✅ | `tenant_access.py` + `deps.get_current_principal` |
+| 任务对象级授权（user_id） | ✅ | `require_task_access_dep` on `/tasks/{id}/*` |
+| 租户配额 Redis 后端 | ✅ | `tenant.quota_backend: redis`；不可用时回退 memory |
+| LLM `logical` vs `billed` 指标 | ✅ | `llm_client._record_llm_usage`；配额/成本仅计 `billed` |
+| 缓存命中不计配额/成本 | ✅ | `invoke_structured` cached 分支 `bill_quota=false` |
+| 生产环境禁止 `AUTH_ENABLED=false` | ✅ | `startup_checks.validate_runtime_security` |
+
+**适用边界（运维必读）**：
+
+- **SQLite 按租户分库**：适合开发 / 轻量生产，不适合大规模 SaaS。
+- **`AUTH_ENABLED=false`**：仅 `APP_ENV=development`（或关闭 `auth.require_in_production`）。
+- **内存配额**：单进程可用；多副本请设 `tenant.quota_backend: redis`。
+
+**Docker 部署**（`CONFIG_PATH=config/config.docker.yaml`）：
+
+| 文件 | 作用 |
+|------|------|
+| [`config/config.docker.yaml`](../config/config.docker.yaml) | 容器内主配置；DB 主机 `postgres`，Redis 主机 `redis` |
+| [`docker-compose.yml`](../docker-compose.yml) | 注入 `CONFIG_PATH`、`DATABASE_URL`、`AUTH_*`、`TENANT_*` |
+| [`docker-compose.dev.yml`](../docker-compose.dev.yml) | `APP_ENV=development`，挂载 `./config` |
+| [`docker-compose.redis.yml`](../docker-compose.redis.yml) | 可选 Redis + 分布式配额 / 限流 |
+
+生产 `docker compose up` 默认 `AUTH_ENABLED=true`；开发叠加 `docker-compose.dev.yml` 可 `AUTH_ENABLED=false`。
+
 ---
 
 ## 七、Batch 5 — Runtime 认知控制增强（2026-05 末至 2026-06）

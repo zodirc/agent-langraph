@@ -402,6 +402,40 @@ curl -s http://127.0.0.1:8001/health | python3 -m json.tool
 
 若需回退 SQLite（仅本地调试）：在 compose 中注释掉 `postgres` 服务，并设置 `STORAGE_BACKEND=sqlite`。
 
+### 9. Docker 下的配置与多租户 / 鉴权
+
+容器内**不要**改 `config/config.yaml` 路径假设；Compose 通过环境变量固定：
+
+```text
+CONFIG_PATH=/app/config/config.docker.yaml
+APP_ENV=production          # 生产 compose
+DATABASE_URL=postgresql://agent:agent@postgres:5432/agent
+```
+
+| 场景 | 改哪个文件 / 命令 |
+|------|-------------------|
+| 生产 Docker 部署 | 宿主机 `.env` + [`config/config.docker.yaml`](config/config.docker.yaml) |
+| 本地非 Docker | [`config/config.yaml`](config/config.yaml) |
+| 开发热更新 | 挂载 `./config`，改 **`config.docker.yaml`**（`docker-compose.dev.yml`） |
+
+生产默认 **`AUTH_ENABLED=true`**（`config.docker.yaml` + compose）。若需关闭认证，请叠加开发 compose（`APP_ENV=development`），勿在生产环境关闭。
+
+多租户 + 分布式配额（多副本）：
+
+```bash
+# .env: MULTI_TENANT_ENABLED=true, APP_SECRET_KEY=...
+docker compose -f docker-compose.yml -f docker-compose.redis.yml up -d --build
+```
+
+登录后请求需带 JWT 与一致的 `X-Tenant-Id`（见 [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) §4.1）。
+
+```bash
+curl -s -X POST http://localhost:8000/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"'"$ADMIN_PASSWORD"'"}'
+# 使用返回的 access_token + X-Tenant-Id
+```
+
 ## 测试
 
 ```bash

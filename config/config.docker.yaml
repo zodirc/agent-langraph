@@ -1,4 +1,9 @@
-# Docker 单容器部署配置（数据目录挂载到 /data）
+# Docker / Compose 部署专用配置（容器内 CONFIG_PATH 指向本文件）
+#
+# - 数据目录：/data（compose 卷 agent_data）
+# - PostgreSQL 主机名：postgres（compose 服务名，非 localhost）
+# - Redis 主机名：redis（见 docker-compose.redis.yml 或 ha profile）
+# - 环境变量由 docker-compose.yml / .env 注入，见 .env.example
 
 model:
   provider: anthropic
@@ -44,17 +49,21 @@ knowledge:
   qdrant_path: /data/vectorstore/qdrant
 
 auth:
-  enabled: ${AUTH_ENABLED:false}
+  # Compose 默认 APP_ENV=production；生产应开启认证（compose 默认 AUTH_ENABLED=true）
+  enabled: ${AUTH_ENABLED:true}
+  require_in_production: true
   jwt_expire_minutes: 480
   api_keys:
     - key: ${SERVICE_API_KEY:}
       user_id: service-bot
       role: admin
+      # tenant_id: default
   users:
     - username: admin
       password: ${ADMIN_PASSWORD:admin}
       user_id: admin
       role: admin
+      # tenant_id: default
 
 supervisor:
   max_workers: 4
@@ -315,6 +324,8 @@ policy:
 
 queue:
   backend: memory
+  # HA / 多副本时改为 celery，并启动 redis + celery-worker（docker-compose.ha.yml）
+  redis_url: ${REDIS_URL:redis://redis:6379/0}
 
 cli:
   api_base_url: http://127.0.0.1:8000
@@ -324,7 +335,17 @@ observability:
   metrics_enabled: true
 
 rate_limit:
-  enabled: false
+  enabled: ${RATE_LIMIT_ENABLED:true}
   user_per_minute: 120
   ip_per_minute: 600
   window_sec: 60
+  use_redis: ${RATE_LIMIT_REDIS:false}
+
+tenant:
+  enabled: ${MULTI_TENANT_ENABLED:false}
+  max_tasks_per_day: ${TENANT_MAX_TASKS_PER_DAY:0}
+  max_tokens_per_day: ${TENANT_MAX_TOKENS_PER_DAY:0}
+  max_concurrent_tasks: ${TENANT_MAX_CONCURRENT_TASKS:0}
+  # 单副本 compose 用 memory；多副本叠加 docker-compose.redis.yml 并设 quota_backend=redis
+  quota_backend: ${TENANT_QUOTA_BACKEND:memory}
+  quota_use_redis: ${TENANT_QUOTA_REDIS:false}

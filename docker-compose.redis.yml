@@ -1,0 +1,31 @@
+# 可选：Redis（租户配额 / API 限流 多副本共享）
+#
+# 与主 compose 叠加：
+#   docker compose -f docker-compose.yml -f docker-compose.redis.yml up -d
+#
+# 建议在 .env 中同时设置：
+#   MULTI_TENANT_ENABLED=true
+#   TENANT_QUOTA_BACKEND=redis
+#   TENANT_QUOTA_REDIS=true
+#   RATE_LIMIT_REDIS=true
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: agent-langraph-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  agent:
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      TENANT_QUOTA_BACKEND: ${TENANT_QUOTA_BACKEND:-redis}
+      TENANT_QUOTA_REDIS: ${TENANT_QUOTA_REDIS:-true}
+      RATE_LIMIT_REDIS: ${RATE_LIMIT_REDIS:-true}

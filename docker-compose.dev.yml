@@ -5,12 +5,16 @@
 #   docker compose down
 #   HOST_PORT=8001 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 #
-# 注意：改的是「宿主机端口」HOST_PORT，不是下面 uvicorn 的 --port（容器内固定 8000）
+# 注意：
+# - 改的是「宿主机端口」HOST_PORT，不是 uvicorn 的 --port（容器内固定 8000）
+# - 仍使用 CONFIG_PATH=/app/config/config.docker.yaml；挂载 ./config 后改 config.docker.yaml 生效
+# - APP_ENV=development 允许 AUTH_ENABLED=false（.env 覆盖）
 
 services:
   agent:
     environment:
       APP_ENV: development
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
     volumes:
       - agent_data:/data
       - ./app:/app/app:ro

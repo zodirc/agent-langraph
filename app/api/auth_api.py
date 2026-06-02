@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config.settings import settings
 from app.services.auth_service import get_auth_service
@@ -19,6 +21,8 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     user_id: str
     role: str
+    tenant_id: Optional[str] = None
+    tenant_ids: list[str] = Field(default_factory=list)
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -33,4 +37,6 @@ def login(request: LoginRequest) -> LoginResponse:
         access_token=token,
         user_id=principal.user_id,
         role=principal.role,
+        tenant_id=principal.tenant_id,
+        tenant_ids=list(principal.tenant_ids),
     )

@@ -1,3 +1,6 @@
+# 本地 / 非容器：默认读本文件。
+# Docker Compose 部署请改 config.docker.yaml（CONFIG_PATH=/app/config/config.docker.yaml）。
+
 model:
   provider: anthropic
   name: ${MODEL_NAME:claude-sonnet-4-5}
@@ -44,16 +47,20 @@ knowledge:
 
 auth:
   enabled: ${AUTH_ENABLED:false}
+  require_in_production: true   # refuse startup when APP_ENV=production and auth disabled
   jwt_expire_minutes: 480
   api_keys:
     - key: ${SERVICE_API_KEY:}
       user_id: service-bot
       role: admin
+      # tenant_id: acme          # optional: bind API key to a tenant
   users:
     - username: admin
       password: ${ADMIN_PASSWORD:admin}
+      # password_hash: pbkdf2:...  # optional: use hash_password() instead of plaintext
       user_id: admin
       role: admin
+      # tenant_id: default       # optional: default tenant for JWT
 
 supervisor:
   max_workers: 4
@@ -522,3 +529,5 @@ tenant:
   max_tasks_per_day: 0          # 0 = unlimited
   max_tokens_per_day: 0
   max_concurrent_tasks: 0
+  quota_backend: memory         # memory | redis (multi-instance production)
+  quota_use_redis: false        # set true with queue.redis_url when using redis backend

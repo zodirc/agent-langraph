@@ -281,6 +281,9 @@ class Settings:
         self.JWT_EXPIRE_MINUTES = int(auth.get("jwt_expire_minutes", 480))
         self.AUTH_USERS = self._parse_users(auth.get("users", []))
         self.AUTH_API_KEYS = self._parse_api_keys(auth.get("api_keys", []))
+        self.AUTH_REQUIRE_IN_PRODUCTION = _coerce_bool(
+            auth.get("require_in_production", True)
+        )
 
         policy = raw.get("policy", {})
         self.AUTO_REJECT_RISK_LEVEL = str(policy.get("auto_reject_risk_level", "CRITICAL"))
@@ -526,6 +529,11 @@ class Settings:
         self.TENANT_MAX_TASKS_PER_DAY = int(tenant_cfg.get("max_tasks_per_day", 0))
         self.TENANT_MAX_TOKENS_PER_DAY = int(tenant_cfg.get("max_tokens_per_day", 0))
         self.TENANT_MAX_CONCURRENT_TASKS = int(tenant_cfg.get("max_concurrent_tasks", 0))
+        quota_backend = str(tenant_cfg.get("quota_backend", "memory")).lower()
+        self.TENANT_QUOTA_BACKEND = quota_backend
+        self.TENANT_QUOTA_REDIS = _coerce_bool(
+            tenant_cfg.get("quota_use_redis", quota_backend == "redis")
+        )
 
         graph_runner_cfg = raw.get("graph_runner", {})
         self.GRAPH_RUNNER_BACKPRESSURE_ENABLED = _coerce_bool(
@@ -579,15 +587,24 @@ class Settings:
             return []
         parsed: list[dict[str, str]] = []
         for item in users:
-            if isinstance(item, dict) and item.get("username") and item.get("password"):
-                parsed.append(
-                    {
-                        "username": str(item["username"]),
-                        "password": str(item["password"]),
-                        "user_id": str(item.get("user_id", item["username"])),
-                        "role": str(item.get("role", "user")),
-                    }
-                )
+            if not isinstance(item, dict) or not item.get("username"):
+                continue
+            if not item.get("password") and not item.get("password_hash"):
+                continue
+            entry: dict[str, str] = {
+                "username": str(item["username"]),
+                "user_id": str(item.get("user_id", item["username"])),
+                "role": str(item.get("role", "user")),
+            }
+            if item.get("password_hash"):
+                entry["password_hash"] = str(item["password_hash"])
+            if item.get("password"):
+                entry["password"] = str(item["password"])
+            if item.get("tenant_id"):
+                entry["tenant_id"] = str(item["tenant_id"])
+            if item.get("tenant_ids"):
+                entry["tenant_ids"] = item["tenant_ids"]
+            parsed.append(entry)
         return parsed
 
     def _parse_api_keys(self, keys: Any) -> list[dict[str, str]]:
@@ -596,13 +613,16 @@ class Settings:
         parsed: list[dict[str, str]] = []
         for item in keys:
             if isinstance(item, dict) and item.get("key"):
-                parsed.append(
-                    {
-                        "key": str(item["key"]),
-                        "user_id": str(item.get("user_id", "service")),
-                        "role": str(item.get("role", "user")),
-                    }
-                )
+                entry = {
+                    "key": str(item["key"]),
+                    "user_id": str(item.get("user_id", "service")),
+                    "role": str(item.get("role", "user")),
+                }
+                if item.get("tenant_id"):
+                    entry["tenant_id"] = str(item["tenant_id"])
+                if item.get("tenant_ids"):
+                    entry["tenant_ids"] = item["tenant_ids"]
+                parsed.append(entry)
         return parsed
 
     def _load_yaml(self, config_path: str) -> dict[str, Any]:

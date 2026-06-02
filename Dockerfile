@@ -18,9 +18,11 @@ COPY knowledge/ ./knowledge/
 
 RUN mkdir -p /data/db /data/vectorstore /data/logs /data/code_verify
 
+# 与 docker-compose.yml 一致；宿主机通过 -e / --env-file 覆盖
 ENV CONFIG_PATH=/app/config/config.docker.yaml \
     APP_ENV=production \
-    APP_PORT=8000
+    APP_PORT=8000 \
+    STORAGE_BACKEND=postgres
 
 EXPOSE 8000
 

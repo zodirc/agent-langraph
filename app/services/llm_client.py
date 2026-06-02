@@ -607,6 +607,31 @@ def _usage_identity(trace_state: Any | None) -> tuple[str, str]:
     return get_tenant_id() or "default", "anonymous"
 
 
+def _extract_usage_from_response(response: Any) -> int | None:
+    """Read provider token usage from a LangChain AIMessage when available."""
+    meta = getattr(response, "response_metadata", None) or {}
+    if isinstance(meta, dict):
+        usage = meta.get("usage") or meta.get("token_usage")
+        if isinstance(usage, dict):
+            total = usage.get("total_tokens")
+            if total is not None:
+                return int(total)
+            prompt = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+            completion = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+            if prompt or completion:
+                return prompt + completion
+    usage_meta = getattr(response, "usage_metadata", None)
+    if isinstance(usage_meta, dict):
+        total = usage_meta.get("total_tokens")
+        if total is not None:
+            return int(total)
+        prompt = int(usage_meta.get("input_tokens") or 0)
+        completion = int(usage_meta.get("output_tokens") or 0)
+        if prompt or completion:
+            return prompt + completion
+    return None
+
+
 def _record_llm_usage(
     *,
     purpose: str,
@@ -614,23 +639,30 @@ def _record_llm_usage(
     user_content: str,
     response_text: str,
     trace_state: Any | None = None,
+    billed_tokens: int | None = None,
+    bill_quota: bool = True,
+    bill_cost: bool = True,
 ) -> None:
     from app.config.settings import settings
     from app.services.metrics_service import get_metrics_service
     from app.services.resource_budget import _estimate_tokens
     from app.services.tenant_quota import record_usage
 
-    tokens = _estimate_tokens(system_prompt + user_content + response_text)
+    estimated = _estimate_tokens(system_prompt + user_content + response_text)
+    logical = estimated
+    billed = billed_tokens if billed_tokens is not None else estimated
     tenant_id, user_id = _usage_identity(trace_state)
     metrics = get_metrics_service()
-    metrics.inc_llm_tokens(purpose, "total", tokens)
-    if settings.MULTI_TENANT_ENABLED:
-        record_usage(tenant_id, "tokens", tokens)
-        metrics.inc_tenant_tokens(tenant_id, tokens)
+    metrics.inc_llm_tokens(purpose, "logical", logical)
+    if bill_quota or bill_cost:
+        metrics.inc_llm_tokens(purpose, "billed", billed)
+    if settings.MULTI_TENANT_ENABLED and bill_quota and billed > 0:
+        record_usage(tenant_id, "tokens", billed)
+        metrics.inc_tenant_tokens(tenant_id, billed)
     cost_per_1k = float(getattr(settings, "COST_PER_1K_TOKENS", 0.0))
-    if cost_per_1k > 0:
+    if cost_per_1k > 0 and bill_cost and billed > 0:
         metrics.record_llm_cost_usd(
-            (tokens / 1000.0) * cost_per_1k,
+            (billed / 1000.0) * cost_per_1k,
             tenant_id=tenant_id,
             user_id=user_id,
         )
@@ -638,7 +670,7 @@ def _record_llm_usage(
         from app.services.engineering_trace import init_trace_context, record_llm_span
 
         base = init_trace_context(trace_state) if not trace_state.get("trace_context") else trace_state
-        updated = record_llm_span(base, purpose, status="ok", tokens_used=tokens)
+        updated = record_llm_span(base, purpose, status="ok", tokens_used=logical)
         trace_state["engineering_spans"] = updated.get("engineering_spans")
         trace_state["trace_context"] = updated.get("trace_context")
 
@@ -668,6 +700,9 @@ def invoke_structured(
             user_content=user_content,
             response_text=json.dumps(cached),
             trace_state=trace_state,
+            billed_tokens=0,
+            bill_quota=False,
+            bill_cost=False,
         )
         return cached
 
@@ -682,6 +717,9 @@ def invoke_structured(
             user_content=user_content,
             response_text=json.dumps(local),
             trace_state=trace_state,
+            billed_tokens=0,
+            bill_quota=False,
+            bill_cost=False,
         )
         return _set_cached(_STRUCTURED_CACHE, key, local)
 
@@ -701,12 +739,16 @@ def invoke_structured(
         if budget_ctx is not None:
             budget_ctx.after_invoke(purpose, system_prompt, user_content, normalized)
         metrics.inc_llm_invoke(purpose, model_name, "ok")
+        provider_tokens = _extract_usage_from_response(response)
         _record_llm_usage(
             purpose=purpose,
             system_prompt=system_prompt,
             user_content=user_content,
             response_text=normalized,
             trace_state=trace_state,
+            billed_tokens=provider_tokens,
+            bill_quota=True,
+            bill_cost=True,
         )
         parsed = extract_json_with_repair(
             purpose,
@@ -821,6 +863,9 @@ def stream_structured(
             user_content=user_content,
             response_text=full_text,
             trace_state=trace_state,
+            billed_tokens=None,
+            bill_quota=True,
+            bill_cost=True,
         )
         _set_cached(_STREAM_CACHE, key, {"text": full_text})
 

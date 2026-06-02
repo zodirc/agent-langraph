@@ -1,44 +1,44 @@
-from app.config.settings import Settings
-from app.services.auth_service import AuthService
+import jwt
+
+from app.config.settings import settings
+from app.services.auth_service import AuthPrincipal, get_auth_service, hash_password
 
 
-def test_jwt_roundtrip(tmp_path, monkeypatch):
-    config = tmp_path / "cfg.yaml"
-    config.write_text(
-        """
-app:
-  secret_key: test-secret-key
-auth:
-  enabled: true
-  jwt_expire_minutes: 60
-  users:
-    - username: tester
-      password: pass123
-      user_id: u-1
-      role: admin
-  api_keys:
-    - key: service-key-abc
-      user_id: svc
-      role: admin
-""",
-        encoding="utf-8",
+def test_jwt_includes_tenant_claim(monkeypatch):
+    monkeypatch.setattr(settings, "APP_SECRET_KEY", "test-secret")
+    monkeypatch.setattr(settings, "JWT_EXPIRE_MINUTES", 60)
+    principal = AuthPrincipal(
+        user_id="u1",
+        role="user",
+        auth_method="jwt",
+        username="alice",
+        tenant_id="acme",
+        tenant_ids=["acme"],
     )
-    import app.config.settings as settings_module
-    import app.services.auth_service as auth_module
-
-    settings = Settings(str(config))
-    monkeypatch.setattr(settings_module, "settings", settings)
-    monkeypatch.setattr(auth_module, "settings", settings)
-    auth = AuthService()
-
-    principal = auth.authenticate_user("tester", "pass123")
-    assert principal is not None
-    token = auth.create_access_token(principal)
-    decoded = auth.decode_access_token(token)
+    token = get_auth_service().create_access_token(principal)
+    payload = jwt.decode(token, "test-secret", algorithms=["HS256"])
+    assert payload["tenant_id"] == "acme"
+    decoded = get_auth_service().decode_access_token(token)
     assert decoded is not None
-    assert decoded.user_id == "u-1"
-    assert decoded.role == "admin"
+    assert decoded.tenant_id == "acme"
 
-    api_principal = auth.authenticate_api_key("service-key-abc")
-    assert api_principal is not None
-    assert api_principal.user_id == "svc"
+
+def test_password_hash_verification(monkeypatch):
+    hashed = hash_password("secret")
+    monkeypatch.setattr(
+        settings,
+        "AUTH_USERS",
+        [
+            {
+                "username": "bob",
+                "password_hash": hashed,
+                "user_id": "bob",
+                "role": "user",
+                "tenant_id": "t1",
+            }
+        ],
+    )
+    principal = get_auth_service().authenticate_user("bob", "secret")
+    assert principal is not None
+    assert principal.tenant_id == "t1"
+    assert get_auth_service().authenticate_user("bob", "wrong") is None

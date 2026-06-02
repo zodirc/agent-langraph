@@ -1,11 +1,17 @@
 # Agent + 内置 PostgreSQL（业务状态 + LangGraph checkpoint）
 #
+# 配置：容器内固定 CONFIG_PATH=/app/config/config.docker.yaml（勿改容器内路径）
+#       宿主机通过 .env 注入环境变量，映射到 config.docker.yaml 的 ${VAR:default}
+#
 # 启动：
-#   cp .env.example .env   # 填写 ANTHROPIC_API_KEY 等
+#   cp .env.example .env   # 填写 ANTHROPIC_API_KEY、APP_SECRET_KEY 等
 #   docker compose up -d --build
 #
-# 开发热更新：
+# 开发热更新（APP_ENV=development，可 AUTH_ENABLED=false）：
 #   HOST_PORT=8001 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# 多租户 + Redis 配额（多副本）：
+#   docker compose -f docker-compose.yml -f docker-compose.redis.yml up -d
 
 services:
   postgres:
@@ -48,8 +54,19 @@ services:
       MODEL_NAME: ${MODEL_NAME:-claude-sonnet-4-5}
       MODEL_ENABLED: ${MODEL_ENABLED:-true}
       APP_SECRET_KEY: ${APP_SECRET_KEY:-change-me}
-      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      # 生产 compose 默认开启认证（APP_ENV=production + require_in_production）
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      SERVICE_API_KEY: ${SERVICE_API_KEY:-}
+      MULTI_TENANT_ENABLED: ${MULTI_TENANT_ENABLED:-false}
+      TENANT_MAX_TASKS_PER_DAY: ${TENANT_MAX_TASKS_PER_DAY:-0}
+      TENANT_MAX_TOKENS_PER_DAY: ${TENANT_MAX_TOKENS_PER_DAY:-0}
+      TENANT_MAX_CONCURRENT_TASKS: ${TENANT_MAX_CONCURRENT_TASKS:-0}
+      TENANT_QUOTA_BACKEND: ${TENANT_QUOTA_BACKEND:-memory}
+      TENANT_QUOTA_REDIS: ${TENANT_QUOTA_REDIS:-false}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_REDIS: ${RATE_LIMIT_REDIS:-false}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       LANGGRAPHICS_ENABLED: ${LANGGRAPHICS_ENABLED:-false}
     volumes:
       - agent_data:/data   # Chroma 向量库、artifact、日志（不含 SQLite 业务库）

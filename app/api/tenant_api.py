@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_principal, require_role
+from app.api.tenant_access import assert_tenant_access
 from app.config.settings import settings
 from app.services.auth_service import AuthPrincipal
 from app.services.metrics_service import get_metrics_service
@@ -36,17 +37,6 @@ def _assert_multi_tenant_enabled() -> None:
         raise HTTPException(
             status_code=400,
             detail="Multi-tenant mode is disabled (set tenant.enabled=true)",
-        )
-
-
-def _assert_tenant_access(principal: AuthPrincipal, tenant_id: str) -> None:
-    if principal.role == "admin":
-        return
-    current = get_tenant_id()
-    if current != tenant_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Cannot access another tenant's resources",
         )
 
 
@@ -104,7 +94,7 @@ def tenant_quota(
         safe_id = sanitize_tenant_id(tenant_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    _assert_tenant_access(principal, safe_id)
+    assert_tenant_access(principal, safe_id)
     return get_metrics_service().tenant_metrics_snapshot(safe_id)
 
 
@@ -114,9 +104,5 @@ def current_tenant_quota(
 ) -> dict[str, Any]:
     """Quota for the tenant in X-Tenant-Id (or default)."""
     tid = get_tenant_id() or "default"
-    if principal.role != "admin" and not get_tenant_id():
-        raise HTTPException(
-            status_code=400,
-            detail="X-Tenant-Id header required when multi-tenant is enabled",
-        )
+    assert_tenant_access(principal, tid)
     return get_metrics_service().tenant_metrics_snapshot(tid)

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_current_principal
+from app.api.deps import get_current_principal, require_task_access_dep
 from app.runtime.state import TaskStatus
 from app.services.audit_store import get_audit_store
 from app.services.auth_service import AuthPrincipal
@@ -249,7 +249,7 @@ class StopTaskResponse(BaseModel):
 def steer_task(
     task_id: str,
     request: SteerTaskRequest,
-    _principal: AuthPrincipal = Depends(get_current_principal),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> SteerTaskResponse:
     """
     Inject user guidance during or between orchestrated mission steps.
@@ -300,7 +300,7 @@ def steer_task(
 @router.post("/{task_id}/stop", response_model=StopTaskResponse)
 def stop_task(
     task_id: str,
-    _principal: AuthPrincipal = Depends(get_current_principal),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> StopTaskResponse:
     """
     Best-effort immediate stop for running mission (especially long writing steps).
@@ -349,7 +349,7 @@ class ResumeTaskRequest(BaseModel):
 def resume_task(
     task_id: str,
     request: ResumeTaskRequest = ResumeTaskRequest(),
-    _principal: AuthPrincipal = Depends(get_current_principal),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> ResumeTaskResponse:
     """Run the next orchestrated work item after MISSION_PAUSED."""
     try:
@@ -379,7 +379,7 @@ def resume_task(
 def stream_resume_task(
     task_id: str,
     request: ResumeTaskRequest = ResumeTaskRequest(),
-    _principal: AuthPrincipal = Depends(get_current_principal),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> StreamingResponse:
     """SSE stream for mission resume (progress, writing_delta, confirmation gates)."""
     try:
@@ -399,7 +399,7 @@ def stream_resume_task(
 def get_task_state_debug(
     task_id: str,
     truncate: bool = True,
-    _principal: AuthPrincipal = Depends(get_current_principal),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> dict[str, Any]:
     """
     Full AgentState snapshot for the current task (session id == task id in copilot mode).
@@ -435,7 +435,7 @@ def get_task_state_debug(
 @router.get("/{task_id}/status", response_model=TaskStatusResponse)
 def get_task_status(
     task_id: str,
-    _principal: AuthPrincipal = Depends(get_current_principal),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> TaskStatusResponse:
     from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
 
@@ -471,7 +471,7 @@ def get_task_status(
 @router.get("/{task_id}/result", response_model=TaskResultResponse)
 def get_task_result(
     task_id: str,
-    _principal: AuthPrincipal = Depends(get_current_principal),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> TaskResultResponse:
     state = get_state_store().load(task_id, read_only=True)
     if not state:
@@ -499,7 +499,7 @@ def get_task_result(
 @router.get("/{task_id}/conversation")
 def get_task_conversation(
     task_id: str,
-    _principal: AuthPrincipal = Depends(get_current_principal),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> dict[str, Any]:
     """Return multi-turn conversation stored on the task (session window)."""
     state = get_state_store().load(task_id, read_only=True)
@@ -516,7 +516,7 @@ def get_task_conversation(
 @router.get("/{task_id}/audit")
 def get_task_audit(
     task_id: str,
-    _principal: AuthPrincipal = Depends(get_current_principal),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> dict[str, Any]:
     chain = get_audit_store().get_chain(task_id)
     if not chain:

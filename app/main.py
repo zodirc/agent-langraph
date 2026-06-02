@@ -36,6 +36,7 @@ from app.services.scheduler_service import get_scheduler_service
 from app.services.storage_init import init_storage, shutdown_storage
 from app.services.tool_bootstrap import bootstrap_tools
 from app.services.sqlite_compat import SQLITE_SHIM, sqlite3_version
+from app.services.startup_checks import validate_runtime_security
 from app.services.tool_registry import get_tool_registry
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
@@ -55,6 +56,7 @@ class DevStaticFiles(StaticFiles):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     setup_logging()
+    validate_runtime_security()
     configure_langsmith()
     init_storage()
     seeded = seed_default_knowledge()

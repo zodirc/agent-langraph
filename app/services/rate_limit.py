@@ -17,27 +17,13 @@ settings = settings_module.settings
 
 logger = logging.getLogger(__name__)
 
-_REDIS_CLIENT: object | None = None
-_REDIS_TRIED = False
+from app.services.redis_client import get_redis_client
 
 
 def _redis_client() -> object | None:
-    global _REDIS_CLIENT, _REDIS_TRIED
-    if _REDIS_TRIED:
-        return _REDIS_CLIENT
-    _REDIS_TRIED = True
     if not settings.RATE_LIMIT_REDIS:
         return None
-    try:
-        import redis
-
-        _REDIS_CLIENT = redis.from_url(settings.REDIS_URL, decode_responses=True)
-        _REDIS_CLIENT.ping()
-        logger.info("Rate limiter using Redis backend")
-    except Exception as exc:
-        logger.warning("Rate limit Redis unavailable, using memory: %s", exc)
-        _REDIS_CLIENT = None
-    return _REDIS_CLIENT
+    return get_redis_client()
 
 
 class RateLimiter:

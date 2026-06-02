@@ -23,6 +23,10 @@ services:
   agent:
     environment:
       DATABASE_READ_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres-replica:5432/${POSTGRES_DB:-agent}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      TENANT_QUOTA_BACKEND: ${TENANT_QUOTA_BACKEND:-redis}
+      TENANT_QUOTA_REDIS: ${TENANT_QUOTA_REDIS:-true}
+      RATE_LIMIT_REDIS: ${RATE_LIMIT_REDIS:-true}
 
   celery-worker:
     image: agent-langraph:latest

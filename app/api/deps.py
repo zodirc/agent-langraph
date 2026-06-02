@@ -9,46 +9,37 @@ import app.config.settings as settings_module
 
 # Backward-compatible alias for tests/older imports.
 settings = settings_module.settings
+from app.api.tenant_access import assert_task_access, bind_tenant_for_principal
 from app.services.auth_service import AuthPrincipal, get_auth_service
 from app.services.rate_limit import enforce_rate_limits
-from app.services.tenant_context import apply_tenant_headers, set_tenant_id
+from app.services.tenant_context import apply_tenant_headers
 
 _bearer = HTTPBearer(auto_error=False)
 
 
-def get_current_principal(
+def _authenticate_principal(
     request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+    credentials: Optional[HTTPAuthorizationCredentials],
 ) -> AuthPrincipal:
-    apply_tenant_headers(dict(request.headers))
-    if settings_module.settings.MULTI_TENANT_ENABLED:
-        tid = request.headers.get("X-Tenant-Id")
-        if tid:
-            set_tenant_id(tid)
-
     if not settings_module.settings.AUTH_ENABLED:
         header_user = request.headers.get("X-User-Id")
-        principal = AuthPrincipal(
+        return AuthPrincipal(
             user_id=header_user or "anonymous",
             role=request.headers.get("X-User-Role", "user"),
             auth_method="anonymous",
         )
-        enforce_rate_limits(request, principal.user_id)
-        return principal
 
     auth = get_auth_service()
     api_key = request.headers.get("X-API-Key")
     if api_key:
         principal = auth.authenticate_api_key(api_key)
         if principal:
-            enforce_rate_limits(request, principal.user_id)
             return principal
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     if credentials and credentials.credentials:
         principal = auth.decode_access_token(credentials.credentials)
         if principal:
-            enforce_rate_limits(request, principal.user_id)
             return principal
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
@@ -56,6 +47,34 @@ def get_current_principal(
         status_code=401,
         detail="Authentication required. Use Bearer JWT or X-API-Key header.",
     )
+
+
+def get_current_principal(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+) -> AuthPrincipal:
+    apply_tenant_headers(dict(request.headers))
+    principal = _authenticate_principal(request, credentials)
+    enforce_rate_limits(request, principal.user_id)
+    if settings_module.settings.MULTI_TENANT_ENABLED:
+        bind_tenant_for_principal(request, principal)
+    return principal
+
+
+def get_current_tenant_principal(
+    principal: AuthPrincipal = Depends(get_current_principal),
+) -> AuthPrincipal:
+    """Principal with tenant context already validated (multi-tenant routes)."""
+    return principal
+
+
+def require_task_access_dep(
+    task_id: str,
+    principal: AuthPrincipal = Depends(get_current_principal),
+) -> AuthPrincipal:
+    """FastAPI dependency: enforce task ownership for path ``task_id``."""
+    assert_task_access(principal, task_id)
+    return principal
 
 
 def require_role(*roles: str):
