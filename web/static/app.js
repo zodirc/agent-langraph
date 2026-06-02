@@ -11,6 +11,8 @@ const flowTimelineEl = document.getElementById("flow-timeline");
 const flowRefreshBtnEl = document.getElementById("flow-refresh-btn");
 const flowOpenBtnEl = document.getElementById("flow-open-btn");
 const stateDebugBtnEl = document.getElementById("state-debug-btn");
+const historyListEl = document.getElementById("history-list");
+const historyRefreshBtnEl = document.getElementById("history-refresh-btn");
 const stateDebugModalEl = document.getElementById("state-debug-modal");
 const stateDebugMetaEl = document.getElementById("state-debug-meta");
 const stateDebugKeysEl = document.getElementById("state-debug-keys");
@@ -20,6 +22,7 @@ const stateDebugCloseBtnEl = document.getElementById("state-debug-close-btn");
 const stateDebugLiveEl = document.getElementById("state-debug-live");
 const stateDebugSourceTabsEl = document.getElementById("state-debug-source-tabs");
 const themeSelectEl = document.getElementById("theme-select");
+const commandSuggestionsEl = document.getElementById("command-suggestions");
 
 let running = false;
 let activeTaskId = null;
@@ -69,6 +72,29 @@ let stateDebugSelectedSource = "merged";
 const flowLiveHistoryByTask = new Map();
 let flowSelectedNode = "";
 let flowPopupWin = null;
+let historyRefreshRunning = false;
+let historyRefreshSeq = 0;
+const COMMAND_SUGGESTIONS = [
+  "/help",
+  "/new",
+  "/clear",
+  "/confirm",
+  "/resume",
+  "/stop",
+  "/stop-all",
+  "/append ",
+  "/session",
+  "/history",
+  "/status ",
+  "/audit ",
+  "/result ",
+  "/approve ",
+  "/reject ",
+  "/supervisor ",
+  "/risk high ",
+  "/login ",
+  "/logout",
+];
 const FLOW_PREFERRED_ORDER = [
   "planning",
   "retrieval",
@@ -663,6 +689,7 @@ function startNewSession() {
   updateSessionBadge(id);
   clearScreen();
   appendLine(`new session: ${id.slice(0, 8)}… (server task isolated)`, "system");
+  refreshHistorySidebar();
   return id;
 }
 
@@ -698,6 +725,120 @@ function getAuthHeaders() {
   return headers;
 }
 
+function formatHistoryTime(raw) {
+  if (!raw) return "-";
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return String(raw);
+  return d.toLocaleString();
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replaceAll('"', "&quot;");
+}
+
+function selectHistorySession(taskId) {
+  if (!taskId) return;
+  if (getSessionId() === taskId) return;
+  if (running && activeTaskId && activeTaskId !== taskId) {
+    appendLine("当前有任务运行中，无法切换会话。请先 /stop。", "error");
+    return;
+  }
+  localStorage.setItem(SESSION_KEY, taskId);
+  updateSessionBadge(taskId);
+  activeTaskId = null;
+  sessionHasInFlightMission = false;
+  clearScreen();
+  appendLine(`switched session: ${taskId.slice(0, 8)}…`, "system");
+  refreshFlowPanel(taskId);
+  refreshHistorySidebar();
+}
+
+async function deleteHistoryTask(taskId) {
+  if (!taskId) return;
+  if (running && activeTaskId === taskId) {
+    appendLine("当前会话正在运行，无法删除。请先停止任务。", "error");
+    return;
+  }
+  const confirmed = window.confirm(`确认删除会话 ${taskId.slice(0, 8)}… ?`);
+  if (!confirmed) return;
+  try {
+    const res = await fetch(`/tasks/${taskId}`, {
+      method: "DELETE",
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) {
+      appendLine(`delete failed: ${res.status}`, "error");
+      return;
+    }
+    const current = getSessionId();
+    if (current === taskId) {
+      startNewSession();
+      sessionHasInFlightMission = false;
+      activeTaskId = null;
+    }
+    appendLine(`deleted session: ${taskId.slice(0, 8)}…`, "system");
+    await refreshHistorySidebar();
+  } catch (err) {
+    appendLine(`delete error: ${err}`, "error");
+  }
+}
+
+function renderHistorySidebarError(msg) {
+  if (!historyListEl) return;
+  historyListEl.innerHTML = `<p class="flow-empty">${escapeHtml(msg)}</p>`;
+}
+
+async function refreshHistorySidebar() {
+  if (!historyListEl || historyRefreshRunning) return;
+  historyRefreshRunning = true;
+  const seq = ++historyRefreshSeq;
+  try {
+    historyListEl.innerHTML = '<p class="flow-empty">历史会话加载中…</p>';
+    const res = await fetch("/tasks?limit=50", { headers: getAuthHeaders() });
+    if (seq !== historyRefreshSeq) return;
+    if (!res.ok) {
+      if (res.status === 429) {
+        renderHistorySidebarError("请求过快（429），请稍后重试。");
+      } else {
+        renderHistorySidebarError("历史会话加载失败。");
+      }
+      return;
+    }
+    const data = await res.json();
+    if (seq !== historyRefreshSeq) return;
+    const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    if (!tasks.length) {
+      renderHistorySidebarError("暂无历史会话。");
+      return;
+    }
+    const current = getSessionId();
+    historyListEl.innerHTML = tasks
+      .map((task) => {
+        const id = String(task.task_id || "");
+        const status = String(task.status || "-");
+        const goal = String(task.goal || "");
+        const updated = formatHistoryTime(task.updated_at);
+        const currentCls = current === id ? " current" : "";
+        return `<div class="history-item${currentCls}" data-history-task="${escapeAttr(id)}">
+          <div class="history-item-head">
+            <span class="history-item-id">${escapeHtml(id.slice(0, 8))}…</span>
+            <span class="history-item-status">${escapeHtml(status)}</span>
+          </div>
+          <div class="history-item-goal">${escapeHtml(goal || "(no goal)")}</div>
+          <div class="history-item-time">${escapeHtml(updated)}</div>
+          <div class="history-item-actions">
+            <button type="button" class="history-delete-btn" data-history-delete="${escapeAttr(id)}">删除</button>
+          </div>
+        </div>`;
+      })
+      .join("");
+  } catch {
+    if (seq === historyRefreshSeq) renderHistorySidebarError("历史会话加载失败。");
+  } finally {
+    if (seq === historyRefreshSeq) historyRefreshRunning = false;
+  }
+}
+
 async function loginCommand(parts) {
   const username = parts[1] || "admin";
   const password = parts[2] || "admin";
@@ -716,6 +857,39 @@ async function loginCommand(parts) {
 }
 
 function appendLine(text, className = "system") {
+  if (className === "user") {
+    const wrap = document.createElement("div");
+    wrap.className = "user-bubble-wrap";
+
+    const bubble = document.createElement("div");
+    bubble.className = "user-bubble";
+    bubble.textContent = text;
+    wrap.appendChild(bubble);
+
+    const actions = document.createElement("div");
+    actions.className = "user-bubble-actions";
+    const resendBtn = document.createElement("button");
+    resendBtn.type = "button";
+    resendBtn.className = "user-resend-btn";
+    resendBtn.textContent = "重新发送";
+    resendBtn.title = "按原消息重新发送";
+    resendBtn.addEventListener("click", async () => {
+      const raw = String(text || "").replace(/^>\s*/, "").trim();
+      if (!raw) return;
+      if (running) {
+        appendLine("当前任务仍在运行，请先停止或等待完成后再重发。", "error");
+        return;
+      }
+      await handleCommand(raw);
+    });
+    actions.appendChild(resendBtn);
+    wrap.appendChild(actions);
+
+    outputEl.appendChild(wrap);
+    scrollOutputIfPinned();
+    return;
+  }
+
   const line = document.createElement("p");
   line.className = `line ${className}`;
   line.textContent = text;
@@ -1090,6 +1264,7 @@ async function listHistory() {
       "system"
     );
   }
+  refreshHistorySidebar();
 }
 
 async function showStatus(taskId) {
@@ -1583,6 +1758,7 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
         "system"
       );
     }
+    refreshHistorySidebar();
   } else if (eventType === "subtasks") {
     appendLine(`subtasks planned: ${payload.count}`, "system");
     for (const st of payload.subtasks || []) {
@@ -1697,6 +1873,7 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
       }
     }
     refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
+    refreshHistorySidebar();
   }
 }
 
@@ -1737,6 +1914,21 @@ function formatNodeEvent(payload) {
     }
     appendLine(`  tip: /status ${payload.task_id}  or  /audit ${payload.task_id}`, "system");
   }
+}
+
+function refreshCommandSuggestions(value) {
+  if (!commandSuggestionsEl) return;
+  const input = String(value || "");
+  const normalized = input.trimStart().toLowerCase();
+  if (!normalized.startsWith("/")) {
+    commandSuggestionsEl.innerHTML = "";
+    return;
+  }
+  const filtered = COMMAND_SUGGESTIONS.filter((cmd) => cmd.startsWith(normalized)).slice(0, 10);
+  const candidates = filtered.length ? filtered : COMMAND_SUGGESTIONS.slice(0, 10);
+  commandSuggestionsEl.innerHTML = candidates
+    .map((cmd) => `<option value="${escapeAttr(cmd)}"></option>`)
+    .join("");
 }
 
 async function consumeSseStream(res, taskIdRef) {
@@ -1997,6 +2189,15 @@ formEl.addEventListener("submit", async (event) => {
   await handleCommand(value);
 });
 
+if (inputEl) {
+  inputEl.addEventListener("input", () => {
+    refreshCommandSuggestions(inputEl.value);
+  });
+  inputEl.addEventListener("focus", () => {
+    refreshCommandSuggestions(inputEl.value);
+  });
+}
+
 if (stopBtnEl) {
   stopBtnEl.addEventListener("click", async () => {
     if (!(running || sessionHasInFlightMission)) return;
@@ -2074,6 +2275,28 @@ if (flowOpenBtnEl) {
   });
 }
 
+if (historyRefreshBtnEl) {
+  historyRefreshBtnEl.addEventListener("click", async () => {
+    await refreshHistorySidebar();
+  });
+}
+
+if (historyListEl) {
+  historyListEl.addEventListener("click", async (ev) => {
+    const deleteBtn = ev.target.closest("[data-history-delete]");
+    if (deleteBtn) {
+      ev.stopPropagation();
+      const taskId = String(deleteBtn.getAttribute("data-history-delete") || "");
+      if (taskId) await deleteHistoryTask(taskId);
+      return;
+    }
+    const item = ev.target.closest("[data-history-task]");
+    if (!item) return;
+    const taskId = String(item.getAttribute("data-history-task") || "");
+    if (taskId) selectHistorySession(taskId);
+  });
+}
+
 if (themeSelectEl) {
   themeSelectEl.addEventListener("change", () => {
     applyTheme(themeSelectEl.value);
@@ -2116,7 +2339,9 @@ async function warnIfSessionMissionInFlight() {
 updateSessionBadge(getSessionId());
 applyTheme(localStorage.getItem(THEME_KEY) || "dark");
 appendLine("Agent LangGraph Web CLI ready. Type /help for commands.", "system");
+refreshCommandSuggestions("");
 updateStopButtonState();
 warnIfSessionMissionInFlight();
 fetchHealth();
 refreshFlowPanel();
+refreshHistorySidebar();

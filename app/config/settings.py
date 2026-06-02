@@ -50,6 +50,16 @@ def _coerce_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _clean_optional_str(value: Any) -> str:
+    """Normalize optional config/env strings; treat None/null as empty."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.lower() in ("none", "null"):
+        return ""
+    return text
+
+
 class Settings:
     """Unified configuration loaded from config/config.yaml."""
 
@@ -80,13 +90,13 @@ class Settings:
         self.MODEL_PROVIDER = normalize_provider_id(
             os.environ.get("MODEL_PROVIDER") or str(model.get("provider", "anthropic"))
         )
-        yaml_api_key = str(model.get("api_key", "")).strip()
+        yaml_api_key = _clean_optional_str(model.get("api_key", ""))
         self.MODEL_API_KEY = resolve_model_api_key(
             self.MODEL_PROVIDER, secrets, yaml_api_key=yaml_api_key
         )
-        configured_base = str(model.get("base_url", "")).strip()
+        configured_base = _clean_optional_str(model.get("base_url", ""))
         if os.environ.get("MODEL_BASE_URL"):
-            configured_base = os.environ.get("MODEL_BASE_URL", "").strip()
+            configured_base = _clean_optional_str(os.environ.get("MODEL_BASE_URL", ""))
         self.MODEL_BASE_URL = resolve_model_base_url(self.MODEL_PROVIDER, configured_base)
         self.MODEL_NAME = default_model_name(
             self.MODEL_PROVIDER,

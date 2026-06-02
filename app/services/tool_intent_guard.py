@@ -20,6 +20,7 @@ INJECTION_MARKERS = [
 ]
 
 _ROLE_ORDER = {"guest": 0, "user": 1, "admin": 2}
+_HIGH_RISK_TOOLS = {"rm_path"}
 
 
 def check_tool_params_safe(
@@ -32,7 +33,7 @@ def check_tool_params_safe(
 ) -> tuple[bool, list[str]]:
     """Return (safe, issues). Blocks path escape and prompt-injection markers."""
     issues: list[str] = []
-    _ = user_goal  # reserved for future semantic consistency checks
+    goal_text = str(user_goal or "").lower()
 
     required_level = _ROLE_ORDER.get(str(spec.required_role or "user"), 1)
     actual_level = _ROLE_ORDER.get(str(user_role or "user"), 0)
@@ -47,6 +48,11 @@ def check_tool_params_safe(
         issues.append(
             f"high_risk_tool: '{tool_name}' requires admin or human review"
         )
+
+    if tool_name in _HIGH_RISK_TOOLS:
+        for marker in INJECTION_MARKERS:
+            if marker.lower() in goal_text:
+                issues.append(f"injection_marker_in_goal_for_{tool_name}: {marker}")
 
     for key, value in (params or {}).items():
         text = str(value).lower()

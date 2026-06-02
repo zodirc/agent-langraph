@@ -11,6 +11,19 @@ from app.services.artifact_tools import (
     handle_write_text_artifact,
 )
 from app.services.manuscript_context import analyze_manuscript_structure
+from app.services.session_fs_tools import (
+    handle_append_file,
+    handle_copy_path,
+    handle_grep_file,
+    handle_ls_path,
+    handle_mkdir_path,
+    handle_move_path,
+    handle_read_file,
+    handle_rm_path,
+    handle_replace_in_file,
+    handle_touch_file,
+    handle_write_file,
+)
 from app.services.tool_registry import ToolRegistry, ToolSpec
 
 
@@ -67,6 +80,231 @@ def _summarize_handler(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _register_artifact_and_utility(registry: ToolRegistry) -> None:
+    registry.register(
+        ToolSpec(
+            name="write_file",
+            description="Write text file under current session directory.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "parents": {"type": "boolean"},
+                },
+            },
+            output_schema={"type": "object"},
+            required_role="user",
+            risk_level="LOW",
+            handler=handle_write_file,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="append_file",
+            description="Append text file under current session directory.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "parents": {"type": "boolean"},
+                },
+            },
+            output_schema={"type": "object"},
+            required_role="user",
+            risk_level="LOW",
+            handler=handle_append_file,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="move_path",
+            description="Move/rename path under current session directory.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "src": {"type": "string"},
+                    "dst": {"type": "string"},
+                    "parents": {"type": "boolean"},
+                },
+            },
+            output_schema={"type": "object"},
+            required_role="user",
+            risk_level="LOW",
+            handler=handle_move_path,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="copy_path",
+            description="Copy file/dir under current session directory.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "src": {"type": "string"},
+                    "dst": {"type": "string"},
+                    "recursive": {"type": "boolean"},
+                    "parents": {"type": "boolean"},
+                },
+            },
+            output_schema={"type": "object"},
+            required_role="user",
+            risk_level="LOW",
+            handler=handle_copy_path,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="ls_path",
+            description="List files/directories under current session directory.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "path": {"type": "string"},
+                    "recursive": {"type": "boolean"},
+                    "max_entries": {"type": "integer"},
+                },
+            },
+            output_schema={"type": "object"},
+            required_role="user",
+            risk_level="LOW",
+            handler=handle_ls_path,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="read_file",
+            description="Read text file under current session directory.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "path": {"type": "string"},
+                    "offset": {"type": "integer"},
+                    "max_chars": {"type": "integer"},
+                },
+            },
+            output_schema={"type": "object"},
+            required_role="user",
+            risk_level="LOW",
+            handler=handle_read_file,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="grep_file",
+            description=(
+                "Search lines in a file under the current session directory "
+                "(cat file | grep pattern equivalent)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "path": {"type": "string"},
+                    "pattern": {"type": "string"},
+                    "ignore_case": {"type": "boolean"},
+                    "regex": {"type": "boolean"},
+                    "max_lines": {"type": "integer"},
+                },
+            },
+            output_schema={"type": "object"},
+            required_role="user",
+            risk_level="LOW",
+            handler=handle_grep_file,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="replace_in_file",
+            description=(
+                "Replace text in a file under current session directory "
+                "(sed-style replacement)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "path": {"type": "string"},
+                    "old_text": {"type": "string"},
+                    "new_text": {"type": "string"},
+                    "replace_all": {"type": "boolean"},
+                    "regex": {"type": "boolean"},
+                    "ignore_case": {"type": "boolean"},
+                    "dry_run": {"type": "boolean"},
+                },
+            },
+            output_schema={"type": "object"},
+            required_role="user",
+            risk_level="LOW",
+            handler=handle_replace_in_file,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="touch_file",
+            description="Create an empty file in current session directory.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "path": {"type": "string"},
+                    "parents": {"type": "boolean"},
+                },
+            },
+            output_schema={"type": "object"},
+            required_role="user",
+            risk_level="LOW",
+            handler=handle_touch_file,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="mkdir_path",
+            description="Create a directory in current session directory.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "path": {"type": "string"},
+                    "parents": {"type": "boolean"},
+                    "exist_ok": {"type": "boolean"},
+                },
+            },
+            output_schema={"type": "object"},
+            required_role="user",
+            risk_level="LOW",
+            handler=handle_mkdir_path,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="rm_path",
+            description=(
+                "Remove file or directory in current session directory. "
+                "Use recursive=true for non-empty directories."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "path": {"type": "string"},
+                    "recursive": {"type": "boolean"},
+                    "dry_run": {"type": "boolean"},
+                    "preview_token": {"type": "string"},
+                },
+            },
+            output_schema={"type": "object"},
+            required_role="user",
+            risk_level="HIGH",
+            handler=handle_rm_path,
+        )
+    )
     registry.register(
         ToolSpec(
             name="get_runtime_info",

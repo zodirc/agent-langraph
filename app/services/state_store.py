@@ -292,6 +292,24 @@ class StateStore:
             ).fetchall()
         return self._rows_to_records(rows)
 
+    def delete_task(self, task_id: str) -> bool:
+        if uses_postgres():
+            with postgres_connection() as conn:
+                row = conn.execute(
+                    "DELETE FROM task_states WHERE task_id = %s RETURNING task_id",
+                    (task_id,),
+                ).fetchone()
+            return bool(row)
+
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM task_states WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.commit()
+            deleted = cur.rowcount > 0
+        return deleted
+
     def _rows_to_records(self, rows: Any) -> list[TaskRecord]:
         records: list[TaskRecord] = []
         for row in rows:

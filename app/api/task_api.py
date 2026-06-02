@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -74,6 +75,11 @@ class TaskListResponse(BaseModel):
     total: int
 
 
+class TaskDeleteResponse(BaseModel):
+    task_id: str
+    deleted: bool
+
+
 def _prepare_task_request(
     request: CreateTaskRequest,
     principal: AuthPrincipal,
@@ -111,6 +117,17 @@ def list_tasks(
         for r in records
     ]
     return TaskListResponse(tasks=tasks, total=len(tasks))
+
+
+@router.delete("/{task_id}", response_model=TaskDeleteResponse)
+def delete_task(
+    task_id: str,
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> TaskDeleteResponse:
+    deleted = get_state_store().delete_task(task_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    return TaskDeleteResponse(task_id=task_id, deleted=True)
 
 
 @router.post("/stream")
@@ -382,17 +399,25 @@ def stream_resume_task(
     _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> StreamingResponse:
     """SSE stream for mission resume (progress, writing_delta, confirmation gates)."""
-    try:
-        generator = get_graph_runner().stream_resume_mission(
-            task_id, confirm=request.confirm
-        )
-        return StreamingResponse(generator, media_type="text/event-stream")
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    def safe_generator():
+        try:
+            yield from get_graph_runner().stream_resume_mission(
+                task_id, confirm=request.confirm
+            )
+        except KeyError as exc:
+            payload = {"task_id": task_id, "detail": str(exc), "status": "NOT_FOUND"}
+            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except ValueError as exc:
+            payload = {"task_id": task_id, "detail": str(exc), "status": "INVALID_RESUME"}
+            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            payload = {"task_id": task_id, "detail": str(exc), "status": "STREAM_ERROR"}
+            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            done = {"task_id": task_id, "status": "FAILED"}
+            yield f"event: done\ndata: {json.dumps(done, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(safe_generator(), media_type="text/event-stream")
 
 
 @router.get("/{task_id}/state")

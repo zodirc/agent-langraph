@@ -83,6 +83,13 @@ body.theme-light .title {
   font-size: 13px;
 }
 
+.header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .theme-select {
   border: 1px solid var(--border);
   background: transparent;
@@ -95,7 +102,6 @@ body.theme-light .title {
 }
 
 .header-badges {
-  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -172,6 +178,114 @@ body.theme-light .title {
 
 body.theme-light .flow-pane {
   background: #f4f7fb;
+}
+
+.history-pane {
+  width: 340px;
+  border-left: 1px solid var(--border);
+  background: #0b0f15;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+body.theme-light .history-pane {
+  background: #f4f7fb;
+}
+
+.history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.history-title {
+  margin: 0;
+  font-size: 13px;
+  color: #7dd3fc;
+  font-weight: 600;
+}
+
+.history-list {
+  flex: 1;
+  min-height: 220px;
+  max-height: 54vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #010409;
+  padding: 8px;
+}
+
+body.theme-light .history-list {
+  background: #ffffff;
+}
+
+.history-item {
+  padding: 7px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(139, 148, 158, 0.35);
+  margin-bottom: 6px;
+  background: rgba(139, 148, 158, 0.08);
+}
+
+.history-item.current {
+  border-color: rgba(88, 166, 255, 0.75);
+  background: rgba(88, 166, 255, 0.2);
+}
+
+.history-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-item-id {
+  color: #a7f3d0;
+  font-size: 12px;
+}
+
+.history-item-status {
+  color: #bfdbfe;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.history-item-goal {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.history-item-time {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.history-item-actions {
+  margin-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.history-delete-btn {
+  border: 1px solid rgba(248, 81, 73, 0.8);
+  background: transparent;
+  color: #fda4af;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.history-delete-btn:hover {
+  background: rgba(248, 81, 73, 0.15);
 }
 
 .flow-head {
@@ -259,6 +373,11 @@ body.theme-light .line.user {
   color: #1e40af;
 }
 
+body.theme-light .user-bubble {
+  background: #e5edf8;
+  color: #111111;
+}
+
 body.theme-light .line.node {
   color: #14532d;
 }
@@ -308,6 +427,34 @@ body.theme-light .line.file-content {
 body.theme-light .flow-item {
   border-color: #cbd5e1;
   background: #f8fafc;
+}
+
+body.theme-light .history-item {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+body.theme-light .history-item.current {
+  border-color: #3b82f6;
+  background: #dbeafe;
+}
+
+body.theme-light .history-item-id {
+  color: #065f46;
+}
+
+body.theme-light .history-item-status {
+  color: #1d4ed8;
+}
+
+body.theme-light .history-item-time,
+body.theme-light .history-item-goal {
+  color: #475569;
+}
+
+body.theme-light .history-delete-btn {
+  color: #b91c1c;
+  border-color: #ef4444;
 }
 
 body.theme-light .flow-item.done {
@@ -511,6 +658,45 @@ body.theme-light .flow-node-box.error {
 .line.error { color: var(--red); }
 .line.result { color: var(--yellow); }
 .line.trace-header { color: var(--muted); margin-top: 12px; font-size: 12px; }
+
+.user-bubble-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin: 0 0 10px;
+}
+
+.user-bubble {
+  max-width: min(78%, 860px);
+  background: #e5edf8;
+  color: #111111;
+  border-radius: 999px;
+  padding: 10px 20px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.user-bubble-actions {
+  margin-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.user-resend-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.user-resend-btn:hover {
+  background: rgba(139, 148, 158, 0.15);
+}
 
 .trace-panel {
   max-height: 360px;
@@ -892,6 +1078,13 @@ body.theme-light .state-debug-json {
   }
 
   .flow-pane {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    min-height: 280px;
+  }
+
+  .history-pane {
     width: 100%;
     border-left: none;
     border-top: 1px solid var(--border);

@@ -202,6 +202,13 @@ class WritingPack(DomainPack):
                         "params": {},
                         "rationale": "edit_plot work item",
                     }
+                if kind in ("patch_recent_chapter", "consistency_check", "reconcile_outline_body"):
+                    return {
+                        "action": "continue",
+                        "next_executor": "pipeline:request",
+                        "params": {},
+                        "rationale": f"tool-assisted work item: {kind}",
+                    }
                 return {
                     "action": "continue",
                     "next_executor": "subgraph:writing",
@@ -605,7 +612,13 @@ class WritingPack(DomainPack):
 WRITING_PACK = WritingPack(
     name="writing",
     description="Long-form artifact writing with step_policy and metric completion",
-    tools=["read_text_artifact"],
+    tools=[
+        "read_text_artifact",
+        "ls_path",
+        "read_file",
+        "grep_file",
+        "replace_in_file",
+    ],
     planning_hints=["mission.step_policy", "append_body per step"],
     system_prompt=(
         "Long-form writing: one step_policy step per mission loop; "

@@ -17,6 +17,10 @@
       <span class="dot yellow"></span>
       <span class="dot green"></span>
       <span class="title">agent-langraph — runtime cli</span>
+      <div class="header-actions">
+        <button id="state-debug-btn" type="button" class="flow-btn" title="查看当前会话 AgentState">State</button>
+        <button id="flow-open-btn" type="button" class="flow-btn">Flow</button>
+      </div>
       <div class="header-badges">
         <span id="env-badge" class="badge badge-env">loading</span>
         <span id="session-badge" class="badge badge-session" title="当前会话 ID">session …</span>
@@ -24,22 +28,23 @@
     </header>
     <div class="terminal-main">
       <main id="output" class="terminal-output"></main>
-      <aside class="flow-pane" id="flow-pane">
-        <div class="flow-head">
-          <h3 class="flow-title">Flow Debug</h3>
-          <div class="flow-actions">
-            <button id="state-debug-btn" type="button" class="flow-btn" title="查看当前会话 AgentState">State</button>
-            <button id="flow-open-btn" type="button" class="flow-btn">新窗口</button>
-            <button id="flow-refresh-btn" type="button" class="flow-btn">刷新</button>
+      <aside class="history-pane" id="history-pane">
+        <div class="history-head">
+          <h3 class="history-title">历史会话</h3>
+          <button id="history-refresh-btn" type="button" class="flow-btn">刷新</button>
+        </div>
+        <div class="history-list" id="history-list">
+          <p class="flow-empty">暂无历史会话。</p>
+        </div>
+        <div id="flow-cache" style="display:none">
+          <p class="flow-meta" id="flow-meta">等待任务运行</p>
+          <p class="flow-task" id="flow-task">task: -</p>
+          <div class="flow-graph" id="flow-graph">
+            <p class="flow-empty">流程图等待任务数据…</p>
           </div>
-        </div>
-        <p class="flow-meta" id="flow-meta">等待任务运行</p>
-        <p class="flow-task" id="flow-task">task: -</p>
-        <div class="flow-graph" id="flow-graph">
-          <p class="flow-empty">流程图等待任务数据…</p>
-        </div>
-        <div class="flow-timeline" id="flow-timeline">
-          <p class="flow-empty">暂无节点数据。运行任务后将自动显示。</p>
+          <div class="flow-timeline" id="flow-timeline">
+            <p class="flow-empty">暂无节点数据。运行任务后将自动显示。</p>
+          </div>
         </div>
       </aside>
     </div>
@@ -48,11 +53,13 @@
       <input
         id="command-input"
         type="text"
+        list="command-suggestions"
         placeholder="输入任务目标，或 /help 查看命令"
         autofocus
       />
       <button id="stop-btn" type="button" class="stop-btn" disabled>Stop</button>
     </form>
+    <datalist id="command-suggestions"></datalist>
   </div>
   <dialog id="state-debug-modal" class="state-debug-modal">
     <div class="state-debug-shell">

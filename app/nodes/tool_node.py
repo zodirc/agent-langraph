@@ -218,6 +218,20 @@ def _build_tool_params(tool_name: str, state: AgentState) -> dict[str, Any]:
         return {"expression": str(expression)}
     if tool_name in ("enqueue_mission_work_item", "set_mission_work_plan"):
         return {"task_id": task_id, **tool_params}
+    if tool_name in (
+        "ls_path",
+        "read_file",
+        "write_file",
+        "append_file",
+        "move_path",
+        "copy_path",
+        "grep_file",
+        "replace_in_file",
+        "touch_file",
+        "mkdir_path",
+        "rm_path",
+    ):
+        return {"task_id": task_id, **tool_params}
     if tool_name == "edit_text_artifact":
         filename = resolve_read_paths(
             state, str(tool_params.get("filename") or "novel.txt")

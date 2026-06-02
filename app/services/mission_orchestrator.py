@@ -307,6 +307,78 @@ def _apply_tools_for_edit_plot(payload: dict[str, Any], spec: dict[str, Any]) ->
     return payload
 
 
+def _apply_tools_for_work_item(
+    payload: dict[str, Any],
+    item: dict[str, Any],
+    *,
+    default_body_name: str,
+) -> dict[str, Any]:
+    kind = str(item.get("kind") or "")
+    params = dict(item.get("params") or {})
+    payload = dict(payload)
+    payload.setdefault("tool_params", {})
+
+    if kind == "patch_recent_chapter":
+        file_path = str(params.get("filename") or params.get("path") or default_body_name)
+        tools = ["read_file", "grep_file"]
+        tool_params = {
+            "read_file": {
+                "path": file_path,
+                "max_chars": int(params.get("read_max_chars") or 12000),
+            },
+            "grep_file": {
+                "path": file_path,
+                "pattern": str(params.get("grep_pattern") or "TODO|待补|TBD"),
+                "regex": True,
+                "ignore_case": True,
+                "max_lines": int(params.get("grep_max_lines") or 80),
+            },
+        }
+        if params.get("old_text") is not None and params.get("new_text") is not None:
+            tools.append("replace_in_file")
+            tool_params["replace_in_file"] = {
+                "path": file_path,
+                "old_text": str(params.get("old_text")),
+                "new_text": str(params.get("new_text")),
+                "replace_all": bool(params.get("replace_all", False)),
+                # Optional by default: preview edit intent without forcing write.
+                "dry_run": bool(params.get("dry_run", True)),
+            }
+        payload["selected_tools"] = tools
+        payload["tool_params"] = {**payload["tool_params"], **tool_params}
+        return payload
+
+    if kind in ("consistency_check", "reconcile_outline_body"):
+        file_path = str(params.get("filename") or params.get("path") or default_body_name)
+        payload["selected_tools"] = ["ls_path", "read_file", "grep_file"]
+        payload["tool_params"] = {
+            **payload["tool_params"],
+            "ls_path": {"path": str(params.get("ls_path") or ".")},
+            "read_file": {
+                "path": file_path,
+                "max_chars": int(params.get("read_max_chars") or 12000),
+            },
+            "grep_file": {
+                "path": file_path,
+                "pattern": str(params.get("grep_pattern") or r"第\s*\d+\s*章"),
+                "regex": True,
+                "ignore_case": True,
+                "max_lines": int(params.get("grep_max_lines") or 120),
+            },
+        }
+        return payload
+
+    return payload
+
+
+def _auto_tool_injection_enabled(mission: dict[str, Any], item: dict[str, Any]) -> bool:
+    params = dict(item.get("params") or {})
+    if "auto_tools" in params:
+        return bool(params.get("auto_tools"))
+    orch = orchestration_config(mission)
+    return bool(orch.get("auto_tool_injection", False))
+
+
 def apply_work_plan_to_payload(state: AgentState) -> AgentState:
     mission = state.get("mission") or {}
     if not orchestration_enabled(mission):
@@ -374,6 +446,14 @@ def apply_work_plan_to_payload(state: AgentState) -> AgentState:
     intent = work_item_to_writing_intent(item, mission=mission, mission_step=step)
     payload["writing_intent"] = intent
     payload["current_work_item"] = item
+    from app.config.settings import settings
+
+    if _auto_tool_injection_enabled(mission, item):
+        payload = _apply_tools_for_work_item(
+            payload,
+            item,
+            default_body_name=str(getattr(settings, "MANUSCRIPT_DEFAULT_BODY", "novel.txt")),
+        )
     if str(item.get("kind")) == "edit_plot":
         payload = _apply_tools_for_edit_plot(payload, dict(intent.get("edit_spec") or {}))
     if str(item.get("kind")) == "run_tools":
