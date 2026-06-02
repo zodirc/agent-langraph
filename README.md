@@ -23,6 +23,8 @@ HOST_PORT=8001 docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 
 ## Web CLI
 
+> UI 现代化方案（本地 Docker + 宿主机 Vite 开发）：[`docs/WEB_UI_MODERNIZATION.md`](docs/WEB_UI_MODERNIZATION.md)
+
 - 直接输入任务目标（SSE 流式）
 - `/history` `/status <id>` `/result <id>`
 - `/approve <id>` `/reject <id>`
@@ -120,6 +122,7 @@ export SERVICE_API_KEY=your-service-key
 | [`docs/SESSION_TURN_POLICY.md`](docs/SESSION_TURN_POLICY.md) | session turn 规划闸门、机械续写、mission active 场景决策 |
 | [`docs/CODE_ARTIFACT_PIPELINE.md`](docs/CODE_ARTIFACT_PIPELINE.md) | 编译校验、stderr 驱动 LLM 修复、composed_at_end 流式 |
 | [`docs/DISPLAY_AND_DELIVERY.md`](docs/DISPLAY_AND_DELIVERY.md) | 代码缩进保留、流式 artifacts、delivery 与记忆写回门控 |
+| [`docs/WEB_UI_MODERNIZATION.md`](docs/WEB_UI_MODERNIZATION.md) | Web 对话界面现代化（React/Vite、Docker 构建、分阶段实施） |
 | [`app/config/prompt_templates.py`](app/config/prompt_templates.py) | 按 `purpose` / `domain` / `reasoning_mode` 选择 Prompt |
 | `config.yaml` → `reasoning_trace` · [`app/services/reasoning_trace.py`](app/services/reasoning_trace.py) | SSE trace、`thinking` 字段 |
 | `GET /domains/prompt-catalog` | HTTP 查询模板目录 |

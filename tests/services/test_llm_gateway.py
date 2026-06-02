@@ -3,9 +3,13 @@ import pytest
 from app.services.llm_gateway import (
     adapt_raw_response,
     extract_chunk_stream_parts,
+    is_stream_transport_error,
     normalize_message_content,
     _extract_from_text,
+    _draft_from_partial_stream,
 )
+from app.services.artifact_args_parser import ArtifactArgsParser
+from app.services.writing_generation import begin_writing_generation
 
 
 def test_extract_chunk_stream_parts_splits_blocks():
@@ -49,6 +53,28 @@ def test_extract_json_content():
     draft = _extract_from_text('{"content": "第一章正文"}')
     assert draft.content == "第一章正文"
     assert draft.source == "json_text"
+
+
+def test_is_stream_transport_error():
+    assert is_stream_transport_error(Exception("peer closed connection incomplete chunked read"))
+    assert is_stream_transport_error(Exception("502 Bad Gateway"))
+    assert not is_stream_transport_error(ValueError("bad json"))
+
+
+def test_draft_from_partial_stream():
+    parser = ArtifactArgsParser()
+    parser.feed('{"content": "残稿正文')
+    gen = begin_writing_generation(task_id="t", filename="n.txt")
+    draft = _draft_from_partial_stream(
+        parser.accumulated,
+        parser,
+        None,
+        stream_interrupted=True,
+        generation=gen,
+    )
+    assert draft is not None
+    assert draft.content == "残稿正文"
+    assert draft.meta.get("stream_interrupted") is True
 
 
 def test_adapt_tool_calls():

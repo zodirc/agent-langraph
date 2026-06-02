@@ -50,6 +50,13 @@ def classify_llm_error(exc: BaseException) -> LLMErrorCategory:
         return LLMErrorCategory.TIMEOUT
     if "429" in message or "rate" in message or "limit" in message:
         return LLMErrorCategory.RATE_LIMIT
+    if (
+        "incomplete chunked" in message
+        or "peer closed" in message
+        or "connection reset" in message
+        or "broken pipe" in message
+    ):
+        return LLMErrorCategory.SERVER_ERROR
     if any(code in message for code in ("500", "502", "503", "529", "server error")):
         return LLMErrorCategory.SERVER_ERROR
     return LLMErrorCategory.UNKNOWN

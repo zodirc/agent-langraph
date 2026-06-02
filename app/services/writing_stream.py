@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Iterator, Optional
+from typing import TYPE_CHECKING
 
 from app.config.settings import settings
+from app.services.artifact_args_parser import ArtifactArgsParser, extract_content_so_far
 from app.services.reasoning_trace import extract_field_text, report_status_trace, trace_enabled
 from app.services.stream_progress import report_writing_delta
+
+if TYPE_CHECKING:
+    from app.services.artifact_args_parser import ArtifactArgsParser as ArtifactArgsParserType
 
 # Throttle trace while waiting for parseable JSON "content" during artifact streaming.
 _WRITING_BUFFER_TRACE_INTERVAL_SEC = 5.0
@@ -22,6 +26,26 @@ def writing_stream_max_chars() -> int:
     return int(getattr(settings, "WRITING_STREAM_MAX_CHARS", 200_000))
 
 
+def writing_buffer_stall_chars() -> int:
+    return int(getattr(settings, "WRITING_BUFFER_STALL_CHARS", 8000))
+
+
+def writing_buffer_stall_preview_chars() -> int:
+    return int(getattr(settings, "WRITING_BUFFER_STALL_PREVIEW_CHARS", 200))
+
+
+def extract_streaming_content(accumulated: str, parser: "ArtifactArgsParserType | None" = None) -> str:
+    """Best-effort ``content`` from partial tool args (parser preferred, regex fallback)."""
+    if parser is not None:
+        text = parser.content_so_far()
+        if text:
+            return text
+    text = extract_content_so_far(accumulated)
+    if text:
+        return text
+    return extract_field_text(accumulated, "content")
+
+
 def emit_writing_content_deltas(
     accumulated: str,
     seen_len: int,
@@ -30,6 +54,7 @@ def emit_writing_content_deltas(
     node: str = "writing",
     phase: str = "artifact",
     min_delta: int = 24,
+    parser: "ArtifactArgsParserType | None" = None,
 ) -> int:
     """
     Push incremental artifact ``content`` field text to writing_delta SSE.
@@ -37,7 +62,7 @@ def emit_writing_content_deltas(
     """
     if not writing_stream_enabled():
         return seen_len
-    text = extract_field_text(accumulated, "content")
+    text = extract_streaming_content(accumulated, parser)
     if len(text) <= seen_len:
         return seen_len
     cap = writing_stream_max_chars()
@@ -65,6 +90,7 @@ def maybe_report_writing_buffer_trace(
     content_seen_len: int,
     last_report_at: float,
     interval_sec: float = _WRITING_BUFFER_TRACE_INTERVAL_SEC,
+    parser: "ArtifactArgsParserType | None" = None,
 ) -> float:
     """
     Emit writing/status trace while the model streams but ``content`` is not yet parseable.
@@ -78,11 +104,24 @@ def maybe_report_writing_buffer_trace(
     if now - last_report_at < interval_sec:
         return last_report_at
     fname = filename or "artifact"
-    report_status_trace(
-        "writing",
+    msg = (
         f"模型输出中：已缓冲 {accumulated_len} 字符，{fname} 正文 content 尚未就绪"
-        "（手稿区可能暂空，以此 trace 为准）",
+        "（手稿区可能暂空，以此 trace 为准）"
     )
+    stall_at = writing_buffer_stall_chars()
+    if accumulated_len >= stall_at and parser is not None:
+        preview = parser.stall_preview(writing_buffer_stall_preview_chars())
+        hint = "含 content 键" if parser.has_content_key() else "未见 content 键"
+        if parser.discouraged_prefix_detected():
+            hint += "；args 前缀含 reasoning/thinking 等字段"
+        msg += f"。诊断：{hint}；前缀：{preview}"
+        try:
+            from app.services.metrics_service import get_metrics_service
+
+            get_metrics_service().inc_contract_event("writing_stream_stall")
+        except Exception:
+            pass
+    report_status_trace("writing", msg)
     return now
 
 

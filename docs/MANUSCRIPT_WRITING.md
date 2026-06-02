@@ -118,6 +118,15 @@ planning → retrieval? → tool_execution* → writing? → reasoning → polic
 
 目的：避免「推翻大纲但正文继续从旧位置 append」导致的不一致；同时保留轻量改纲时继续续写的能力（非硬编码）。
 
+#### 流式写作与 WGC（Writing Generation Contract）
+
+- 模块：[`llm_gateway.py`](../app/services/llm_gateway.py) · [`writing_stream.py`](../app/services/writing_stream.py) · [`artifact_args_parser.py`](../app/services/artifact_args_parser.py)
+- 契约文档：[`contracts/WRITING_GENERATION_CONTRACT.md`](contracts/WRITING_GENERATION_CONTRACT.md)
+- 模型通过 `submit_artifact` 流式返回 tool **args**（非 prompt 回显）；`ArtifactArgsParser` 增量抽取 `content` 并推送 `writing_delta`。
+- **断流/502**：`partial_commit_on_disconnect` 开启时保留已解析 partial 正文；transport 可配置重试（`performance.writing_generation.stream_max_retries`）。
+- **熔断**：`max_stream_duration_sec`、`max_accumulated_chars` 防止超长无 content 缓冲。
+- 每次生成带 `generation_id` 元数据（`draft.meta`），便于 audit 与排障。
+
 ### Reasoning
 
 - 以 `tool_results` 与 `manuscript` 为 ground truth

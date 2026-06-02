@@ -8,6 +8,7 @@ JSON-in-text only when configured or tool call absent.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional
 
@@ -29,12 +30,20 @@ from app.services.reasoning_trace import (
     thinking_stream_enabled,
     trace_enabled,
 )
+from app.services.artifact_args_parser import ArtifactArgsParser
+from app.services.circuit_breaker import classify_llm_error, is_retryable_category
 from app.services.stream_progress import report_thinking_delta
+from app.services.writing_generation import (
+    WritingGenerationRecord,
+    begin_writing_generation,
+    map_close_status,
+)
 from app.services.writing_stream import (
     emit_full_content_deltas,
     emit_writing_content_deltas,
-    report_writing_done,
+    extract_streaming_content,
     maybe_report_writing_buffer_trace,
+    report_writing_done,
     report_writing_start,
     writing_stream_enabled,
 )
@@ -265,10 +274,12 @@ def adapt_raw_response(raw: Any) -> ArtifactDraft:
     return draft
 
 
-def _writing_system_prompt() -> str:
-    return (
+def _writing_system_prompt(*, segment_index: int = 0) -> str:
+    base = (
         "You are a creative writing assistant for long-form Chinese fiction. "
         f"You MUST call the tool `{ARTIFACT_TOOL_NAME}` with the full plain text to save. "
+        "Tool arguments must be a single JSON object with only the required `content` key—"
+        "no reasoning, thinking, or analysis fields. "
         "Do not output thinking-only blocks. "
         "Use writing_context when present: continue from novel_tail, follow outline_for_chapter, "
         "obey writing_guidelines_excerpt when present (natural tone, avoid AI-template phrases, "
@@ -277,6 +288,54 @@ def _writing_system_prompt() -> str:
         "Plant and resolve foreshadowing consistently with prior tail and outline. "
         "The content field must be story/outline prose in Chinese, not meta commentary."
     )
+    if segment_index > 0:
+        base += (
+            "\nThis is a continuation segment: keep output concise, start the tool `content` "
+            "string promptly, and do not prepend long meta or reasoning text in tool arguments."
+        )
+    return base
+
+
+def is_stream_transport_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    if is_retryable_category(classify_llm_error(exc)):
+        return True
+    return any(
+        token in message
+        for token in (
+            "incomplete chunked",
+            "peer closed",
+            "502",
+            "bad gateway",
+            "connection reset",
+            "broken pipe",
+        )
+    )
+
+
+def _draft_from_partial_stream(
+    accumulated: str,
+    parser: ArtifactArgsParser,
+    merged: Any,
+    *,
+    stream_interrupted: bool,
+    generation: WritingGenerationRecord,
+) -> ArtifactDraft | None:
+    content = extract_streaming_content(accumulated, parser).strip()
+    if not content and merged is not None:
+        try:
+            content = adapt_raw_response(merged).content.strip()
+        except ValueError:
+            content = extract_field_text(accumulated, "content").strip()
+    if not content:
+        return None
+    meta = generation.to_meta()
+    meta["stream_interrupted"] = stream_interrupted
+    meta["stream_close"] = map_close_status(
+        has_content=True,
+        stream_interrupted=stream_interrupted,
+    )
+    return ArtifactDraft(content=content, source="stream_partial", meta=meta)
 
 
 _THINKING_ONLY_RETRY_SYSTEM_SUFFIX = (
@@ -397,6 +456,15 @@ def _stream_artifact_live(
     """Stream LLM output; push artifact body via writing_delta."""
     from langchain_core.messages import HumanMessage, SystemMessage
 
+    task_id = str(user_payload.get("task_id") or "")
+    segment_index = int(user_payload.get("chunk_index") or 0)
+    generation = begin_writing_generation(
+        task_id=task_id,
+        filename=filename,
+        segment_index=segment_index,
+        target_chars=target_chars,
+    )
+
     report_writing_start(filename, target_chars=target_chars)
     report_status_trace("writing", f"gateway: 流式生成 {filename}…")
 
@@ -413,75 +481,166 @@ def _stream_artifact_live(
         except TypeError:
             stream_llm = llm.bind_tools([tool_def])
 
-    accumulated = ""
+    parser = ArtifactArgsParser()
     seen_content = 0
     buffer_trace_at = 0.0
     merged: Any = None
     emit_thinking = thinking_stream_enabled()
-    task_id = str(user_payload.get("task_id") or "")
+    stream_started = time.monotonic()
+    stream_interrupted = False
+    aborted = False
+    max_duration = int(getattr(settings, "WRITING_STREAM_MAX_DURATION_SEC", 600))
+    max_accumulated = int(getattr(settings, "WRITING_STREAM_MAX_ACCUMULATED_CHARS", 120_000))
 
-    for chunk in stream_llm.stream(messages):
-        if task_id:
-            try:
-                from app.services.mission_steer import pending_has_forced_action
-                from app.services.state_store import get_state_store
-
-                stored = get_state_store().load(task_id, read_only=True) or {}
-                pending = stored.get("pending_user_message")
-                if pending_has_forced_action(pending, "pause"):
-                    report_status_trace("writing", "检测到强制停止，终止本次流式生成")
-                    break
-            except Exception:
-                pass
-        merged = chunk if merged is None else merged + chunk
-        piece = _chunk_writing_buffer(chunk)
-        if not piece:
-            continue
-        if emit_thinking:
-            thinking_part, _ = extract_chunk_stream_parts(getattr(chunk, "content", ""))
-            if thinking_part:
-                report_thinking_delta(
-                    node="writing",
-                    phase="artifact_llm",
-                    text=thinking_part,
+    try:
+        for chunk in stream_llm.stream(messages):
+            elapsed = time.monotonic() - stream_started
+            if elapsed > max_duration:
+                report_status_trace(
+                    "writing",
+                    f"流式生成已达 {max_duration}s 上限，尝试提交已缓冲正文…",
                 )
-        accumulated += piece
-        prev_seen = seen_content
-        seen_content = emit_writing_content_deltas(
-            accumulated,
-            seen_content,
-            filename=filename,
-        )
-        if prev_seen == 0 and seen_content > 0:
-            report_status_trace(
-                "writing",
-                f"{filename} 正文 content 已开始流式输出（手稿区将随后刷新）",
-            )
-        buffer_trace_at = maybe_report_writing_buffer_trace(
-            filename=filename,
-            accumulated_len=len(accumulated),
-            content_seen_len=seen_content,
-            last_report_at=buffer_trace_at,
-        )
+                stream_interrupted = True
+                get_metrics_service().inc_contract_event("writing_stream_duration_cap")
+                break
+            if task_id:
+                try:
+                    from app.services.mission_steer import pending_has_forced_action
+                    from app.services.state_store import get_state_store
 
+                    stored = get_state_store().load(task_id, read_only=True) or {}
+                    pending = stored.get("pending_user_message")
+                    if pending_has_forced_action(pending, "pause"):
+                        report_status_trace("writing", "检测到强制停止，终止本次流式生成")
+                        aborted = True
+                        break
+                except Exception:
+                    pass
+            merged = chunk if merged is None else merged + chunk
+            piece = _chunk_writing_buffer(chunk)
+            if not piece:
+                continue
+            if emit_thinking:
+                thinking_part, _ = extract_chunk_stream_parts(getattr(chunk, "content", ""))
+                if thinking_part:
+                    report_thinking_delta(
+                        node="writing",
+                        phase="artifact_llm",
+                        text=thinking_part,
+                    )
+            parser.feed(piece)
+            if parser.args_len() > max_accumulated:
+                report_status_trace(
+                    "writing",
+                    f"tool args 已超 {max_accumulated} 字符上限，终止读流并尝试提交已解析正文…",
+                )
+                stream_interrupted = True
+                get_metrics_service().inc_contract_event("writing_stream_args_cap")
+                break
+            accumulated = parser.accumulated
+            prev_seen = seen_content
+            seen_content = emit_writing_content_deltas(
+                accumulated,
+                seen_content,
+                filename=filename,
+                parser=parser,
+            )
+            if prev_seen == 0 and seen_content > 0:
+                generation.time_to_first_content_ms = int(elapsed * 1000)
+                get_metrics_service().inc_contract_event("writing_content_first_byte")
+                report_status_trace(
+                    "writing",
+                    f"{filename} 正文 content 已开始流式输出（手稿区将随后刷新）",
+                )
+            buffer_trace_at = maybe_report_writing_buffer_trace(
+                filename=filename,
+                accumulated_len=parser.args_len(),
+                content_seen_len=seen_content,
+                last_report_at=buffer_trace_at,
+                parser=parser,
+            )
+    except Exception as exc:
+        if is_stream_transport_error(exc):
+            get_metrics_service().inc_contract_event("writing_stream_transport_error")
+            partial_draft = _draft_from_partial_stream(
+                parser.accumulated,
+                parser,
+                merged,
+                stream_interrupted=True,
+                generation=generation,
+            )
+            if partial_draft and getattr(settings, "WRITING_PARTIAL_ON_DISCONNECT", True):
+                generation.finish(
+                    status="partial",
+                    args_bytes=parser.args_len(),
+                    content_bytes=len(partial_draft.content),
+                    error_class=classify_llm_error(exc).value,
+                    extra={"stream_interrupted": True},
+                )
+                partial_draft.raw_length = parser.args_len()
+                partial_draft.meta.update(generation.to_meta())
+                report_status_trace(
+                    "writing",
+                    f"gateway: 流式连接中断，已保留 partial 正文 {len(partial_draft.content)} 字",
+                )
+                if partial_draft.content:
+                    report_writing_done(filename, len(partial_draft.content))
+                return partial_draft
+            raise RetryableError(str(exc)) from exc
+        raise
+
+    accumulated = parser.accumulated
     if merged is not None:
         try:
             draft = adapt_raw_response(merged)
         except ValueError:
-            partial = extract_field_text(accumulated, "content")
-            if partial:
-                draft = ArtifactDraft(content=partial, source="stream_partial", meta={})
+            content = extract_streaming_content(accumulated, parser)
+            if content:
+                draft = ArtifactDraft(content=content, source="stream_partial", meta={})
             else:
-                raise
+                if stream_interrupted or aborted:
+                    partial_draft = _draft_from_partial_stream(
+                        accumulated,
+                        parser,
+                        merged,
+                        stream_interrupted=stream_interrupted,
+                        generation=generation,
+                    )
+                    if partial_draft:
+                        draft = partial_draft
+                    else:
+                        raise
+                else:
+                    raise
     else:
-        partial = extract_field_text(accumulated, "content")
+        content = extract_streaming_content(accumulated, parser) or accumulated
         draft = ArtifactDraft(
-            content=partial or accumulated,
+            content=content,
             source="stream_partial",
             meta={},
         )
 
-    draft.raw_length = len(accumulated)
+    draft.raw_length = parser.args_len()
+    close = map_close_status(
+        has_content=bool(draft.content),
+        stream_interrupted=stream_interrupted,
+        aborted=aborted,
+    )
+    if close == "ok":
+        gen_status = "committed"
+    elif close == "partial":
+        gen_status = "partial"
+    elif close == "aborted":
+        gen_status = "aborted"
+    else:
+        gen_status = "failed"
+    generation.finish(
+        status=gen_status,
+        args_bytes=parser.args_len(),
+        content_bytes=len(draft.content or ""),
+        extra={"stream_close": close, "stream_interrupted": stream_interrupted},
+    )
+    draft.meta.update(generation.to_meta())
     if draft.content:
         report_writing_done(filename, len(draft.content))
     return draft
@@ -499,7 +658,8 @@ def invoke_artifact_draft(
     """
     caps = build_model_capabilities()
     preferred = (caps.get("structured_output") or {}).get("preferred", "tool")
-    system = _writing_system_prompt()
+    segment_index = int(user_payload.get("chunk_index") or 0)
+    system = _writing_system_prompt(segment_index=segment_index)
     user = json.dumps(
         {"task": task_desc, **user_payload},
         ensure_ascii=False,
@@ -516,23 +676,35 @@ def invoke_artifact_draft(
         return ArtifactDraft(content=content, source="local")
 
     if writing_stream_enabled():
-        try:
-            return _stream_artifact_live(
-                llm,
-                system=system,
-                user=user,
-                user_payload=user_payload,
-                filename=fname,
-                preferred=preferred,
-                target_chars=target_chars,
-            )
-        except RetryableError:
-            raise
-        except Exception as exc:
-            report_status_trace(
-                "writing",
-                f"gateway: 流式失败 ({exc})，回退单次调用…",
-            )
+        stream_retries = int(getattr(settings, "WRITING_STREAM_MAX_RETRIES", 2))
+        for attempt in range(stream_retries + 1):
+            try:
+                return _stream_artifact_live(
+                    llm,
+                    system=system,
+                    user=user,
+                    user_payload=user_payload,
+                    filename=fname,
+                    preferred=preferred,
+                    target_chars=target_chars,
+                )
+            except RetryableError as exc:
+                if attempt >= stream_retries:
+                    report_status_trace(
+                        "writing",
+                        f"gateway: 流式 transport 重试已用尽 ({exc})，回退单次调用…",
+                    )
+                    break
+                report_status_trace(
+                    "writing",
+                    f"gateway: 流式 transport 失败，重试 {attempt + 1}/{stream_retries}…",
+                )
+            except Exception as exc:
+                report_status_trace(
+                    "writing",
+                    f"gateway: 流式失败 ({exc})，回退单次调用…",
+                )
+                break
 
     report_status_trace("writing", "gateway: invoking model (tool-first)…")
     draft = _adapt_or_retry_thinking_only(

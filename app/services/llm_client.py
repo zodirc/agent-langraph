@@ -74,7 +74,15 @@ def with_retry(max_retries: int | None = None, base_delay: float | None = None, 
                     if category.value in ("auth_error", "content_filter", "context_too_long"):
                         raise
                     message = str(exc).lower()
-                    if "timeout" in message or "rate" in message or "529" in message or "503" in message:
+                    if (
+                        "timeout" in message
+                        or "rate" in message
+                        or "529" in message
+                        or "503" in message
+                        or "502" in message
+                        or "incomplete chunked" in message
+                        or "peer closed" in message
+                    ):
                         last_error = RetryableError(str(exc))
                         if attempt == retries - 1:
                             raise last_error from exc

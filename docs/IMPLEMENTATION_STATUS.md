@@ -194,6 +194,7 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 | 项 | 状态 | 说明 |
 |----|------|------|
 | 手稿子系统 | ✅ | `manuscript_service`、`writing_node`、`build_writing_context` |
+| 写作流式 WGC (v1) | ✅ | `artifact_args_parser`、`writing_generation`、断流 partial + transport 重试；见 `docs/contracts/WRITING_GENERATION_CONTRACT.md` |
 | Planning → Mission handoff | ✅ | `enable_planning_mission_handoff` + `mission_auto` |
 | Lazy work_plan | ✅ | `mission_orchestrator` 按 `step_policy` 推进一步 |
 | agenda / DAG 扩展 | ✅ | `task_agenda.py`：`depends_on`、阻塞传播、局部重规划 |
@@ -282,6 +283,7 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 5. **Patroni/pgpool 故障切换集成测试**
 6. **真实 Postgres 多租户 schema CI job**
 7. **Edge LLM / GDPR / 异地 DR**
+8. **Web UI 现代化** — 方案见 [`WEB_UI_MODERNIZATION.md`](WEB_UI_MODERNIZATION.md)（React/Vite SPA、`/cli` legacy、多阶段 Docker）；当前仍为 `web/static` 终端 CLI
 
 ---
 
@@ -311,6 +313,7 @@ pytest tests/services/test_react_entry.py tests/services/test_react_loop_runner.
 
 | 日期 | 说明 |
 |------|------|
+| 2026-06-02 | 新增 Web UI 现代化方案文档 `WEB_UI_MODERNIZATION.md`（待实施） |
 | 2026-06-01 | 对齐近期代码：SRDL、turn_event_log、agenda / DAG、confirmation gates、execution grant、route audit、reasoning isolation |
 | 2026-05-26 | 初版：对齐 Batch 0–4 仓库实现与测试覆盖 |
 | 2026-05-26 | 增补 Mission 写作阶段、autonomous、步数预算与 steer |

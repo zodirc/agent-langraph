@@ -136,6 +136,23 @@ class Settings:
         self.WRITING_STREAM_MAX_CHARS = int(
             performance.get("writing_stream_max_chars", 200_000)
         )
+        writing_gen = performance.get("writing_generation", {})
+        if not isinstance(writing_gen, dict):
+            writing_gen = {}
+        self.WRITING_STREAM_MAX_RETRIES = int(writing_gen.get("stream_max_retries", 2))
+        self.WRITING_STREAM_MAX_DURATION_SEC = int(
+            writing_gen.get("max_stream_duration_sec", 600)
+        )
+        self.WRITING_STREAM_MAX_ACCUMULATED_CHARS = int(
+            writing_gen.get("max_accumulated_chars", 120_000)
+        )
+        self.WRITING_BUFFER_STALL_CHARS = int(writing_gen.get("buffer_stall_trace_chars", 8000))
+        self.WRITING_BUFFER_STALL_PREVIEW_CHARS = int(
+            writing_gen.get("buffer_stall_preview_chars", 200)
+        )
+        self.WRITING_PARTIAL_ON_DISCONNECT = _coerce_bool(
+            writing_gen.get("partial_commit_on_disconnect", True)
+        )
 
         langgraphics_cfg = raw.get("langgraphics", {})
         self.LANGGRAPHICS_ENABLED = _coerce_bool(langgraphics_cfg.get("enabled", False))

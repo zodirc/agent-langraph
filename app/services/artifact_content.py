@@ -205,6 +205,7 @@ def generate_artifact_content(
         "filename": filename,
         "tool": tool_name,
         "target_chars": chars,
+        "chunk_index": chunk_index,
         "chapter_index": chapter_n,
         "conversation_history": history[-12:],
         "existing_outline": outline_excerpt or None,

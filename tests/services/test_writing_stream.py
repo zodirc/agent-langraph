@@ -102,6 +102,30 @@ def test_maybe_report_writing_buffer_trace_throttled(monkeypatch, test_settings)
     assert len(traces) == 2
 
 
+def test_emit_writing_content_deltas_unclosed_string(monkeypatch, test_settings):
+    import app.services.writing_stream as mod
+    from app.services.artifact_args_parser import ArtifactArgsParser
+
+    monkeypatch.setattr(mod, "settings", test_settings)
+    test_settings.WRITING_STREAM_ENABLED = True
+    events: list[dict] = []
+    monkeypatch.setattr(sp, "_writing_handler", lambda e: events.append(e))
+
+    parser = ArtifactArgsParser()
+    raw = '{"content": "流式未闭合'
+    parser.feed(raw)
+    seen = emit_writing_content_deltas(
+        raw,
+        0,
+        filename="novel.txt",
+        min_delta=1,
+        parser=parser,
+    )
+    assert seen == len("流式未闭合")
+    assert events
+    assert "流式" in events[0]["text"]
+
+
 def test_emit_full_content_deltas(monkeypatch, test_settings):
     import app.services.writing_stream as mod
 
