@@ -45,9 +45,9 @@ def test_route_after_planning_mission_act_continues_pipeline(base_state):
         },
         execution_mode="mission",
         mission_step=1,
-        skip_retrieval=True,
+        skip_retrieval=False,
     )
-    assert route_after_planning(state) == "writing"
+    assert route_after_planning(state) == "retrieval"
 
 
 def test_route_after_planning_mission_contract_ends_single_graph(base_state):

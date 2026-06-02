@@ -11,7 +11,7 @@ def mission_finalize_node(state: AgentState) -> AgentState:
         build_mission_checkpoint_summary,
         should_skip_llm_reasoning_on_finalize,
     )
-    from app.services.mission_orchestrator import orchestration_enabled, orchestration_summary
+    from app.services.mission_orchestrator import orchestration_enabled, orchestration_progress_brief
 
     mission = state.get("mission") or {}
     progress = state.get("progress") or {}
@@ -35,7 +35,7 @@ def mission_finalize_node(state: AgentState) -> AgentState:
 
     summary_extra = ""
     if orchestration_enabled(mission):
-        summary_extra = f" {orchestration_summary(state)}。"
+        summary_extra = f" {orchestration_progress_brief(state)}"
     elif mission.get("kind") == "writing" and metrics.get("target_chars"):
         summary_extra = (
             f" 进度: {metrics.get('written_chars', 0)}/"
@@ -45,12 +45,11 @@ def mission_finalize_node(state: AgentState) -> AgentState:
 
     reasoning = dict(state.get("reasoning_result") or {})
     structured = dict(reasoning.get("structured") or {})
-    if structured.get("source") == "mission_checkpoint" and summary_extra:
-        reasoning["summary"] = str(reasoning.get("summary", "")) + summary_extra
-        state = merge_state(state, reasoning_result=reasoning)
-    elif summary_extra and reasoning.get("summary"):
-        reasoning["summary"] = str(reasoning["summary"]) + summary_extra
-        state = merge_state(state, reasoning_result=reasoning)
+    source = str(structured.get("source") or "")
+    if summary_extra and reasoning.get("summary"):
+        if source not in ("mission_checkpoint", "mission_writing_skip"):
+            reasoning["summary"] = str(reasoning["summary"]) + summary_extra
+            state = merge_state(state, reasoning_result=reasoning)
 
     updated = merge_state(
         state,

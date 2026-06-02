@@ -420,6 +420,17 @@ def _work_item_label(item: dict[str, Any]) -> str:
     return title or kind or "?"
 
 
+def format_completed_labels(completed: list[str], *, max_items: int = 8) -> str:
+    """Compact completed list for Web CLI / SSE (avoids multi-kB single lines)."""
+    labels = [str(x) for x in completed if str(x).strip()]
+    if not labels:
+        return "无"
+    if len(labels) <= max_items:
+        return "、".join(labels)
+    head = "、".join(labels[:max_items])
+    return f"{head}…（另有 {len(labels) - max_items} 项）"
+
+
 def orchestration_detail(state: AgentState) -> dict[str, Any]:
     """Structured work-plan progress for UI / SSE (avoids ambiguous 1/2 + current)."""
     plan = _plan(state)
@@ -445,7 +456,7 @@ def orchestration_summary(state: AgentState) -> str:
     mode = detail["mode"]
     done = detail["done"]
     total = detail["total"]
-    completed = "、".join(detail["completed"]) if detail["completed"] else "无"
+    completed = format_completed_labels(list(detail["completed"] or []))
     current = detail.get("current_title")
     cur_status = detail.get("current_status")
     if current:
@@ -454,3 +465,16 @@ def orchestration_summary(state: AgentState) -> str:
     else:
         current_part = "当前：无（待下一工作项）"
     return f"编排({mode}) 已完成 {done}/{total}：{completed}；{current_part}"
+
+
+def orchestration_progress_brief(state: AgentState) -> str:
+    """One-line progress for final_answer (no duplicate completed dump)."""
+    detail = orchestration_detail(state)
+    done = int(detail.get("done") or 0)
+    total = int(detail.get("total") or 0)
+    current = detail.get("current_title")
+    if current:
+        cur_status = detail.get("current_status")
+        status_note = f"（{cur_status}）" if cur_status and cur_status != "done" else ""
+        return f"编排进度 {done}/{total}，当前工作项：{current}{status_note}。"
+    return f"编排进度 {done}/{total}。"

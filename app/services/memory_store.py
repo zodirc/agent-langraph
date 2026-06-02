@@ -197,15 +197,25 @@ class MemoryStore:
         task_id: Optional[str] = None,
         session_id: Optional[str] = None,
         limit: int = 5,
+        restrict_to_session: bool = False,
     ) -> list[dict[str, Any]]:
         """User-scoped search with task/session index boost."""
-        return self.search(
+        sid = session_id or task_id
+        hits = self.search(
             query,
-            limit=limit,
+            limit=limit if not restrict_to_session else max(limit, 20),
             user_id=user_id,
             task_id=task_id,
-            session_id=session_id or task_id,
+            session_id=sid,
         )
+        if not restrict_to_session or not sid:
+            return hits[:limit]
+        scoped = [
+            h
+            for h in hits
+            if str(h.get("session_id") or h.get("task_id") or "") == str(sid)
+        ]
+        return scoped[:limit]
 
     def _apply_scope_boost(
         self,

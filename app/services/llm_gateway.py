@@ -271,6 +271,8 @@ def _writing_system_prompt() -> str:
         f"You MUST call the tool `{ARTIFACT_TOOL_NAME}` with the full plain text to save. "
         "Do not output thinking-only blocks. "
         "Use writing_context when present: continue from novel_tail, follow outline_for_chapter, "
+        "obey writing_guidelines_excerpt when present (natural tone, avoid AI-template phrases, "
+        "UTF-8 TXT paragraph and dialogue layout, chapter header/footer), "
         "write only the chapter indicated by chapter_index, never repeat earlier chapters or scenes. "
         "Plant and resolve foreshadowing consistently with prior tail and outline. "
         "The content field must be story/outline prose in Chinese, not meta commentary."

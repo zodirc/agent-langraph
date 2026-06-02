@@ -173,7 +173,9 @@ def generate_artifact_content(
         task_desc = (
             f"Write a complete story OUTLINE in Chinese (markdown), about {chars} characters. "
             "Include title, genre, characters, foreshadowing notes per chapter, and "
-            "chapter-by-chapter plot beats. Do NOT write full chapter prose in the outline file."
+            "chapter-by-chapter plot beats. Obey writing_context.writing_guidelines_excerpt when present "
+            "(natural Chinese prose, anti-AI phrasing, TXT layout rules). "
+            "Do NOT write full chapter prose in the outline file."
         )
     elif profile == "source_code":
         task_desc = (
@@ -185,7 +187,10 @@ def generate_artifact_content(
         task_desc = (
             f"Write ONE new chapter in Chinese{part}: chapter_index={chapter_n}, "
             f"title header ### 第{chapter_n}章 (or equivalent), target ~{chars} characters (±10%). "
-            "Continue immediately after novel_tail; obey outline_for_chapter; "
+            "Continue immediately after novel_tail; obey outline_for_chapter and "
+            "writing_context.writing_guidelines_excerpt when present "
+            "(plot continuity with novel_tail, de-AI tone, UTF-8 TXT paragraph/dialogue format, "
+            "chapter header and footer （第N章完）); "
             "do NOT repeat any scene from novel_tail; do NOT restart earlier chapters."
         )
     else:

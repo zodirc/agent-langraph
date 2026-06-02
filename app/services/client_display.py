@@ -17,25 +17,9 @@ from app.services.mission_steer_outcome_confirm import steer_outcome_confirmatio
 
 
 def _orchestration_line(state: AgentState) -> str:
-    from app.services.mission_orchestrator import orchestration_detail, orchestration_summary
+    from app.services.mission_orchestrator import orchestration_summary
 
-    summary = orchestration_summary(state)
-    detail = orchestration_detail(state)
-    if not summary and not detail:
-        return ""
-    parts = [summary] if summary else []
-    if isinstance(detail, dict):
-        done = detail.get("done", 0)
-        total = detail.get("total", 0)
-        completed = detail.get("completed") or []
-        cur = detail.get("current_title") or detail.get("current_kind")
-        cur_status = detail.get("current_status")
-        completed_s = "、".join(str(x) for x in completed) if completed else "—"
-        current_s = "—"
-        if cur:
-            current_s = f"{cur}（{cur_status}）" if cur_status and cur_status != "done" else str(cur)
-        parts.append(f"orchestration {done}/{total} done=[{completed_s}] current=[{current_s}]")
-    return " | ".join(parts)
+    return orchestration_summary(state) or ""
 
 
 def _intervention_display(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -47,6 +31,10 @@ def _intervention_display(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
         "force": bool(block.get("force")),
         "reason": str(block.get("reason") or "").strip() or None,
     }
+
+
+def _wall_clock_pause(control: dict[str, Any]) -> bool:
+    return "wall_clock" in str(control.get("reason") or "").lower()
 
 
 def _pause_context_lines(state: AgentState, control: dict[str, Any]) -> list[str]:
@@ -99,6 +87,30 @@ def _consecutive_failures_paused(state: AgentState, control: dict[str, Any]) -> 
     return failures >= max_failures
 
 
+def _next_step_line(state: AgentState, control: dict[str, Any], action_label: Optional[str]) -> Optional[str]:
+    if _wall_clock_pause(control):
+        return (
+            "任务已暂停：已达 mission 墙钟上限（max_wall_sec）。"
+            "请调大配置后执行 /resume，或新建会话继续写作。"
+        )
+    from app.services.mission_orchestrator import orchestration_detail
+
+    detail = orchestration_detail(state)
+    done = int(detail.get("done") or 0)
+    total = int(detail.get("total") or 0)
+    if total > 0 and done >= total and not detail.get("current_title"):
+        return "编排队列已完成；若仍需续写请发送「继续」或 /resume。"
+    if total > 0 and not detail.get("current_title") and done < total:
+        return (
+            f"编排进度 {done}/{total}，当前无活动工作项；"
+            f"发送「继续」或 /resume 以生成下一项"
+            + (f"（建议：{action_label}）" if action_label else "")
+        )
+    if action_label:
+        return f"下一步：{action_label}"
+    return None
+
+
 def autonomous_ui_for_pause(state: AgentState, *, autonomous: bool, steer_pause: bool) -> dict[str, Any]:
     payload = _payload_for_gates(state)
     control = state.get("mission_control") or {}
@@ -118,6 +130,11 @@ def autonomous_ui_for_pause(state: AgentState, *, autonomous: bool, steer_pause:
     elif payload.get("steer_review_outline"):
         behavior = "steer_review_only"
         lines.append("autonomous: review_outline — resume when ready to read outline")
+    elif _wall_clock_pause(control):
+        behavior = "wall_clock_pause"
+        lines.append(
+            "autonomous: wall-clock limit reached — increase max_wall_sec or /resume manually"
+        )
     elif _consecutive_failures_paused(state, control):
         behavior = "failure_pause"
         lines.append(
@@ -133,7 +150,7 @@ def autonomous_ui_for_pause(state: AgentState, *, autonomous: bool, steer_pause:
     if behavior in ("wait_outcome_confirm", "wait_intent_confirm"):
         resume_confirm = True
 
-    if behavior == "failure_pause":
+    if behavior in ("failure_pause", "wall_clock_pause"):
         resume_confirm = False
 
     return {
@@ -207,10 +224,9 @@ def build_mission_paused_payload(
 
     auto_ui = autonomous_ui_for_pause(state, autonomous=autonomous, steer_pause=steer_pause)
     action_label = writing_action_label(state)
-    if action_label:
-        system_lines = [f"下一步：{action_label}"] + [
-            ln for ln in system_lines if ln != "mission_paused"
-        ]
+    next_line = _next_step_line(state, control, action_label)
+    if next_line:
+        system_lines = [next_line] + [ln for ln in system_lines if ln != "mission_paused"]
 
     return {
         "task_id": state["task_id"],

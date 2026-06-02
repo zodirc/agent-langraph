@@ -228,6 +228,11 @@ class Settings:
         self.RETRIEVAL_TOP_K = int(knowledge.get("top_k", 5))
         self.SIMILARITY_THRESHOLD = float(knowledge.get("similarity_threshold", 0.3))
         self.KNOWLEDGE_COLLECTION = str(knowledge.get("collection_name", "agent_knowledge"))
+        self.KNOWLEDGE_CONTENT_DIR = (
+            os.environ.get("KNOWLEDGE_CONTENT_DIR", "").strip()
+            or str(knowledge.get("content_dir", "knowledge")).strip()
+            or "knowledge"
+        )
         self.QDRANT_URL = str(knowledge.get("qdrant_url", "")).strip()
         self.QDRANT_PATH = str(knowledge.get("qdrant_path", "")).strip()
 

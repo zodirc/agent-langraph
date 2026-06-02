@@ -20,7 +20,7 @@ Required fields:
   Full-book totals go in mission.total_target_chars, NOT in writing_intent.target_chars.
 - "tool_params", "tool_stages", "tool_dag": optional
 - "risk_level": LOW | MEDIUM | HIGH | CRITICAL
-- "skip_retrieval": boolean
+- "skip_retrieval": boolean — set false when writing_intent.enabled is true (fiction/outline/body) so RAG can load 长文写作规范; true only for pure Q&A, code, or read/edit-only steer without new prose
 - "steer_intent_summary": optional string — after user steer, plain-language summary of how you interpreted their request and what you will do next (for human confirmation before heavy execution)
 - "work_plan_patch": optional — after steer on an active mission, structured queue update (NOT prose):
   {"cancel_ids":["wi-..."], "prepend":[{"kind":"write_outline","title":"...","params":{}}]}
@@ -37,7 +37,7 @@ Required fields:
 Decision guide (use capabilities; respect payload flags):
 - Pure Q&A / capabilities / limits → selected_tools may include get_runtime_info; writing_intent.enabled=false; omit mission; mission_recommended=false
 - Source code (C/C++/Python/etc.) in this turn → writing_intent.enabled=false; put code in reasoning structured.artifacts; do NOT use write_body on novel.txt
-- Single fiction chapter or outline this turn → writing_intent.enabled=true with appropriate action; omit mission; mission_recommended=false
+- Single fiction chapter or outline this turn → writing_intent.enabled=true with appropriate action; skip_retrieval=false; omit mission; mission_recommended=false
 - Long-horizon manuscript (many steps, total length clearly beyond one reply) → MUST set mission (kind, total_target_chars, step_policy, autonomous:true); writing_intent.enabled=false; mission_recommended=true
 - If input_payload already has mission → keep/extend it; do not remove
 - If input_payload.mission_auto is false → never add mission; mission_recommended=false

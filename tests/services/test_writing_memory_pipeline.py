@@ -54,6 +54,9 @@ def test_build_writing_context_has_l2_l3(base_state, test_settings, monkeypatch)
     assert "prev_chapter_summary" in ctx
     assert "current_chapter_goal" in ctx
     assert isinstance(ctx.get("story_bible_entries") or [], list)
+    guidelines = ctx.get("writing_guidelines_excerpt")
+    if guidelines:
+        assert "RAG" in (ctx.get("memory_tier") or {})
 
 
 def test_outline_alignment_supports_multilevel_actions():

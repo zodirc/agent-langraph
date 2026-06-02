@@ -206,13 +206,22 @@ def _execute_retrieve_memory(state: AgentState, decision: ReactDecision) -> tupl
     from app.services.retrieval_content_sanitizer import sanitize_retrieved_batch
     from app.services.code_artifact_pipeline import filter_memory_hits
 
-    query = str(decision.action_input.get("query") or build_memory_search_query(state))
-    memories = get_memory_store().search_for_context(
-        query,
-        user_id=state.get("user_id", "anonymous"),
-        task_id=state["task_id"],
-        session_id=state.get("session_id") or state["task_id"],
+    from app.services.retrieval_policy import (
+        restrict_memory_to_current_session,
+        should_skip_session_memory_retrieval,
     )
+
+    query = str(decision.action_input.get("query") or build_memory_search_query(state))
+    if should_skip_session_memory_retrieval(state):
+        memories: list[dict] = []
+    else:
+        memories = get_memory_store().search_for_context(
+            query,
+            user_id=state.get("user_id", "anonymous"),
+            task_id=state["task_id"],
+            session_id=state.get("session_id") or state["task_id"],
+            restrict_to_session=restrict_memory_to_current_session(state),
+        )
     memories = filter_memory_hits(state, memories)
     memories = sanitize_retrieved_batch(memories)
     state = merge_state(state, memory_hits=memories, status=TaskStatus.RETRIEVED.value)

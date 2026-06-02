@@ -148,7 +148,7 @@ def planning_node(state: AgentState) -> AgentState:
                 plan=["mission_writing_step"],
                 selected_tools=[],
                 manuscript=ms.to_dict(),
-                skip_retrieval=True,
+                skip_retrieval=False,
                 status=TaskStatus.PLANNED.value,
                 current_node="planning",
                 audit_log=append_audit(

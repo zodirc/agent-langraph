@@ -16,6 +16,19 @@ def test_is_continue_writing_goal():
     assert not is_continue_writing_goal("写一个全新故事")
 
 
+def test_is_continue_writing_goal_ignores_mission_phase_tags():
+    goal = (
+        "写一篇谍战小说 [write_outline] 先写大纲 "
+        "[append_body] 基于大纲第1章开始正文写作"
+    )
+    assert not is_continue_writing_goal(goal)
+
+
+def test_is_continue_writing_goal_english_append_word_boundary():
+    assert is_continue_writing_goal("please append the next chapter")
+    assert not is_continue_writing_goal("metadata field append_body_name")
+
+
 def test_validate_rejects_placeholder():
     ok, reason = validate_manuscript_content("（待续写内容）", action="append_body")
     assert not ok

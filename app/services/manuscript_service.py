@@ -15,7 +15,15 @@ from app.services.artifact_tools import list_task_artifacts, read_artifact_tail,
 WRITING_TOOL_NAMES = frozenset({"write_text_artifact", "append_text_artifact"})
 
 _CONTINUE_GOAL_RE = re.compile(
-    r"(续写|继续写|继续|追加|下一章|接着写|写下去|append|continue)",
+    r"(续写|继续写|继续|追加|下一章|接着写|写下去|\bappend\b|\bcontinue\b)",
+    re.IGNORECASE,
+)
+# Runtime tags from apply_writing_phase_from_decision: "[append_body] notes…"
+_MISSION_PHASE_GOAL_TAG_RE = re.compile(
+    r"\[(?:write_outline|append_body|write_body|append_chapter|reset_body|"
+    r"polish_chapter|review_chapter|chapter_summary|arc_checkpoint|"
+    r"consistency_check|bridge_chapter|patch_recent_chapter|reconcile_outline_body|"
+    r"edit_plot)\][^[]*",
     re.IGNORECASE,
 )
 _OUTLINE_MARKERS = ("outline", "大纲", "提纲")
@@ -89,8 +97,14 @@ def _placeholder_patterns() -> tuple[str, ...]:
     )
 
 
+def strip_mission_system_goal_tags(goal: str) -> str:
+    """Remove mission-injected [phase] segments before user-intent heuristics."""
+    text = _MISSION_PHASE_GOAL_TAG_RE.sub(" ", goal or "")
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def is_continue_writing_goal(goal: str) -> bool:
-    text = (goal or "").strip()
+    text = strip_mission_system_goal_tags(goal)
     if not text:
         return False
     if _CONTINUE_GOAL_RE.search(text):

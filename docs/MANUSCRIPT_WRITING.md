@@ -63,7 +63,7 @@
 | 层级 | 内容 |
 |------|------|
 | `conversation_history` | 多轮问答（[`conversation_context.py`](../app/services/conversation_context.py) 统一读写 state + payload） |
-| `memory_hits` | 多轮时 `retrieval_policy` + `session.memory_retrieval_enabled` 检索 episode / session_summary |
+| `memory_hits` | 多轮 QA 时检索 episode / session_summary；**autonomous writing mission 首轮跳过**（正文靠 outline/tail/Story Bible） |
 | `previous_artifact_excerpt` | 正文尾部摘录（供 Writing LLM） |
 | `memory_store` | 回合摘要 + `manuscript` 快照（PG 表 `memories.session_id`） |
 | `manuscript` | 路径与字节数（供规划/推理引用） |

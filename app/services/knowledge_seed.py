@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+from app.services.knowledge_paths import prose_voice_format_path, writing_guidelines_path
 from app.services.knowledge_store import get_knowledge_store
 
 logger = logging.getLogger(__name__)
 
+_WRITING_GUIDELINES_PATH = writing_guidelines_path()
+_PROSE_VOICE_FORMAT_PATH = prose_voice_format_path()
+
 DEFAULT_DOCUMENTS = [
     {
+        "doc_id": "builtin-architecture",
         "title": "LangGraph Agent Runtime Overview",
         "content": (
             "This project uses LangGraph as the execution runtime with nodes for planning, "
@@ -17,6 +23,7 @@ DEFAULT_DOCUMENTS = [
         "metadata": {"source": "builtin", "topic": "architecture"},
     },
     {
+        "doc_id": "builtin-policy",
         "title": "Policy Engine Rules",
         "content": (
             "Policy results include CONTINUE, REVIEW, REJECT, and ESCALATE. "
@@ -25,6 +32,7 @@ DEFAULT_DOCUMENTS = [
         "metadata": {"source": "builtin", "topic": "policy"},
     },
     {
+        "doc_id": "builtin-retrieval",
         "title": "Knowledge Retrieval Strategy",
         "content": (
             "Knowledge retrieval uses hybrid search combining ChromaDB vector similarity "
@@ -32,20 +40,60 @@ DEFAULT_DOCUMENTS = [
         ),
         "metadata": {"source": "builtin", "topic": "retrieval"},
     },
+    {
+        "doc_id": "builtin-writing-guidelines",
+        "title": "长文写作规范",
+        "content_path": _WRITING_GUIDELINES_PATH,
+        "metadata": {"source": "builtin", "topic": "writing", "locale": "zh-CN"},
+    },
+    {
+        "doc_id": "builtin-prose-voice-format",
+        "title": "写作口吻与TXT排版规范",
+        "content_path": _PROSE_VOICE_FORMAT_PATH,
+        "metadata": {
+            "source": "builtin",
+            "topic": "writing",
+            "locale": "zh-CN",
+            "focus": "prose_voice,anti_ai,txt_format,layout",
+        },
+    },
 ]
 
 
+def _load_content(spec: dict) -> str:
+    path = spec.get("content_path")
+    if path:
+        file_path = Path(path)
+        if file_path.is_file():
+            return file_path.read_text(encoding="utf-8")
+        logger.warning("Builtin knowledge file missing: %s", file_path)
+        return str(spec.get("content") or "")
+    return str(spec.get("content") or "")
+
+
 def seed_default_knowledge() -> int:
+    """Seed empty stores on first boot (legacy behavior)."""
     store = get_knowledge_store()
     if store.count() > 0:
         return 0
-    created = 0
+    return ensure_builtin_knowledge()
+
+
+def ensure_builtin_knowledge() -> int:
+    """Upsert fixed builtin doc_ids (safe on every startup; refreshes writing guidelines from disk)."""
+    store = get_knowledge_store()
+    updated = 0
     for doc in DEFAULT_DOCUMENTS:
+        content = _load_content(doc)
+        if not content.strip():
+            continue
         store.upsert_document(
             title=doc["title"],
-            content=doc["content"],
+            content=content,
             metadata=doc["metadata"],
+            doc_id=doc["doc_id"],
         )
-        created += 1
-    logger.info("Seeded %s knowledge documents", created, extra={"seeded": created})
-    return created
+        updated += 1
+    if updated:
+        logger.info("Ensured %s builtin knowledge document(s)", updated, extra={"seeded": updated})
+    return updated

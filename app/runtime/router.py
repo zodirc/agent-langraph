@@ -115,8 +115,13 @@ def route_after_planning(state: AgentState) -> str:
 
     plan = state.get("plan") or []
     selected_tools = _effective_selected_tools(state)
+    intent = (state.get("input_payload") or {}).get("writing_intent") or {}
 
-    if _writing_route_allowed(state) and not selected_tools:
+    if (
+        _writing_route_allowed(state)
+        and not selected_tools
+        and state.get("skip_retrieval")
+    ):
         return "writing"
 
     if state.get("skip_retrieval") and not should_route_to_retrieval_after_planning(state):
@@ -125,8 +130,6 @@ def route_after_planning(state: AgentState) -> str:
         if _writing_route_allowed(state):
             return "writing"
         return "reasoning"
-
-    intent = (state.get("input_payload") or {}).get("writing_intent") or {}
     if (
         needs_session_memory_retrieval(state)
         and not selected_tools
@@ -137,10 +140,13 @@ def route_after_planning(state: AgentState) -> str:
     needs_retrieval = any(
         "retrieve" in step.lower() or "search" in step.lower() for step in plan
     )
+    if intent.get("enabled") and not state.get("skip_retrieval"):
+        needs_retrieval = True
     if (
         settings.SKIP_RETRIEVAL_WHEN_NO_TOOLS
         and not selected_tools
         and not needs_retrieval
+        and not intent.get("enabled")
     ):
         if _writing_route_allowed(state):
             return "writing"

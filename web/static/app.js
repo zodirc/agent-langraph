@@ -608,6 +608,9 @@ const THEME_KEY = "agent_theme";
 /** Next stream submit uses new_session=true once (after /new). */
 let pendingNewSession = false;
 let sessionHasInFlightMission = false;
+/** Deferred autonomous /resume when mission_paused fires before SSE `done`. */
+let pendingAutonomousResume = null;
+const ORCHESTRATION_COMPLETED_DISPLAY_MAX = 8;
 
 /** UUID v4; works on http://<LAN-IP> where crypto.randomUUID is unavailable. */
 function newSessionId() {
@@ -1271,6 +1274,16 @@ function appendSystemLines(lines, className = "system") {
   }
 }
 
+async function flushPendingAutonomousResume() {
+  const pending = pendingAutonomousResume;
+  pendingAutonomousResume = null;
+  if (!pending?.taskId) return;
+  await runResumeStream(pending.taskId, {
+    confirm: Boolean(pending.confirm),
+    fromPendingQueue: true,
+  });
+}
+
 async function runAutonomousUi(autonomousUi, taskId) {
   if (!autonomousUi?.enabled || !taskId) return;
   appendSystemLines(autonomousUi.system_lines);
@@ -1279,14 +1292,19 @@ async function runAutonomousUi(autonomousUi, taskId) {
     behavior === "wait_outcome_confirm" ||
     behavior === "wait_intent_confirm" ||
     behavior === "steer_review_only" ||
-    behavior === "failure_pause"
+    behavior === "failure_pause" ||
+    behavior === "wall_clock_pause"
   ) {
     return;
   }
   if (behavior === "auto_resume_step" || behavior === "resume_after_steer") {
-    await runResumeStream(taskId, {
-      confirm: Boolean(autonomousUi.resume_confirm),
-    });
+    const confirm = Boolean(autonomousUi.resume_confirm);
+    if (running) {
+      pendingAutonomousResume = { taskId, confirm };
+      appendLine("autonomous: 本轮流结束后将自动继续（/resume）", "system");
+      return;
+    }
+    await runResumeStream(taskId, { confirm });
   }
 }
 
@@ -1581,8 +1599,8 @@ async function resumeMissionOnce(taskId, { confirm = false } = {}) {
 }
 
 /** Resume mission with SSE (progress, writing_delta, gates) — preferred for Web CLI. */
-async function runResumeStream(taskId, { confirm = false } = {}) {
-  if (running) {
+async function runResumeStream(taskId, { confirm = false, fromPendingQueue = false } = {}) {
+  if (running && !fromPendingQueue) {
     appendLine("已有任务在运行，请稍候", "error");
     return null;
   }
@@ -1609,6 +1627,7 @@ async function runResumeStream(taskId, { confirm = false } = {}) {
     return null;
   } finally {
     setRunning(false);
+    await flushPendingAutonomousResume();
     await refreshFlowPanel(taskIdRef?.id || taskId || activeTaskId);
   }
 }
@@ -1617,9 +1636,16 @@ function formatOrchestration(summary, detail) {
   if (detail && typeof detail === "object") {
     const done = detail.done ?? 0;
     const total = detail.total ?? 0;
-    const completed = (detail.completed || []).length
-      ? (detail.completed || []).join(",")
-      : "—";
+    const labels = (detail.completed || []).map((x) => String(x));
+    let completed = "—";
+    if (labels.length) {
+      if (labels.length <= ORCHESTRATION_COMPLETED_DISPLAY_MAX) {
+        completed = labels.join(",");
+      } else {
+        const head = labels.slice(0, ORCHESTRATION_COMPLETED_DISPLAY_MAX).join(",");
+        completed = `${head}…(+${labels.length - ORCHESTRATION_COMPLETED_DISPLAY_MAX})`;
+      }
+    }
     const cur = detail.current_title || detail.current_kind;
     const curStatus = detail.current_status;
     let currentPart = "—";
@@ -1896,6 +1922,7 @@ async function runTaskStream(goal, riskLevel = "LOW", endpoint = "/tasks/stream"
     appendLine(`stream error: ${err}`, "error");
   } finally {
     setRunning(false);
+    await flushPendingAutonomousResume();
     await refreshFlowPanel(taskIdRef?.id || activeTaskId);
   }
 }

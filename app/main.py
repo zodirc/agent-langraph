@@ -27,7 +27,7 @@ from app.api.tenant_api import router as tenant_router
 from app.api.task_api import router as task_router
 from app.api.tools_api import router as tools_router
 import app.config.settings as settings_module
-from app.services.knowledge_seed import seed_default_knowledge
+from app.services.knowledge_seed import ensure_builtin_knowledge, seed_default_knowledge
 from app.services.knowledge_store import get_knowledge_store
 from app.services.langsmith_setup import configure_langsmith
 from app.services.logging_config import setup_logging
@@ -58,6 +58,7 @@ async def lifespan(_app: FastAPI):
     configure_langsmith()
     init_storage()
     seeded = seed_default_knowledge()
+    ensure_builtin_knowledge()
     tool_counts = bootstrap_tools()
     get_scheduler_service().start()
     get_review_timeout_service().start()

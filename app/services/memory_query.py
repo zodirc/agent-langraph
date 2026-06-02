@@ -26,6 +26,8 @@ def should_suppress_session_memory(state: AgentState | dict) -> bool:
 
 def build_memory_search_query(state: AgentState | dict) -> str:
     """Combine current goal with the latest user turn for better episodic recall."""
+    from app.services.writing_knowledge import enrich_retrieval_query_for_writing
+
     payload = state.get("input_payload") or {}
     parts: list[str] = []
     goal = str(payload.get("goal") or payload.get("query") or payload.get("question") or "").strip()
@@ -33,7 +35,8 @@ def build_memory_search_query(state: AgentState | dict) -> str:
         parts.append(goal)
 
     if should_suppress_session_memory(state):
-        return " ".join(parts)[:2000].strip() or str(state.get("task_type") or "qa")
+        query = " ".join(parts)[:2000].strip() or str(state.get("task_type") or "qa")
+        return enrich_retrieval_query_for_writing(state, query)
 
     history = conversation_history_for_llm(conversation_history_from_state(state))
     for msg in reversed(history):
@@ -47,4 +50,5 @@ def build_memory_search_query(state: AgentState | dict) -> str:
     if turn > 1:
         parts.append(f"session turn {turn}")
 
-    return " ".join(parts)[:2000].strip() or str(state.get("task_type") or "qa")
+    query = " ".join(parts)[:2000].strip() or str(state.get("task_type") or "qa")
+    return enrich_retrieval_query_for_writing(state, query)

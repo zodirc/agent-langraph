@@ -323,6 +323,14 @@ def build_writing_context(
     open_loops = [o.description for o in bible.open_loops if o.status == "open"][:12]
     style = bible.style_contract.to_dict()
 
+    from app.services.writing_knowledge import resolve_writing_guidelines_excerpt
+
+    goal = str(payload.get("goal") or payload.get("query") or "")
+    guidelines_excerpt = resolve_writing_guidelines_excerpt(
+        state,
+        query_hint=f"{goal} {action} chapter {next_chapter}",
+    )
+
     return {
         "body_filename": body_name,
         "outline_filename": outline_name,
@@ -333,10 +341,12 @@ def build_writing_context(
         "novel_head": head or None,
         "outline_for_chapter": outline_slice or None,
         "body_total_chars": len(body_text),
+        "writing_guidelines_excerpt": guidelines_excerpt,
         "memory_tier": {
             "L1": ["novel_tail", "novel_head"],
             "L2": list(l2.keys()),
             "L3": ["story_bible_entries", "open_loops", "style_contract"],
+            "RAG": ["writing_guidelines_excerpt"] if guidelines_excerpt else [],
         },
         **l2,
         "story_bible_entries": activated or None,

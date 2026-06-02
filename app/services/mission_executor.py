@@ -4,6 +4,8 @@ Mission act executor — runs pipeline or subgraph steps inside the control loop
 
 from __future__ import annotations
 
+from typing import Any, Optional
+
 from app.nodes.planning_node import planning_node
 from app.nodes.reasoning_node import reasoning_node
 from app.nodes.retrieval_node import retrieval_node
@@ -92,6 +94,35 @@ def run_pipeline_request(state: AgentState) -> AgentState:
     return current
 
 
+def _chapter_index_mismatch_note(
+    *,
+    chapter_cursor: Any,
+    outcome: dict[str, Any],
+) -> Optional[str]:
+    import re
+
+    cursor_n: Optional[int] = None
+    try:
+        if chapter_cursor is not None:
+            cursor_n = int(chapter_cursor)
+    except (TypeError, ValueError):
+        cursor_n = None
+    text = " ".join(
+        str(outcome.get(key) or "")
+        for key in ("chapter_header", "chapter_summary", "ending_state")
+    )
+    match = re.search(r"第\s*(\d+)\s*章", text)
+    if not match or cursor_n is None:
+        return None
+    try:
+        header_n = int(match.group(1))
+    except ValueError:
+        return None
+    if header_n != cursor_n:
+        return f"章号提示：正文标题为第{header_n}章，进度指针为第{cursor_n}章"
+    return None
+
+
 def _mission_writing_reasoning_summary(state: AgentState) -> str:
     """Deterministic post-write summary — narrative outcome when available."""
     from app.runtime.state import TaskStatus, append_audit, merge_state
@@ -112,6 +143,9 @@ def _mission_writing_reasoning_summary(state: AgentState) -> str:
         parts.append(f"进度 {pct}%")
     if chapter:
         parts.append(f"第 {chapter} 章")
+    mismatch = _chapter_index_mismatch_note(chapter_cursor=chapter, outcome=outcome)
+    if mismatch:
+        parts.append(mismatch)
     if outcome.get("chapter_summary"):
         parts.append(f"本章：{str(outcome['chapter_summary'])[:120]}")
     elif outcome.get("ending_state"):
@@ -192,6 +226,11 @@ def run_subgraph_writing(state: AgentState) -> AgentState:
             return run_pipeline_request(state)
         payload["writing_intent"] = {**resolved, "enabled": True, "source": "work_item"}
         state = merge_state(state, input_payload=payload)
+
+    from app.services.retrieval_policy import skip_knowledge_retrieval
+
+    if not state.get("skip_retrieval") and not skip_knowledge_retrieval(state):
+        state = retrieval_node(state)
 
     current = writing_node(state)
     if str(current.get("status", "")).endswith("FAILED"):

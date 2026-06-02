@@ -16,6 +16,7 @@ services:
       - ./app:/app/app:ro
       - ./config:/app/config:ro
       - ./web:/app/web:ro
+      - ./knowledge:/app/knowledge:ro
     command:
       - uvicorn
       - app.main:app

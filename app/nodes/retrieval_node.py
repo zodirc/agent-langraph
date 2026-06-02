@@ -4,7 +4,11 @@ from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
 from app.services.knowledge_store import get_knowledge_store
 from app.services.reasoning_trace import report_boundary, report_retrieval_trace
 from app.services.memory_store import get_memory_store
-from app.services.retrieval_policy import skip_knowledge_retrieval
+from app.services.retrieval_policy import (
+    restrict_memory_to_current_session,
+    should_skip_session_memory_retrieval,
+    skip_knowledge_retrieval,
+)
 from app.services.state_store import get_state_store
 
 
@@ -28,12 +32,16 @@ def retrieval_node(state: AgentState) -> AgentState:
         from app.services.retrieval_content_sanitizer import sanitize_retrieved_batch
 
         knowledge = sanitize_retrieved_batch(knowledge)
-        memories = get_memory_store().search_for_context(
-            query,
-            user_id=state.get("user_id", "anonymous"),
-            task_id=state["task_id"],
-            session_id=state.get("session_id") or state["task_id"],
-        )
+        if should_skip_session_memory_retrieval(state):
+            memories: list[dict] = []
+        else:
+            memories = get_memory_store().search_for_context(
+                query,
+                user_id=state.get("user_id", "anonymous"),
+                task_id=state["task_id"],
+                session_id=state.get("session_id") or state["task_id"],
+                restrict_to_session=restrict_memory_to_current_session(state),
+            )
         from app.services.code_artifact_pipeline import filter_memory_hits
 
         memories = filter_memory_hits(state, memories)

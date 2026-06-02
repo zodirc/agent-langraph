@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY config/ ./config/
 COPY web/ ./web/
+COPY knowledge/ ./knowledge/
 
 RUN mkdir -p /data/db /data/vectorstore /data/logs /data/code_verify
 
