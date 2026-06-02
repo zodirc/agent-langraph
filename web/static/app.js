@@ -13,6 +13,13 @@ const flowOpenBtnEl = document.getElementById("flow-open-btn");
 const stateDebugBtnEl = document.getElementById("state-debug-btn");
 const historyListEl = document.getElementById("history-list");
 const historyRefreshBtnEl = document.getElementById("history-refresh-btn");
+const sessionFilesPaneEl = document.getElementById("session-files-pane");
+const sessionFilesToggleEl = document.getElementById("session-files-toggle");
+const sessionFilesUpBtnEl = document.getElementById("session-files-up-btn");
+const sessionFilesRefreshBtnEl = document.getElementById("session-files-refresh-btn");
+const sessionFilesMetaEl = document.getElementById("session-files-meta");
+const sessionFilesBreadcrumbEl = document.getElementById("session-files-breadcrumb");
+const sessionFilesListEl = document.getElementById("session-files-list");
 const stateDebugModalEl = document.getElementById("state-debug-modal");
 const stateDebugMetaEl = document.getElementById("state-debug-meta");
 const stateDebugKeysEl = document.getElementById("state-debug-keys");
@@ -74,6 +81,10 @@ let flowSelectedNode = "";
 let flowPopupWin = null;
 let historyRefreshRunning = false;
 let historyRefreshSeq = 0;
+let sessionFilesRefreshSeq = 0;
+let sessionFilesPollingTimer = null;
+const sessionFileViewerMap = new Map();
+let sessionFilesCurrentPath = ".";
 const COMMAND_SUGGESTIONS = [
   "/help",
   "/new",
@@ -680,16 +691,21 @@ function applyTheme(theme) {
   if (themeSelectEl) themeSelectEl.value = t;
   localStorage.setItem(THEME_KEY, t);
   syncFlowPopup();
+  for (const [, view] of sessionFileViewerMap) {
+    if (view?.win && !view.win.closed) syncSessionFileViewerTheme(view.win);
+  }
 }
 
 function startNewSession() {
   const id = newSessionId();
   localStorage.setItem(SESSION_KEY, id);
   pendingNewSession = true;
+  sessionFilesCurrentPath = ".";
   updateSessionBadge(id);
   clearScreen();
   appendLine(`new session: ${id.slice(0, 8)}… (server task isolated)`, "system");
   refreshHistorySidebar();
+  refreshSessionFilesPane();
   return id;
 }
 
@@ -732,6 +748,14 @@ function formatHistoryTime(raw) {
   return d.toLocaleString();
 }
 
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes < 0) return "-";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function escapeAttr(value) {
   return escapeHtml(value).replaceAll('"', "&quot;");
 }
@@ -744,6 +768,7 @@ function selectHistorySession(taskId) {
     return;
   }
   localStorage.setItem(SESSION_KEY, taskId);
+  sessionFilesCurrentPath = ".";
   updateSessionBadge(taskId);
   activeTaskId = null;
   sessionHasInFlightMission = false;
@@ -751,6 +776,7 @@ function selectHistorySession(taskId) {
   appendLine(`switched session: ${taskId.slice(0, 8)}…`, "system");
   refreshFlowPanel(taskId);
   refreshHistorySidebar();
+  refreshSessionFilesPane();
 }
 
 async function deleteHistoryTask(taskId) {
@@ -775,9 +801,11 @@ async function deleteHistoryTask(taskId) {
       startNewSession();
       sessionHasInFlightMission = false;
       activeTaskId = null;
+      sessionFilesCurrentPath = ".";
     }
     appendLine(`deleted session: ${taskId.slice(0, 8)}…`, "system");
     await refreshHistorySidebar();
+    await refreshSessionFilesPane();
   } catch (err) {
     appendLine(`delete error: ${err}`, "error");
   }
@@ -837,6 +865,269 @@ async function refreshHistorySidebar() {
   } finally {
     if (seq === historyRefreshSeq) historyRefreshRunning = false;
   }
+}
+
+function getSessionFilesTaskId() {
+  return activeTaskId || getSessionId();
+}
+
+function updateSessionFilesMeta(text) {
+  if (!sessionFilesMetaEl) return;
+  sessionFilesMetaEl.textContent = text;
+}
+
+function renderSessionFilesBreadcrumb() {
+  if (!sessionFilesBreadcrumbEl) return;
+  const path = String(sessionFilesCurrentPath || ".").trim() || ".";
+  const parts = path === "." ? [] : path.split("/").filter(Boolean);
+  const crumbs = [{ label: ".", path: "." }];
+  let acc = "";
+  for (const part of parts) {
+    acc = acc ? `${acc}/${part}` : part;
+    crumbs.push({ label: part, path: acc });
+  }
+  sessionFilesBreadcrumbEl.innerHTML = crumbs
+    .map((c, idx) => {
+      const isCurrent = idx === crumbs.length - 1;
+      const sep = idx < crumbs.length - 1 ? '<span class="session-breadcrumb-sep">/</span>' : "";
+      return `<button type="button" class="session-breadcrumb-btn${isCurrent ? " current" : ""}" data-breadcrumb-path="${escapeAttr(c.path)}">${escapeHtml(c.label)}</button>${sep}`;
+    })
+    .join("");
+}
+
+function setSessionFilesCollapsed(collapsed) {
+  if (!sessionFilesPaneEl) return;
+  sessionFilesPaneEl.classList.toggle("collapsed", collapsed);
+}
+
+function buildSessionFileViewerHtml(filePath) {
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>${escapeHtml(filePath)}</title>
+  <style>
+    body{margin:0;background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Menlo,Consolas,monospace}
+    body.theme-light{background:#f6f8fb;color:#1f2937}
+    .head{padding:10px 12px;border-bottom:1px solid #30363d;background:#010409}
+    .title{margin:0;font-size:12px;color:#93c5fd}
+    .meta{margin:4px 0 0;font-size:11px;color:#8b949e}
+    .toolbar{margin-top:8px;display:flex;gap:8px;align-items:center}
+    .btn{border:1px solid #4b5563;background:transparent;color:#cbd5e1;border-radius:6px;padding:4px 10px;font:inherit;font-size:11px;cursor:pointer}
+    .btn:hover{background:rgba(88,166,255,.12)}
+    label{font-size:11px;color:#8b949e}
+    textarea{width:100%;height:calc(100vh - 120px);padding:12px;border:none;outline:none;background:transparent;color:inherit;font:inherit;line-height:1.45;resize:none}
+    body.theme-light .head{background:#e2e8f0;border-bottom-color:#cbd5e1}
+  </style></head><body>
+    <div class="head">
+      <p class="title">${escapeHtml(filePath)}</p>
+      <p id="m" class="meta">loading…</p>
+      <div class="toolbar">
+        <button id="save-btn" class="btn" type="button">保存</button>
+        <label><input id="live-box" type="checkbox" checked /> 实时刷新</label>
+      </div>
+    </div>
+    <textarea id="content"></textarea>
+  </body></html>`;
+}
+
+function syncSessionFileViewerTheme(win) {
+  if (!win || win.closed) return;
+  try {
+    const currentTheme = document.body.classList.contains("theme-light") ? "theme-light" : "theme-dark";
+    win.document.body.classList.remove("theme-light", "theme-dark");
+    win.document.body.classList.add(currentTheme);
+  } catch {
+    /* ignore */
+  }
+}
+
+function updateSessionFileViewer(fileKey, data) {
+  const view = sessionFileViewerMap.get(fileKey);
+  if (!view || !view.win || view.win.closed) return;
+  try {
+    syncSessionFileViewerTheme(view.win);
+    const doc = view.win.document;
+    const contentEl = doc.getElementById("content");
+    const metaEl = doc.getElementById("m");
+    if (!contentEl || !metaEl) return;
+    const current = String(data?.content || "");
+    const shouldLive = view.live !== false;
+    if (!view.dirty && shouldLive) {
+      contentEl.value = current;
+      view.lastContent = current;
+    }
+    const total = Number(data?.total_chars || current.length || 0);
+    const dirtyFlag = view.dirty ? " · 未保存" : "";
+    metaEl.textContent = `chars ${contentEl.value.length}/${total} · updated ${new Date().toLocaleTimeString()}${dirtyFlag}`;
+  } catch {
+    /* ignore */
+  }
+}
+
+async function refreshSessionFileViewer(fileKey) {
+  const view = sessionFileViewerMap.get(fileKey);
+  if (!view || !view.taskId || !view.path || !view.win || view.win.closed) {
+    sessionFileViewerMap.delete(fileKey);
+    return;
+  }
+  try {
+    const params = new URLSearchParams({ path: view.path, offset: "0", max_chars: "200000" });
+    const res = await fetch(`/tasks/${view.taskId}/files/content?${params.toString()}`, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    updateSessionFileViewer(fileKey, data);
+  } catch {
+    /* ignore */
+  }
+}
+
+function openSessionFileViewer(taskId, relativePath) {
+  const key = `${taskId}:${relativePath}`;
+  const existing = sessionFileViewerMap.get(key);
+  if (existing && existing.win && !existing.win.closed) {
+    existing.win.focus();
+    return;
+  }
+  const win = window.open("", `session-file-${encodeURIComponent(key)}`, "width=960,height=700");
+  if (!win) {
+    appendLine("预览窗口被浏览器拦截，请允许弹窗。", "error");
+    return;
+  }
+  win.document.open();
+  win.document.write(buildSessionFileViewerHtml(relativePath));
+  win.document.close();
+  sessionFileViewerMap.set(key, { win, taskId, path: relativePath, dirty: false, live: true, lastContent: "" });
+  try {
+    const contentEl = win.document.getElementById("content");
+    const saveBtn = win.document.getElementById("save-btn");
+    const liveBox = win.document.getElementById("live-box");
+    if (contentEl) {
+      contentEl.addEventListener("input", () => {
+        const view = sessionFileViewerMap.get(key);
+        if (!view) return;
+        view.dirty = true;
+      });
+    }
+    if (liveBox) {
+      liveBox.addEventListener("change", () => {
+        const view = sessionFileViewerMap.get(key);
+        if (!view) return;
+        view.live = Boolean(liveBox.checked);
+      });
+    }
+    if (saveBtn) {
+      saveBtn.addEventListener("click", async () => {
+        const view = sessionFileViewerMap.get(key);
+        if (!view || !view.win || view.win.closed) return;
+        const area = view.win.document.getElementById("content");
+        const meta = view.win.document.getElementById("m");
+        if (!area) return;
+        try {
+          const res = await fetch(`/tasks/${view.taskId}/files/content`, {
+            method: "PUT",
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ path: view.path, content: area.value, append: false }),
+          });
+          if (!res.ok) {
+            if (meta) meta.textContent = `保存失败: ${res.status}`;
+            return;
+          }
+          view.dirty = false;
+          view.lastContent = area.value;
+          if (meta) meta.textContent = `已保存 · ${new Date().toLocaleTimeString()}`;
+          refreshSessionFilesPane({ silent: true });
+        } catch {
+          if (meta) meta.textContent = "保存失败: network";
+        }
+      });
+    }
+  } catch {
+    /* ignore */
+  }
+  syncSessionFileViewerTheme(win);
+  refreshSessionFileViewer(key);
+}
+
+function joinSessionPath(base, child) {
+  const b = String(base || ".").trim();
+  const c = String(child || "").trim();
+  if (!c || c === ".") return b || ".";
+  if (b === "." || !b) return c;
+  return `${b}/${c}`;
+}
+
+function parentSessionPath(path) {
+  const p = String(path || ".").trim();
+  if (!p || p === ".") return ".";
+  const idx = p.lastIndexOf("/");
+  if (idx < 0) return ".";
+  return p.slice(0, idx) || ".";
+}
+
+async function refreshSessionFilesPane(options = {}) {
+  if (!sessionFilesListEl) return;
+  const silent = Boolean(options.silent);
+  const taskId = getSessionFilesTaskId();
+  if (!taskId) return;
+  renderSessionFilesBreadcrumb();
+  const seq = ++sessionFilesRefreshSeq;
+  if (!silent) {
+    updateSessionFilesMeta(`session ${taskId.slice(0, 8)}… ${sessionFilesCurrentPath} 加载中…`);
+  }
+  try {
+    const params = new URLSearchParams({ path: sessionFilesCurrentPath, recursive: "false", max_entries: "500" });
+    const res = await fetch(`/tasks/${taskId}/files?${params.toString()}`, { headers: getAuthHeaders() });
+    if (seq !== sessionFilesRefreshSeq) return;
+    if (!res.ok) {
+      if (res.status === 404) {
+        sessionFilesListEl.innerHTML = '<p class="flow-empty">当前目录不存在或暂无文件。</p>';
+        updateSessionFilesMeta(`session ${taskId.slice(0, 8)}… ${sessionFilesCurrentPath} 无目录`);
+      } else {
+        sessionFilesListEl.innerHTML = '<p class="flow-empty">文件列表加载失败。</p>';
+        updateSessionFilesMeta(`session ${taskId.slice(0, 8)}… ${sessionFilesCurrentPath} 加载失败`);
+      }
+      return;
+    }
+    const data = await res.json();
+    if (seq !== sessionFilesRefreshSeq) return;
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    if (!entries.length) {
+      sessionFilesListEl.innerHTML = '<p class="flow-empty">当前目录为空。</p>';
+      updateSessionFilesMeta(`session ${taskId.slice(0, 8)}… ${sessionFilesCurrentPath} 0 项`);
+      return;
+    }
+    entries.sort((a, b) => {
+      const aPath = String(a?.path || "");
+      const bPath = String(b?.path || "");
+      return aPath.localeCompare(bPath);
+    });
+    sessionFilesListEl.innerHTML = entries
+      .map((entry) => {
+        const p = String(entry.path || "");
+        const isDir = String(entry.type || "") === "dir";
+        const size = isDir ? "-" : formatBytes(entry.size);
+        const mtime = entry.mtime_ms ? new Date(entry.mtime_ms).toLocaleTimeString() : "-";
+        return `<div class="session-file-item ${isDir ? "dir" : "file"}" data-file-path="${escapeAttr(p)}" data-file-type="${isDir ? "dir" : "file"}">
+          <span class="file-path">${escapeHtml(isDir ? `📁 ${p}` : `📄 ${p}`)}</span>
+          <span class="file-meta">${escapeHtml(`${size} · ${mtime}`)}</span>
+        </div>`;
+      })
+      .join("");
+    updateSessionFilesMeta(`session ${taskId.slice(0, 8)}… ${sessionFilesCurrentPath} ${entries.length} 项`);
+    for (const [key] of sessionFileViewerMap) {
+      refreshSessionFileViewer(key);
+    }
+  } catch {
+    if (seq !== sessionFilesRefreshSeq) return;
+    sessionFilesListEl.innerHTML = '<p class="flow-empty">文件列表加载失败。</p>';
+    updateSessionFilesMeta(`session ${taskId.slice(0, 8)}… ${sessionFilesCurrentPath} 加载异常`);
+  }
+}
+
+function startSessionFilesPolling() {
+  if (sessionFilesPollingTimer) clearInterval(sessionFilesPollingTimer);
+  sessionFilesPollingTimer = setInterval(() => {
+    refreshSessionFilesPane({ silent: true });
+  }, 1500);
 }
 
 async function loginCommand(parts) {
@@ -2297,6 +2588,57 @@ if (historyListEl) {
   });
 }
 
+if (sessionFilesToggleEl) {
+  sessionFilesToggleEl.addEventListener("click", () => {
+    const collapsed = sessionFilesPaneEl?.classList.contains("collapsed");
+    setSessionFilesCollapsed(!collapsed);
+    if (collapsed) refreshSessionFilesPane();
+  });
+}
+
+if (sessionFilesRefreshBtnEl) {
+  sessionFilesRefreshBtnEl.addEventListener("click", () => {
+    refreshSessionFilesPane();
+  });
+}
+
+if (sessionFilesUpBtnEl) {
+  sessionFilesUpBtnEl.addEventListener("click", () => {
+    sessionFilesCurrentPath = parentSessionPath(sessionFilesCurrentPath);
+    refreshSessionFilesPane();
+  });
+}
+
+if (sessionFilesListEl) {
+  sessionFilesListEl.addEventListener("dblclick", (ev) => {
+    const item = ev.target.closest("[data-file-path]");
+    if (!item) return;
+    const type = String(item.getAttribute("data-file-type") || "");
+    const path = String(item.getAttribute("data-file-path") || "");
+    const taskId = getSessionFilesTaskId();
+    if (!path || !taskId) return;
+    if (type === "dir") {
+      sessionFilesCurrentPath = joinSessionPath(sessionFilesCurrentPath, path);
+      refreshSessionFilesPane();
+      return;
+    }
+    if (type !== "file") return;
+    const fullPath = joinSessionPath(sessionFilesCurrentPath, path);
+    openSessionFileViewer(taskId, fullPath);
+  });
+}
+
+if (sessionFilesBreadcrumbEl) {
+  sessionFilesBreadcrumbEl.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-breadcrumb-path]");
+    if (!btn) return;
+    const path = String(btn.getAttribute("data-breadcrumb-path") || ".").trim() || ".";
+    if (path === sessionFilesCurrentPath) return;
+    sessionFilesCurrentPath = path;
+    refreshSessionFilesPane();
+  });
+}
+
 if (themeSelectEl) {
   themeSelectEl.addEventListener("change", () => {
     applyTheme(themeSelectEl.value);
@@ -2345,3 +2687,5 @@ warnIfSessionMissionInFlight();
 fetchHealth();
 refreshFlowPanel();
 refreshHistorySidebar();
+refreshSessionFilesPane();
+startSessionFilesPolling();

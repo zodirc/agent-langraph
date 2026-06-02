@@ -360,7 +360,10 @@ def _apply_tools_for_work_item(
             },
             "grep_file": {
                 "path": file_path,
-                "pattern": str(params.get("grep_pattern") or r"第\s*\d+\s*章"),
+                "pattern": str(
+                    params.get("grep_pattern")
+                    or r"(第\s*\d+\s*章|Foreshadowing-\d+)"
+                ),
                 "regex": True,
                 "ignore_case": True,
                 "max_lines": int(params.get("grep_max_lines") or 120),

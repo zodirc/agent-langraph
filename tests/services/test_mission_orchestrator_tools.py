@@ -68,6 +68,7 @@ def test_apply_work_plan_injects_consistency_tools(base_state):
     payload = out["input_payload"]
     assert payload["selected_tools"] == ["ls_path", "read_file", "grep_file"]
     assert payload["tool_params"]["grep_file"]["regex"] is True
+    assert "Foreshadowing-\\d+" in payload["tool_params"]["grep_file"]["pattern"]
 
 
 def test_apply_work_plan_default_does_not_auto_inject(base_state):

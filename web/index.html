@@ -47,6 +47,26 @@
           </div>
         </div>
       </aside>
+      <aside class="session-files-pane collapsed" id="session-files-pane">
+        <button id="session-files-toggle" type="button" class="session-files-tab" title="会话文件">
+          Files
+        </button>
+        <div class="session-files-body">
+          <div class="session-files-head">
+            <h3 class="history-title">会话文件</h3>
+            <div class="session-files-actions">
+              <button id="session-files-up-btn" type="button" class="flow-btn">上级</button>
+              <button id="session-files-refresh-btn" type="button" class="flow-btn">刷新</button>
+            </div>
+          </div>
+          <div class="session-files-meta" id="session-files-meta">等待会话…</div>
+          <div class="session-files-breadcrumb" id="session-files-breadcrumb"></div>
+          <div class="session-files-list" id="session-files-list">
+            <p class="flow-empty">暂无文件。</p>
+          </div>
+          <p class="session-files-tip">双击文件可打开实时预览窗口。</p>
+        </div>
+      </aside>
     </div>
     <form id="command-form" class="terminal-input-row" autocomplete="off">
       <label for="command-input" class="prompt">&gt;</label>
