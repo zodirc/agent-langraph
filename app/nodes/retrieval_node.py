@@ -5,6 +5,7 @@ from app.services.knowledge_store import get_knowledge_store
 from app.services.reasoning_trace import report_boundary, report_retrieval_trace
 from app.services.memory_store import get_memory_store
 from app.services.retrieval_policy import (
+    retrieval_domains_for_state,
     restrict_memory_to_current_session,
     should_skip_session_memory_retrieval,
     skip_knowledge_retrieval,
@@ -24,11 +25,12 @@ def retrieval_node(state: AgentState) -> AgentState:
         from app.services.memory_query import build_memory_search_query
 
         query = build_memory_search_query(state)
+        domains = retrieval_domains_for_state(state)
         report_boundary("retrieval", "enter", query[:80])
         if skip_knowledge_retrieval(state):
             knowledge: list[dict] = []
         else:
-            knowledge = get_knowledge_store().hybrid_search(query)
+            knowledge = get_knowledge_store().hybrid_search(query, domains=domains)
         from app.services.retrieval_content_sanitizer import sanitize_retrieved_batch
 
         knowledge = sanitize_retrieved_batch(knowledge)

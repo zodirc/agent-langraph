@@ -2,7 +2,7 @@
 
 > 用途：供检索节点（hybrid RAG）召回，为规划 / 推理 / 写作任务提供**风格与结构约束**。  
 > 不替代大纲与正文 artifact；与 `story_bible.style_contract` 互补。  
-> **口吻去 AI 化、TXT 版式、排版细则**见 `knowledge/prose_voice_and_txt_format.md`（知识库 doc：`builtin-prose-voice-format`）。
+> **口吻去 AI 化、TXT 版式、排版细则**见 `knowledge/writing/prose_voice_and_txt_format.md`（知识库 doc：`builtin-prose-voice-format`）。
 
 ## 1. 总则
 

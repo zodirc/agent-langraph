@@ -260,6 +260,14 @@ class Settings:
             or str(knowledge.get("content_dir", "knowledge")).strip()
             or "knowledge"
         )
+        domain_paths_raw = knowledge.get("domain_paths", {})
+        if not isinstance(domain_paths_raw, dict):
+            domain_paths_raw = {}
+        self.KNOWLEDGE_DOMAIN_PATHS = {
+            "common": str(domain_paths_raw.get("common", self.KNOWLEDGE_CONTENT_DIR)).strip() or self.KNOWLEDGE_CONTENT_DIR,
+            "code": str(domain_paths_raw.get("code", f"{self.KNOWLEDGE_CONTENT_DIR}/code")).strip() or f"{self.KNOWLEDGE_CONTENT_DIR}/code",
+            "writing": str(domain_paths_raw.get("writing", f"{self.KNOWLEDGE_CONTENT_DIR}/writing")).strip() or f"{self.KNOWLEDGE_CONTENT_DIR}/writing",
+        }
         self.QDRANT_URL = str(knowledge.get("qdrant_url", "")).strip()
         self.QDRANT_PATH = str(knowledge.get("qdrant_path", "")).strip()
 

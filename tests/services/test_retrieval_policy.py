@@ -1,5 +1,6 @@
 from app.services.retrieval_policy import (
     needs_session_memory_retrieval,
+    retrieval_domains_for_state,
     restrict_memory_to_current_session,
     should_route_to_retrieval_after_planning,
     should_skip_session_memory_retrieval,
@@ -86,3 +87,18 @@ def test_should_route_when_skip_retrieval_but_session_memory_needed():
         "input_payload": {},
     }
     assert should_route_to_retrieval_after_planning(state) is True
+
+
+def test_retrieval_domains_for_writing_mission():
+    state = {"mission": {"kind": "writing"}, "input_payload": {}}
+    assert retrieval_domains_for_state(state) == {"writing", "common"}
+
+
+def test_retrieval_domains_for_code_task():
+    state = {"task_type": "code", "input_payload": {}}
+    assert retrieval_domains_for_state(state) == {"code", "common"}
+
+
+def test_retrieval_domains_default_common():
+    state = {"task_type": "qa", "input_payload": {}}
+    assert retrieval_domains_for_state(state) == {"common"}

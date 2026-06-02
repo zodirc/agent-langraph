@@ -430,12 +430,19 @@ async function refreshFlowPanel(taskId = null, { preferStore = false } = {}) {
   const useTaskId = taskId || activeTaskId || getSessionId();
   if (!useTaskId) return;
   try {
-    const res = await fetch(`/tasks/${useTaskId}/status`, { headers: getAuthHeaders() });
+    const res = await fetchWithTimeout(
+      `/tasks/${useTaskId}/status`,
+      { headers: getAuthHeaders() },
+      12000
+    );
     if (!res.ok) return;
     const data = await res.json();
     renderFlowTimeline(data, useTaskId, { preferStore });
-  } catch {
-    /* ignore flow panel refresh failure */
+  } catch (err) {
+    if (flowMetaEl) {
+      const timeout = err?.name === "AbortError";
+      flowMetaEl.textContent = timeout ? "状态拉取超时（Flow）" : "状态拉取失败（Flow）";
+    }
   }
 }
 
@@ -554,7 +561,11 @@ async function refreshStateDebugView() {
   const taskId = resolveStateDebugTaskId();
   if (!taskId || !stateDebugJsonEl) return false;
   try {
-    const res = await fetch(`/tasks/${taskId}/state?truncate=true`, { headers: getAuthHeaders() });
+    const res = await fetchWithTimeout(
+      `/tasks/${taskId}/state?truncate=true`,
+      { headers: getAuthHeaders() },
+      12000
+    );
     if (res.status === 404) {
       stateDebugCache = null;
       if (stateDebugMetaEl) {
@@ -580,7 +591,13 @@ async function refreshStateDebugView() {
     renderStateDebugKeys();
     renderStateDebugJson();
     return true;
-  } catch {
+  } catch (err) {
+    if (stateDebugMetaEl) {
+      const timeout = err?.name === "AbortError";
+      stateDebugMetaEl.textContent = timeout
+        ? `状态拉取超时 (task/session: ${taskId.slice(0, 12)}…)`
+        : `状态拉取失败 (task/session: ${taskId.slice(0, 12)}…)`;
+    }
     return false;
   }
 }
@@ -739,6 +756,16 @@ function getAuthHeaders() {
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) headers.Authorization = `Bearer ${token}`;
   return headers;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function formatHistoryTime(raw) {
@@ -969,14 +996,18 @@ async function refreshSessionFileViewer(fileKey) {
   }
   try {
     const params = new URLSearchParams({ path: view.path, offset: "0", max_chars: "200000" });
-    const res = await fetch(`/tasks/${view.taskId}/files/content?${params.toString()}`, {
-      headers: getAuthHeaders(),
-    });
+    const res = await fetchWithTimeout(
+      `/tasks/${view.taskId}/files/content?${params.toString()}`,
+      { headers: getAuthHeaders() },
+      12000
+    );
     if (!res.ok) return;
     const data = await res.json();
     updateSessionFileViewer(fileKey, data);
   } catch {
-    /* ignore */
+    const doc = view.win?.document;
+    const metaEl = doc?.getElementById("m");
+    if (metaEl) metaEl.textContent = "文件读取超时/失败";
   }
 }
 
@@ -1075,7 +1106,11 @@ async function refreshSessionFilesPane(options = {}) {
   }
   try {
     const params = new URLSearchParams({ path: sessionFilesCurrentPath, recursive: "false", max_entries: "500" });
-    const res = await fetch(`/tasks/${taskId}/files?${params.toString()}`, { headers: getAuthHeaders() });
+    const res = await fetchWithTimeout(
+      `/tasks/${taskId}/files?${params.toString()}`,
+      { headers: getAuthHeaders() },
+      12000
+    );
     if (seq !== sessionFilesRefreshSeq) return;
     if (!res.ok) {
       if (res.status === 404) {
@@ -1116,10 +1151,13 @@ async function refreshSessionFilesPane(options = {}) {
     for (const [key] of sessionFileViewerMap) {
       refreshSessionFileViewer(key);
     }
-  } catch {
+  } catch (err) {
     if (seq !== sessionFilesRefreshSeq) return;
     sessionFilesListEl.innerHTML = '<p class="flow-empty">文件列表加载失败。</p>';
-    updateSessionFilesMeta(`session ${taskId.slice(0, 8)}… ${sessionFilesCurrentPath} 加载异常`);
+    const timeout = err?.name === "AbortError";
+    updateSessionFilesMeta(
+      `session ${taskId.slice(0, 8)}… ${sessionFilesCurrentPath} ${timeout ? "加载超时" : "加载异常"}`
+    );
   }
 }
 

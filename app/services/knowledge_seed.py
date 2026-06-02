@@ -3,13 +3,18 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from app.services.knowledge_paths import prose_voice_format_path, writing_guidelines_path
+from app.services.knowledge_paths import (
+    code_editing_guidelines_path,
+    prose_voice_format_path,
+    writing_guidelines_path,
+)
 from app.services.knowledge_store import get_knowledge_store
 
 logger = logging.getLogger(__name__)
 
 _WRITING_GUIDELINES_PATH = writing_guidelines_path()
 _PROSE_VOICE_FORMAT_PATH = prose_voice_format_path()
+_CODE_EDITING_GUIDELINES_PATH = code_editing_guidelines_path()
 
 DEFAULT_DOCUMENTS = [
     {
@@ -20,7 +25,7 @@ DEFAULT_DOCUMENTS = [
             "retrieval, tool execution, reasoning, policy checks, human review, output, "
             "and memory writeback."
         ),
-        "metadata": {"source": "builtin", "topic": "architecture"},
+        "metadata": {"source": "builtin", "topic": "architecture", "domain": "common"},
     },
     {
         "doc_id": "builtin-policy",
@@ -29,7 +34,7 @@ DEFAULT_DOCUMENTS = [
             "Policy results include CONTINUE, REVIEW, REJECT, and ESCALATE. "
             "HIGH risk requires human review. CRITICAL risk is auto rejected."
         ),
-        "metadata": {"source": "builtin", "topic": "policy"},
+        "metadata": {"source": "builtin", "topic": "policy", "domain": "common"},
     },
     {
         "doc_id": "builtin-retrieval",
@@ -38,13 +43,13 @@ DEFAULT_DOCUMENTS = [
             "Knowledge retrieval uses hybrid search combining ChromaDB vector similarity "
             "and SQLite keyword matching merged with reciprocal rank fusion."
         ),
-        "metadata": {"source": "builtin", "topic": "retrieval"},
+        "metadata": {"source": "builtin", "topic": "retrieval", "domain": "common"},
     },
     {
         "doc_id": "builtin-writing-guidelines",
         "title": "长文写作规范",
         "content_path": _WRITING_GUIDELINES_PATH,
-        "metadata": {"source": "builtin", "topic": "writing", "locale": "zh-CN"},
+        "metadata": {"source": "builtin", "topic": "writing", "domain": "writing", "locale": "zh-CN"},
     },
     {
         "doc_id": "builtin-prose-voice-format",
@@ -53,8 +58,21 @@ DEFAULT_DOCUMENTS = [
         "metadata": {
             "source": "builtin",
             "topic": "writing",
+            "domain": "writing",
             "locale": "zh-CN",
             "focus": "prose_voice,anti_ai,txt_format,layout",
+        },
+    },
+    {
+        "doc_id": "builtin-code-editing-guidelines",
+        "title": "代码编辑与修复指南",
+        "content_path": _CODE_EDITING_GUIDELINES_PATH,
+        "metadata": {
+            "source": "builtin",
+            "topic": "code",
+            "domain": "code",
+            "locale": "zh-CN",
+            "focus": "safe_edits,tests,diff_review",
         },
     },
 ]

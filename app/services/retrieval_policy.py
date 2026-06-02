@@ -53,6 +53,32 @@ def should_skip_session_memory_retrieval(state: AgentState | dict) -> bool:
     return len(user_msgs) <= 1
 
 
+def retrieval_domains_for_state(state: AgentState | dict) -> set[str]:
+    """
+    Domain-aware retrieval policy.
+
+    - Writing tasks: writing + common
+    - Code tasks: code + common
+    - Other tasks: common
+    """
+    payload = state.get("input_payload") or {}
+    mission = state.get("mission") or payload.get("mission") or {}
+    if str(mission.get("kind") or "").lower() == "writing":
+        return {"writing", "common"}
+
+    task_type = str(state.get("task_type") or payload.get("task_type") or "").lower()
+    audit = payload.get("route_audit") or {}
+    inferred_kind = str(audit.get("inferred_kind") or "").lower()
+    profile = str(payload.get("artifact_profile") or audit.get("artifact_profile") or "").lower()
+    if (
+        task_type in {"code", "engineering"}
+        or inferred_kind == "code"
+        or profile == "source_code"
+    ):
+        return {"code", "common"}
+    return {"common"}
+
+
 def restrict_memory_to_current_session(state: AgentState | dict) -> bool:
     """
     First turn of a session window should not recall other sessions' episode memories.

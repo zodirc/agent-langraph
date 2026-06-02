@@ -40,6 +40,24 @@ def _stamp_tenant_metadata(metadata: Optional[dict[str, Any]]) -> dict[str, Any]
     return meta
 
 
+def _doc_domain(metadata: dict[str, Any]) -> str:
+    domain = str(metadata.get("domain") or "").strip().lower()
+    if domain in {"common", "code", "writing"}:
+        return domain
+    topic = str(metadata.get("topic") or "").strip().lower()
+    if topic == "writing":
+        return "writing"
+    if topic in {"code", "coding", "programming"}:
+        return "code"
+    return "common"
+
+
+def _domain_matches(metadata: dict[str, Any], domains: Optional[set[str]]) -> bool:
+    if not domains:
+        return True
+    return _doc_domain(metadata) in domains
+
+
 class _ChromaVectorIndex:
     """ChromaDB-backed vector index with configurable embeddings."""
 
@@ -361,7 +379,13 @@ class KnowledgeStore:
             for row in rows
         ]
 
-    def keyword_search(self, query: str, top_k: Optional[int] = None) -> list[dict[str, Any]]:
+    def keyword_search(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        *,
+        domains: Optional[set[str]] = None,
+    ) -> list[dict[str, Any]]:
         limit = top_k or settings.RETRIEVAL_TOP_K
         tokens = [t.lower() for t in query.split() if t.strip()]
         rows = self._fetchall("SELECT * FROM knowledge_docs")
@@ -370,6 +394,8 @@ class KnowledgeStore:
         for row in rows:
             meta = json.loads(row["metadata"])
             if not _tenant_matches(meta):
+                continue
+            if not _domain_matches(meta, domains):
                 continue
             haystack = f"{row['title']} {row['content']}".lower()
             if not tokens:
@@ -391,17 +417,32 @@ class KnowledgeStore:
         scored.sort(key=lambda item: item["score"], reverse=True)
         return scored[:limit]
 
-    def vector_search(self, query: str, top_k: Optional[int] = None) -> list[dict[str, Any]]:
+    def vector_search(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        *,
+        domains: Optional[set[str]] = None,
+    ) -> list[dict[str, Any]]:
         limit = top_k or settings.RETRIEVAL_TOP_K
         if not self._vector or not self._vector.available:
             return []
-        return self._vector.search(query, limit)
+        hits = self._vector.search(query, limit)
+        if not domains:
+            return hits
+        return [h for h in hits if _domain_matches(h.get("metadata") or {}, domains)]
 
-    def search(self, query: str, top_k: Optional[int] = None) -> list[dict[str, Any]]:
-        vector_hits = self.vector_search(query, top_k=top_k)
+    def search(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        *,
+        domains: Optional[set[str]] = None,
+    ) -> list[dict[str, Any]]:
+        vector_hits = self.vector_search(query, top_k=top_k, domains=domains)
         if vector_hits:
             return vector_hits
-        return self.keyword_search(query, top_k=top_k)
+        return self.keyword_search(query, top_k=top_k, domains=domains)
 
     def load_embedding_meta(self) -> Optional[dict[str, Any]]:
         try:
@@ -508,12 +549,18 @@ class KnowledgeStore:
             )
         return normalized
 
-    def hybrid_search(self, query: str, top_k: Optional[int] = None) -> list[dict[str, Any]]:
+    def hybrid_search(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        *,
+        domains: Optional[set[str]] = None,
+    ) -> list[dict[str, Any]]:
         limit = top_k or settings.RETRIEVAL_TOP_K
         fetch_k = max(limit, settings.RAG_RERANK_CANDIDATE_K) if settings.RAG_RERANK_ENABLED else limit
         self._check_embedding_compatibility()
-        vector_hits = self.vector_search(query, top_k=fetch_k)
-        keyword_hits = self.keyword_search(query, top_k=fetch_k)
+        vector_hits = self.vector_search(query, top_k=fetch_k, domains=domains)
+        keyword_hits = self.keyword_search(query, top_k=fetch_k, domains=domains)
         if not vector_hits:
             merged = keyword_hits
         elif not keyword_hits:
@@ -526,6 +573,8 @@ class KnowledgeStore:
 
             merged = rerank(query, merged, top_k=limit)
         merged = [h for h in merged if _tenant_matches(h.get("metadata") or {})]
+        if domains:
+            merged = [h for h in merged if _domain_matches(h.get("metadata") or {}, domains)]
         return merged[:limit]
 
     def count(self) -> int:

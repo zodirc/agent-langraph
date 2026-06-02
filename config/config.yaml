@@ -39,6 +39,10 @@ app:
 knowledge:
   backend: chroma   # chroma | qdrant
   content_dir: knowledge   # repo-relative markdown seed dir; or absolute path
+  domain_paths:
+    common: knowledge/common
+    code: knowledge/code
+    writing: knowledge/writing
   embedding_model: voyage-3   # voyage-3 | default (local hash fallback)
   embedding_api_key: ${VOYAGE_API_KEY}
   top_k: 3
