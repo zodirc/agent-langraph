@@ -2,12 +2,21 @@
 
 基于 LangGraph 的通用多领域 Agent Runtime（v0.10+），实现见 [`DEVELOPMENT_GUIDELINES.md`](DEVELOPMENT_GUIDELINES.md) 与 [`docs/`](docs/) 子系统说明。
 
-## quick start
-cp .env.example .env
-> Enter your API and LLM URLs, along with your chosen model, into the .env file.
+## quick start（3 步）
 
-start usage (require docker):  
-HOST_PORT=8001 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+需要 **Docker**。可同时配置多个厂商 Key，用 `MODEL_PROVIDER` 指定当前使用哪一个：
+
+```bash
+cp .env.example .env                   # 填写各厂商 Key；设置 MODEL_PROVIDER=anthropic 等
+make init && make up                   # HTTPS + 代码热更新
+# 切换厂商：改 MODEL_PROVIDER / MODEL_NAME 后 make restart
+```
+
+浏览器打开 **https://localhost:8080/**（虚拟机局域网：`https://<VM-IP>:8080/`，setup 会打印地址）。
+
+- 默认 **关闭认证**（`AUTH_ENABLED=false`），可直接用；要开启见 `.env` 设 `AUTH_ENABLED=true` 后 `make restart`。
+- 高级环境变量：[`docs/ENV_REFERENCE.md`](docs/ENV_REFERENCE.md)
+- 等价命令：`./scripts/setup.sh && docker compose up -d --build`（`COMPOSE_FILE` 由 init 写入）
 
 ### 完整开发环境
 
@@ -15,8 +24,8 @@ HOST_PORT=8001 docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 
 | 入口 | 说明 |
 |------|------|
-| **Web CLI** | https://localhost/（生产 compose）/ http://localhost:8001/（dev compose） |
-| **监控面板** | https://localhost/dashboard（生产 compose）/ http://localhost:8001/dashboard（dev compose） |
+| **Web CLI** | https://localhost:8080/（`HOST_PORT`，本地默认 `make up` 即 HTTPS + 热更新） |
+| **监控面板** | https://localhost:8080/dashboard |
 | **独立 CLI** | `python -m app.cli --local run "你的任务"` |
 | **HTTP API** | 见下方 API 列表 |
 | **Scheduler** | `POST /schedules`（Cron） |
@@ -310,10 +319,27 @@ docker compose up -d --build
 
 | 地址 | 说明 |
 |------|------|
-| https://localhost/ | Web CLI（提交任务） |
-| https://localhost/dashboard | 监控面板 |
-| https://localhost/health | 健康检查 |
-| https://localhost/docs | OpenAPI 文档 |
+| https://localhost:8080/ | Web CLI（提交任务；`HOST_PORT` 可改） |
+| https://localhost:8080/dashboard | 监控面板 |
+| https://localhost:8080/health | 健康检查 |
+| https://localhost:8080/docs | OpenAPI 文档 |
+
+**宿主机访问虚拟机**（示例 IP `192.168.25.128`）：
+
+| 用途 | 地址 |
+|------|------|
+| 浏览器 / Web CLI | `https://192.168.25.128:8080/` |
+| 宿主机 `curl` 测通（明文） | `http://192.168.25.128:8081/health` |
+
+- 浏览器访问 HTTPS 时接受自签证书警告；Web CLI 内 `/login admin <密码>`。
+- **Windows 自带 `curl` + HTTPS + IP** 常报 `SEC_E_INTERNAL_ERROR`（Schannel 限制），属客户端问题，不是服务未启动。请任选：
+  - 用浏览器打开 `https://192.168.25.128:8080/`；
+  - 或用明文测通：`curl http://192.168.25.128:8081/health`；
+  - 或在 `C:\Windows\System32\drivers\etc\hosts` 增加 `192.168.25.128 agent.local` 后访问 `https://agent.local:8080/`；
+  - 或安装 [curl for Windows](https://curl.se/windows/)（OpenSSL 版），勿用 Schannel。
+- 虚拟机放通端口：`sudo firewall-cmd --add-port=8080/tcp --add-port=8081/tcp --permanent && sudo firewall-cmd --reload`
+- 浏览器若仍异常，先在虚拟机执行：`docker compose up -d --force-recreate caddy`（须禁用 HTTP/3，见 `deploy/caddy/Caddyfile`）
+- `.env` 示例：`PUBLIC_DOMAIN=localhost, 192.168.25.128` 与 `DEFAULT_SNI=192.168.25.128`（**逗号后空格**）
 
 ### 4. 常用命令
 
@@ -358,31 +384,34 @@ docker run -d --name agent-langraph -p 8000:8000 \
 - 轻量结果缓存
 - 检索预热开关
 
-### 7. 代码热更新（开发模式）
+### 7. 代码热更新（默认 HTTPS）
 
-默认 `docker compose up` **不支持热更新**：代码在构建时打进镜像，改代码需重建：
-
-```bash
-docker compose up -d --build
-```
-
-本地开发若要 **改 Python 自动重启**、**改 web/ 刷新即生效**：
+本地默认 **`make up`**（或叠加 `docker-compose.dev.yml`）：**HTTPS 经 Caddy** + **uvicorn `--reload`**，访问 **https://localhost:8080/**（端口见 `.env` `HOST_PORT`）。
 
 ```bash
-# 先停掉旧实例（避免 8000/8001 端口冲突）
-docker compose down
-
-# 宿主机用 8001 时（与生产 compose 相同写法）
-HOST_PORT=8001 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
-# 改 app/ 后 uvicorn 会自动 reload；改 web/static 后浏览器强刷即可
+make up          # 启动（HTTPS + 热更新）
+make logs        # 看 agent 日志（含 reload）
+make restart     # 改 config/ 后重启 agent
+make down        # 停止
 ```
 
-**不要**在 `docker-compose.dev.yml` 里改 uvicorn 的 `--port`：容器内始终是 `8000`，对外端口用环境变量 `HOST_PORT`（映射为 `HOST_PORT:8000`）。
+| 改动 | 行为 |
+|------|------|
+| `app/` | uvicorn 自动 reload |
+| `web/static/`、`web/*.html` | 浏览器强刷 |
+| `config/` | `make restart` |
+| `requirements.txt` / `Dockerfile` | `make build` |
 
-| 模式 | 热更新 | 适用 |
-|------|--------|------|
-| `docker compose up` | 否 | 接近生产的本地部署 |
-| `docker compose ... dev.yml` | 是（Python reload + 挂载 web） | 日常改代码调试 |
+无热更新、代码在镜像内（接近线上）：
+
+```bash
+make prod        # 仅 docker-compose.yml，HTTPS，无 reload
+```
+
+| 命令 | HTTPS | 热更新 |
+|------|-------|--------|
+| `make up` | 是（Caddy） | 是 |
+| `make prod` | 是（Caddy） | 否 |
 
 ### 8. 内置 PostgreSQL 说明
 
@@ -395,7 +424,7 @@ postgresql://agent:agent@postgres:5432/agent
 启动后验证：
 
 ```bash
-curl -s http://127.0.0.1:8001/health | python3 -m json.tool
+curl -sk https://localhost:8080/health | python3 -m json.tool
 # storage_backend: postgres
 # checkpoint_backend: postgres
 ```

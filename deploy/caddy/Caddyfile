@@ -1,9 +1,21 @@
 {
-  # Use internal CA for localhost/self-host scenarios.
   local_certs
+  auto_https disable_redirects
+  # 禁用 HTTP/3（QUIC）；Docker 只映射 TCP 8080:443，开 h3 会导致浏览器「无效响应」
+  servers {
+    protocols h1 h2
+  }
+  # 客户端未带 SNI（部分 curl / 旧浏览器）时使用该 IP 的证书
+  default_sni {$DEFAULT_SNI:localhost}
 }
 
-{$PUBLIC_DOMAIN:localhost} {
+# PUBLIC_DOMAIN 逗号+空格分隔，如：localhost, 192.168.25.128
+{$PUBLIC_DOMAIN:localhost}, 127.0.0.1 {
+  encode gzip
+  reverse_proxy agent:8000
+}
+
+:80 {
   encode gzip
   reverse_proxy agent:8000
 }

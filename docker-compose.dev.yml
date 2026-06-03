@@ -1,22 +1,18 @@
-# 本地开发：挂载源码 + uvicorn --reload（改代码自动重启）
-# PostgreSQL 已内置在 docker-compose.yml，与本文件叠加即可。
+# 本地默认：HTTPS（Caddy）+ 源码挂载 + uvicorn --reload
 #
-# 先停掉旧容器再启动：
-#   docker compose down
-#   HOST_PORT=8001 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# 与 docker-compose.yml 叠加使用（推荐，亦见 Makefile `make up`）：
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 #
-# 注意：
-# - 改的是「宿主机端口」HOST_PORT，不是 uvicorn 的 --port（容器内固定 8000）
-# - 仍使用 CONFIG_PATH=/app/config/config.docker.yaml；挂载 ./config 后改 config.docker.yaml 生效
-# - APP_ENV=development 允许 AUTH_ENABLED=false（.env 覆盖）
+# 访问 https://localhost:${HOST_PORT}/ （端口见 .env，默认 8080）
+# - 改 app/：uvicorn 自动 reload
+# - 改 web/static：浏览器强刷
+# - 改 config/：docker compose ... restart agent
 
 services:
   agent:
-    ports:
-      - "${HOST_PORT:-8001}:8000"
     environment:
       APP_ENV: development
-      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
     volumes:
       - agent_data:/data
       - ./app:/app/app:ro
@@ -33,5 +29,4 @@ services:
       - --reload
       - --reload-dir
       - /app/app
-  caddy:
-    profiles: ["prod"]
+    # 不发布 8000 到宿主机；HTTPS 仅经 Caddy（docker-compose.yml）
