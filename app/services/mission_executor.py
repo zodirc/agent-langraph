@@ -48,27 +48,94 @@ def _forced_stop_requested(state: AgentState) -> bool:
     )
 
 
-def run_pipeline_request(state: AgentState) -> AgentState:
-    """
-    单步内联主图节点与 router，不经 LangGraph compile。
-
-    One mission step via main-graph nodes in a Python while loop.
-    """
-    state = prepare_state_for_mission_act(state)
-    if _forced_stop_requested(state):
-        return merge_state(state, status="MISSION_PAUSED", current_node="mission_act")
-    current = planning_node(state)
-    from app.services.mission_steer_confirm import (
-        attach_steer_confirmation_to_state,
-        steer_confirmation_pending,
+def _bootstrap_executor_routing(state: AgentState) -> AgentState:
+    """Attach agenda head + writing_intent so routers run executor, not narrator-only."""
+    from app.services.mission_orchestrator import (
+        activate_work_item,
+        ensure_work_plan,
+        get_current_work_item,
+        orchestration_enabled,
     )
+    from app.services.mission_schema import resolve_writing_intent_for_step
+    from app.services.turn_kind import plan_steps_for_display
 
-    if steer_confirmation_pending(current.get("input_payload") or {}):
-        return attach_steer_confirmation_to_state(current)
+    mission = state.get("mission") or {}
+    if orchestration_enabled(mission):
+        state = ensure_work_plan(state)
 
+    item = get_current_work_item(state)
+    if not item:
+        return merge_state(state, plan=plan_steps_for_display(state))
+
+    state = activate_work_item(state, item)
+    payload = dict(state.get("input_payload") or {})
+    payload["current_work_item"] = item
+    kind = str(item.get("kind") or "")
+    write_kinds = frozenset(
+        {
+            "append_body",
+            "append_chapter",
+            "write_body",
+            "write_outline",
+            "reset_body",
+            "review_chapter",
+            "polish_chapter",
+            "chapter_summary",
+            "consistency_check",
+        }
+    )
+    if kind in write_kinds:
+        resolved = resolve_writing_intent_for_step(
+            merge_state(state, input_payload=payload),
+            mission=mission,
+        )
+        if isinstance(resolved, dict):
+            payload["writing_intent"] = {
+                **resolved,
+                "enabled": True,
+                "source": "work_item",
+            }
+    display_plan = plan_steps_for_display(merge_state(state, input_payload=payload))
+    return merge_state(state, input_payload=payload, plan=display_plan)
+
+
+def _run_executor_subgraph(state: AgentState) -> AgentState:
+    """Run writing/tools for current agenda item instead of terminating in reasoning."""
+    state = _bootstrap_executor_routing(state)
+    payload = state.get("input_payload") or {}
+    item = payload.get("current_work_item") or {}
+    kind = str(item.get("kind") or "")
+    if kind in (
+        "review_chapter",
+        "polish_chapter",
+        "chapter_summary",
+        "consistency_check",
+        "append_body",
+        "append_chapter",
+        "write_body",
+        "write_outline",
+        "reset_body",
+    ):
+        return run_subgraph_writing(state)
+    return _run_pipeline_node_loop(state, allow_reasoning_terminal=False)
+
+
+def _run_pipeline_node_loop(
+    state: AgentState,
+    *,
+    allow_reasoning_terminal: bool,
+) -> AgentState:
+    from app.runtime.state import TaskStatus
+    from app.services.turn_kind import agenda_has_executor_pending, should_use_reasoning_terminal
+
+    current = state
     node = route_after_planning(current)
-    safety = 0
+    if not allow_reasoning_terminal and node == "reasoning" and agenda_has_executor_pending(
+        current
+    ):
+        return _run_executor_subgraph(current)
 
+    safety = 0
     while safety < 12:
         if _forced_stop_requested(current):
             return merge_state(current, status="MISSION_PAUSED", current_node="mission_act")
@@ -87,6 +154,41 @@ def run_pipeline_request(state: AgentState) -> AgentState:
                 break
             node = route_after_writing(current)
         elif node == "reasoning":
+            from app.services.turn_contract import (
+                contract_requires_side_effects,
+                is_turn_contract_fulfilled,
+                validate_turn_contract_execution,
+            )
+            from app.services.turn_contract_lifecycle import (
+                REASON_INCONSISTENT,
+                invalidate_turn_contract_payload,
+            )
+
+            payload_check = current.get("input_payload") or {}
+            if (
+                not allow_reasoning_terminal
+                and not should_use_reasoning_terminal(current)
+                and agenda_has_executor_pending(current)
+            ):
+                return _run_executor_subgraph(current)
+            if contract_requires_side_effects(
+                payload_check, state=current
+            ) and not is_turn_contract_fulfilled(current):
+                issues = validate_turn_contract_execution(current)
+                payload_check = invalidate_turn_contract_payload(
+                    payload_check, REASON_INCONSISTENT
+                )
+                payload_check["plan_validation_feedback"] = {
+                    "issues": issues or ["contract_unfulfilled"],
+                    "suggestions": ["replan with executable tools or writing phase"],
+                }
+                current = merge_state(
+                    current,
+                    input_payload=payload_check,
+                    status=TaskStatus.PLANNED.value,
+                    current_node="mission_act",
+                )
+                break
             current = reasoning_node(current)
             break
         elif node == "planning":
@@ -98,6 +200,136 @@ def run_pipeline_request(state: AgentState) -> AgentState:
             break
 
     return current
+
+
+def _oma_pipeline_redirect(state: AgentState) -> AgentState:
+    """Route legacy pipeline callers to OMAW workers (ADR §7.2)."""
+    from app.services.mission_steer import mission_must_run_planning
+
+    state = prepare_state_for_mission_act(state)
+    if mission_must_run_planning(state):
+        from app.services.mission_oma.planner_worker import run_planner_worker
+
+        return run_planner_worker(state)
+    from app.services.mission_oma.orchestrator import run_parallel_reviews_if_applicable
+
+    parallel = run_parallel_reviews_if_applicable(state)
+    if parallel is not None:
+        return parallel
+    from app.services.mission_oma.workers import execute_oma_worker
+
+    return execute_oma_worker(state)
+
+
+def _oma_act_available(state: AgentState) -> bool:
+    from app.services.mission_oma.orchestrator import should_use_mission_oma
+
+    mission = state.get("mission") or {}
+    if str(mission.get("kind", "")).lower() == "single_turn":
+        return False
+    return should_use_mission_oma(state)
+
+
+def _mission_act_for_writing(
+    state: AgentState,
+    step_decision: dict,
+    *,
+    allow_pipeline: bool = False,
+) -> AgentState:
+    """ADR 7.2: OMAW missions must not use run_pipeline_request as default."""
+    if _oma_act_available(state):
+        routed = _dispatch_oma_act(state, step_decision)
+        if routed is not None:
+            return routed
+        return run_subgraph_writing(state)
+    if allow_pipeline:
+        return run_pipeline_request(state)
+    return run_subgraph_writing(state)
+
+
+def _dispatch_oma_act(state: AgentState, step_decision: dict) -> AgentState | None:
+    """OMAW paths — returns None when caller should use legacy pipeline."""
+    if not _oma_act_available(state):
+        return None
+
+    from app.services.mission_oma.orchestrator import (
+        narrow_replan_after_acceptance_fail,
+        run_parallel_reviews_if_applicable,
+    )
+    from app.services.mission_oma.planner_worker import run_planner_worker
+    from app.services.turn_kind import resolve_turn_kind
+
+    executor = str(step_decision.get("next_executor") or "")
+    if executor == "oma:planner":
+        return run_planner_worker(state)
+
+    params = dict(step_decision.get("params") or {})
+    if (
+        str(params.get("writing_phase") or "") == "steer_replan"
+        or resolve_turn_kind(state) == "steer_replan"
+    ):
+        return run_planner_worker(state)
+
+    parallel = run_parallel_reviews_if_applicable(state)
+    if parallel is not None:
+        return parallel
+
+    payload = state.get("input_payload") or {}
+    if payload.get("acceptance_replan") and not payload.get("acceptance_ok", True):
+        return narrow_replan_after_acceptance_fail(state)
+
+    return run_subgraph_writing(state)
+
+
+def run_pipeline_request(state: AgentState) -> AgentState:
+    """
+    单步内联主图节点与 router，不经 LangGraph compile。
+
+    After planning: steer confirm → executor subgraph; reasoning only when narrate-only.
+
+    ADR-001 §7.2: 不得作为手稿 mission_oma 的默认执行器；OMAW 写作须走 execute_oma_worker。
+    """
+    from app.services.mission_oma.orchestrator import should_use_mission_oma
+
+    if should_use_mission_oma(state):
+        return _oma_pipeline_redirect(state)
+
+    from app.runtime.state import TaskStatus
+    from app.services.mission_execution import build_mission_checkpoint_summary
+    from app.services.mission_steer_confirm import (
+        attach_steer_confirmation_to_state,
+        steer_confirmation_pending,
+    )
+    from app.services.turn_kind import pipeline_phase_after_planning
+
+    state = prepare_state_for_mission_act(state)
+    if _forced_stop_requested(state):
+        return merge_state(state, status="MISSION_PAUSED", current_node="mission_act")
+    current = planning_node(state)
+    payload = current.get("input_payload") or {}
+    if steer_confirmation_pending(payload):
+        return attach_steer_confirmation_to_state(current)
+
+    phase = pipeline_phase_after_planning(current)
+    if phase == "await_confirm":
+        return attach_steer_confirmation_to_state(current)
+    if phase == "steer_replan_only":
+        checkpoint = build_mission_checkpoint_summary(current)
+        return merge_state(
+            current,
+            status=TaskStatus.MISSION_PAUSED.value,
+            current_node="mission_act",
+            reasoning_result={
+                "summary": str(checkpoint.get("summary") or "等待 steer 规划确认"),
+                "confidence": 0.85,
+                "risk_level": "LOW",
+                "structured": {"source": "steer_replan_only"},
+            },
+        )
+    if phase == "execute":
+        current = _bootstrap_executor_routing(current)
+        return _run_pipeline_node_loop(current, allow_reasoning_terminal=False)
+    return _run_pipeline_node_loop(current, allow_reasoning_terminal=True)
 
 
 def _chapter_index_mismatch_note(
@@ -199,6 +431,18 @@ def run_subgraph_writing(state: AgentState) -> AgentState:
     from app.services.turn_contract import contract_blocks_writing
 
     state = prepare_state_for_mission_act(state)
+    from app.services.mission_oma.orchestrator import (
+        run_parallel_reviews_if_applicable,
+        should_use_mission_oma,
+    )
+
+    if should_use_mission_oma(state):
+        parallel = run_parallel_reviews_if_applicable(state)
+        if parallel is not None:
+            return parallel
+        from app.services.mission_oma.workers import execute_oma_worker
+
+        return execute_oma_worker(state)
     from app.services.turn_contract_lifecycle import reconcile_turn_contract_execution
 
     state = reconcile_turn_contract_execution(state)
@@ -220,7 +464,15 @@ def run_subgraph_writing(state: AgentState) -> AgentState:
         item = payload.get("current_work_item") or {}
         kind = str(item.get("kind") or "")
         write_kinds = frozenset(
-            {"append_body", "write_body", "write_outline", "reset_body"}
+            {
+                "append_body",
+                "write_body",
+                "write_outline",
+                "reset_body",
+                "review_chapter",
+                "polish_chapter",
+                "chapter_summary",
+            }
         )
         if kind not in write_kinds:
             return run_pipeline_request(state)
@@ -288,10 +540,43 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
             )
         )
     if review_outline_requested(payload) and not mission_must_run_planning(state):
-        return run_pipeline_request(state)
+        return _mission_act_for_writing(
+            state,
+            step_decision,
+            allow_pipeline=not _oma_act_available(state),
+        )
 
     if mission_must_run_planning(state):
-        return run_pipeline_request(state)
+        if _oma_act_available(state):
+            from app.services.mission_oma.planner_worker import run_planner_worker
+
+            state = run_planner_worker(state)
+        else:
+            state = run_pipeline_request(state)
+        payload = dict(state.get("input_payload") or {})
+        if steer_confirmation_pending(payload) and not payload.get("steer_intent_confirmed"):
+            return merge_state(
+                state,
+                current_node="mission_act",
+                status=state.get("status") or TaskStatus.MISSION_RUNNING.value,
+            )
+        from app.services.turn_kind import agenda_has_executor_pending
+
+        status = str(state.get("status") or "")
+        if (
+            agenda_has_executor_pending(state)
+            and not mission_must_run_planning(state)
+            and status
+            not in (
+                TaskStatus.WRITTEN.value,
+                TaskStatus.TOOL_EXECUTED.value,
+                TaskStatus.REASONED.value,
+            )
+        ):
+            if _oma_act_available(state):
+                return run_subgraph_writing(_bootstrap_executor_routing(state))
+            return _run_executor_subgraph(_bootstrap_executor_routing(state))
+        return state
     item = payload.get("current_work_item") or {}
     kind = str(item.get("kind") or "")
 
@@ -303,7 +588,7 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
         )
 
     if kind == "run_tools":
-        return run_pipeline_request(state)
+        return tool_execution_node(state)
 
     if kind == "edit_plot":
         spec = dict((payload.get("edit_plot_spec") or item.get("params", {}).get("edit_spec") or {}))
@@ -355,7 +640,11 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
                 manuscript=ms.to_dict(),
                 status=TaskStatus.TOOL_EXECUTED.value,
             )
-        return run_pipeline_request(state)
+        return _mission_act_for_writing(
+            state,
+            step_decision,
+            allow_pipeline=not _oma_act_available(state),
+        )
 
     from app.services.turn_contract import contract_blocks_writing
     from app.services.turn_contract_lifecycle import reconcile_turn_contract_execution
@@ -363,7 +652,7 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
     state = reconcile_turn_contract_execution(state)
     payload = state.get("input_payload") or {}
     if mission_must_run_planning(state):
-        return run_pipeline_request(state)
+        return _mission_act_for_writing(state, step_decision, allow_pipeline=not _oma_act_available(state))
 
     mission = state.get("mission") or {}
     executor = str(step_decision.get("next_executor") or "pipeline:request")
@@ -376,9 +665,9 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
         tool_step = _run_contract_tool_step(state)
         if tool_step is not None:
             return tool_step
-        return run_pipeline_request(state)
-    if executor == "subgraph:writing":
-        return run_subgraph_writing(state)
+        return _mission_act_for_writing(state, step_decision)
+    if executor in ("subgraph:writing", "oma:planner"):
+        return _mission_act_for_writing(state, step_decision)
     if executor == "tools_only":
         return tool_execution_node(state)
-    return run_pipeline_request(state)
+    return _mission_act_for_writing(state, step_decision, allow_pipeline=not _oma_act_available(state))

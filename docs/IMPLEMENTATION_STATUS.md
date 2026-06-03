@@ -203,13 +203,14 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 | Planning → Mission handoff | ✅ | `enable_planning_mission_handoff` + `mission_auto` |
 | Lazy work_plan | ✅ | `mission_orchestrator` 按 `step_policy` 推进一步 |
 | agenda / DAG 扩展 | ✅ | `task_agenda.py`：`depends_on`、阻塞传播、局部重规划 |
-| 写作阶段（模型自选） | ✅ | `writing_phases.py`；`mission.writing_llm_decide`（默认 true） |
+| Mission OMAW（ADR-001） | ✅ | M1–M8 闭环；`SUITE=oma` CI；§8.1 全链 golden；`chapter_facts`→KnowledgeStore；`run_pipeline_request` OMAW 重定向；12 章并行 subtasks 单测 |
+| 写作阶段（模型自选） | 🔶 遗留 | 仅 `writing_llm_decide=true` 时启用 |
 | autonomous 连续执行 | ✅ | `init_mission_state` 保留 autonomous；`stepwise_pause` 对 autonomous 为 false |
 | 输出保留 `MISSION_PAUSED` | ✅ | `output_node._resolve_output_status` |
 | Streaming 深合并修复 | ✅ | `merge_state` 深合并 `progress/input_payload` |
 | 纲文对齐决策 | ✅ | `outline_body_alignment.py` + `writing_node` 强制 `reset_body` |
 | `budget.max_steps` 估算 + 硬顶 500 | ✅ | `mission_schema.resolve_mission_budget_dict` |
-| Supervisor 按章多 Agent | ❌ | 默认 mission 写作链未打通 |
+| Supervisor 按章多 Agent | ❌ | ADR 禁止用于手稿 mission；`manuscript_supervisor_guard` |
 
 ### 5.3 Steer / confirmation / execution control
 
@@ -305,6 +306,7 @@ bash scripts/demo_local.sh
 # Golden / Eval CI
 SUITE=unit        bash scripts/ci_eval.sh -q
 SUITE=integration bash scripts/ci_eval.sh -q
+SUITE=oma         bash scripts/ci_eval.sh -q   # ADR-001 M8 golden
 SUITE=rag         bash scripts/ci_eval.sh -q
 SUITE=all         bash scripts/ci_eval.sh -q
 

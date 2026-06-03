@@ -2,6 +2,7 @@ from app.services.task_agenda import (
     ensure_agenda_fields,
     items_from_plan_steps,
     propagate_failure,
+    repair_work_plan_dependencies,
     runnable_items,
     select_next_runnable_item,
     set_item_status,
@@ -61,3 +62,21 @@ def test_set_item_status():
     plan = ensure_agenda_fields({"items": [{"id": "x", "status": "pending"}]})
     plan = set_item_status(plan, "x", "running", reason="test")
     assert plan["items"][0]["status"] == "running"
+
+
+def test_repair_work_plan_strips_self_dependency():
+    plan = repair_work_plan_dependencies(
+        {
+            "items": [
+                {
+                    "id": "wi-step-3",
+                    "kind": "append_body",
+                    "status": "pending",
+                    "depends_on": ["wi-step-3"],
+                }
+            ]
+        }
+    )
+    assert plan["items"][0]["depends_on"] == []
+    ready = runnable_items(ensure_agenda_fields(plan))
+    assert ready[0]["id"] == "wi-step-3"

@@ -168,6 +168,7 @@ class Progress:
     blockers: list[str] = field(default_factory=list)
     consecutive_failures: int = 0
     work_plan: Optional[dict[str, Any]] = None
+    writing_state: Optional[dict[str, Any]] = None
     started_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
 
@@ -183,6 +184,8 @@ class Progress:
         }
         if self.work_plan:
             out["work_plan"] = dict(self.work_plan)
+        if self.writing_state:
+            out["writing_state"] = dict(self.writing_state)
         return out
 
     @classmethod
@@ -194,6 +197,9 @@ class Progress:
             blockers=list(data.get("blockers") or []),
             consecutive_failures=int(data.get("consecutive_failures", 0)),
             work_plan=dict(data["work_plan"]) if isinstance(data.get("work_plan"), dict) else None,
+            writing_state=dict(data["writing_state"])
+            if isinstance(data.get("writing_state"), dict)
+            else None,
             started_at=str(data.get("started_at", _now_iso())),
             updated_at=str(data.get("updated_at", _now_iso())),
         )

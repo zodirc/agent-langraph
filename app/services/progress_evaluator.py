@@ -134,7 +134,14 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
     intervention_early = intervention_from_payload(payload_merged)
     if intervention_early and is_forced(intervention_early):
         material = frozenset(
-            {"rewrite_outline", "reset_body", "edit_plot", "run_tools", "enqueue_work"}
+            {
+                "rewrite_outline",
+                "reset_body",
+                "edit_plot",
+                "run_tools",
+                "enqueue_work",
+                "batch_unit_quality",
+            }
         )
         action = str(intervention_early.get("action") or "")
         if action == "pause":
@@ -180,7 +187,11 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
             action="pause",
             pause_reason=PAUSE_FORCED,
         )
-    if has_execution_grant(payload_for_grant):
+    from app.services.intent_composer import grant_may_mechanical_forward
+
+    if has_execution_grant(payload_for_grant) and grant_may_mechanical_forward(
+        payload_for_grant, state=state
+    ):
         return EvalResult(
             done=False,
             reason="execution grant: run next orchestrated step",

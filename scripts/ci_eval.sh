@@ -36,6 +36,11 @@ case "$SUITE" in
       --fail-on-regression="$FAIL_REG" \
       "$@"
     ;;
+  oma)
+    echo "==> eval suite: oma (ADR-001 M8 golden)"
+    exec "$PY" -m pytest tests/integration/test_mission_oma_golden.py tests/services/test_mission_oma.py -q \
+      "$@"
+    ;;
   rag)
     echo "==> eval suite: rag (thresholds: recall>=${RAG_MIN_RECALL}, mrr>=${RAG_MIN_MRR}, faithfulness>=${RAG_MIN_FAITHFULNESS})"
     exec "$PY" -m pytest \
@@ -55,6 +60,9 @@ case "$SUITE" in
       --baseline="tests/eval/integration_baseline.json" \
       --fail-on-regression="$FAIL_REG" \
       "$@"
+    echo "==> eval suite: oma (ADR-001 M8)"
+    "$PY" -m pytest tests/integration/test_mission_oma_golden.py tests/services/test_mission_oma.py -q \
+      "$@"
     "$PY" -m pytest \
       tests/eval/test_rag_golden.py \
       tests/eval/test_rag_pipeline.py \
@@ -64,7 +72,7 @@ case "$SUITE" in
       "$@"
     ;;
   *)
-    echo "Unknown SUITE=$SUITE (use unit|integration|rag|all)" >&2
+    echo "Unknown SUITE=$SUITE (use unit|integration|oma|rag|all)" >&2
     exit 1
     ;;
 esac

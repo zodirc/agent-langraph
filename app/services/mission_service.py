@@ -24,6 +24,12 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _writing_execution_mode() -> str:
+    from app.config.settings import settings
+
+    return str(getattr(settings, "MISSION_EXECUTION_MODE", "mission_oma"))
+
+
 def should_run_mission_runtime(state: AgentState, payload: dict[str, Any]) -> bool:
     return should_use_mission_runtime(
         payload, str(state.get("execution_mode") or "")
@@ -103,7 +109,11 @@ def init_mission_state(
         observations=[],
         observation=None,
         step_decision=None,
-        execution_mode="mission",
+        execution_mode=(
+            _writing_execution_mode()
+            if str(mission.get("kind", "")).lower() == "writing"
+            else "mission"
+        ),
         status=TaskStatus.NEW.value,
         input_payload={**payload, "mission": mission},
     )

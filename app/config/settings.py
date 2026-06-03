@@ -408,6 +408,15 @@ class Settings:
         self.WRITING_QUALITY_GATE_THRESHOLD = float(
             manuscript.get("quality_gate_threshold", 0.65)
         )
+        self.WRITING_QUALITY_SCORE_USE_LLM = bool(
+            manuscript.get("quality_score_use_llm", True)
+        )
+        self.WRITING_QUALITY_SCORE_LLM_MIN_CHARS = int(
+            manuscript.get("quality_score_llm_min_chars", 80)
+        )
+        self.WRITING_CHAPTER_OUTCOME_USE_LLM = bool(
+            manuscript.get("chapter_outcome_use_llm", False)
+        )
         self.WRITING_L2_TOKEN_BUDGET = int(manuscript.get("l2_token_budget", 1500))
         self.WRITING_L3_TOKEN_BUDGET = int(manuscript.get("l3_token_budget", 1200))
         self.WRITING_ALIGNMENT_RECENT_WINDOW = int(
@@ -464,19 +473,71 @@ class Settings:
         self.MISSION_CHARS_PER_STEP = int(mission_cfg.get("chars_per_step", 4000))
         self.MISSION_STEPS_HARD_CAP = int(mission_cfg.get("steps_hard_cap", 500))
         self.MISSION_MAX_STEPS = int(mission_cfg.get("max_steps", 500))
+        self.MISSION_BATCH_UNIT_MAX_PER_PLAN = int(
+            mission_cfg.get("batch_unit_max_per_plan", 12)
+        )
         self.MISSION_MAX_WALL_SEC = int(mission_cfg.get("max_wall_sec", 3600))
         self.MISSION_MAX_FAILURES = int(mission_cfg.get("max_failures", 3))
         self.MISSION_WRITING_MAX_STEPS = int(mission_cfg.get("writing_max_steps", 500))
         self.MISSION_OUTLINE_MAX_CHARS = int(mission_cfg.get("outline_max_chars", 12000))
         self.MISSION_LLM_DECIDE = _coerce_bool(mission_cfg.get("llm_decide", False))
         self.MISSION_WRITING_LLM_DECIDE = _coerce_bool(
-            mission_cfg.get("writing_llm_decide", True)
+            mission_cfg.get("writing_llm_decide", False)
         )
         self.MISSION_WRITING_REVIEW_EVERY_CHAPTERS = int(
             mission_cfg.get("writing_review_every_chapters", 0)
         )
         self.MISSION_ORCHESTRATION_MIN_CHARS = int(
             mission_cfg.get("orchestration_min_chars", 8000)
+        )
+        self.MISSION_EXECUTION_MODE = str(
+            mission_cfg.get("execution_mode", "mission_oma")
+        ).lower()
+        self.MISSION_OMA_DEFAULT_FOR_WRITING = _coerce_bool(
+            mission_cfg.get("oma_default_for_writing", True)
+        )
+        self.MISSION_REVIEW_MAX_PARALLEL = int(
+            mission_cfg.get("review_max_parallel", 3)
+        )
+        self.MISSION_UNIT_LOOP = str(mission_cfg.get("unit_loop", "chapter_unit"))
+        worker_retrieval = mission_cfg.get("worker_retrieval") or {}
+        if not isinstance(worker_retrieval, dict):
+            worker_retrieval = {}
+        self.MISSION_OMA_WORKER_RETRIEVAL_ENABLED = _coerce_bool(
+            worker_retrieval.get("enabled", True)
+        )
+        self.MISSION_OMA_WORKER_RETRIEVAL_DOMAINS = [
+            str(d) for d in (worker_retrieval.get("domains") or ["writing", "common"])
+        ]
+        self.MISSION_OMA_WORKER_RETRIEVAL_TOP_K = int(worker_retrieval.get("top_k", 8))
+        self.MISSION_OMA_REQUIRE_FACT_BUNDLE = _coerce_bool(
+            worker_retrieval.get("require_fact_bundle", True)
+        )
+        worker_react = mission_cfg.get("worker_react") or {}
+        if not isinstance(worker_react, dict):
+            worker_react = {}
+        self.MISSION_OMA_WORKER_REACT = worker_react
+        self.MISSION_OMA_WORKER_REACT_ENABLED = _coerce_bool(
+            worker_react.get("enabled", True)
+        )
+        rag_cfg = raw.get("rag", {})
+        if not isinstance(rag_cfg, dict):
+            rag_cfg = {}
+        self.RAG_WRITING_LAYERS = [
+            str(x)
+            for x in (
+                rag_cfg.get("domains")
+                or [
+                    "project_rules",
+                    "story_bible",
+                    "outline",
+                    "chapter_facts",
+                    "external_reference",
+                ]
+            )
+        ]
+        self.RAG_WRITING_REQUIRE_CITATIONS = _coerce_bool(
+            rag_cfg.get("writing_require_citations", True)
         )
 
         route_audit_cfg = raw.get("route_audit", {})

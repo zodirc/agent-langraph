@@ -59,6 +59,32 @@ def steer_confirmation_pending_any(payload: dict[str, Any]) -> bool:
     return steer_confirmation_pending(payload) or steer_outcome_confirmation_pending(payload)
 
 
+_PROCEED_CONFIRM_MESSAGES = frozenset(
+    {
+        "/confirm",
+        "confirm",
+        "确认",
+        "批准",
+        "请进行",
+        "继续",
+        "继续执行",
+        "执行",
+        "ok",
+        "yes",
+    }
+)
+
+
+def is_proceed_confirm_message(message: str) -> bool:
+    """Explicit UX tokens for approving a pending steer gate (not open-ended goal NLP)."""
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+    if text in {m.lower() for m in _PROCEED_CONFIRM_MESSAGES}:
+        return True
+    return text in _PROCEED_CONFIRM_MESSAGES
+
+
 def try_apply_structured_confirm(
     state: AgentState,
     *,

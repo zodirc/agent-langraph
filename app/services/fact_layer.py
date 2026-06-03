@@ -89,6 +89,22 @@ def _build_turn_facts_snapshot(state: AgentState) -> dict[str, Any]:
             f"artifact:{manuscript['body_path']}:{manuscript['body_bytes']}B"
         )
 
+    bundle = payload.get("fact_bundle") or {}
+    rag_state = state.get("oma_rag_state") or {}
+    react_loop = state.get("react_loop") or {}
+    oma: dict[str, Any] = {
+        "fact_bundle_id": bundle.get("fact_bundle_id") or payload.get("fact_bundle_id"),
+        "rag_hit_count": int(bundle.get("rag_hit_count") or rag_state.get("rag_hit_count") or 0),
+        "rag_domains": bundle.get("rag_domains") or rag_state.get("rag_domains") or [],
+        "react_used": bool(react_loop.get("enabled")) or bool(payload.get("react_steps")),
+        "react_steps": int(payload.get("react_steps") or react_loop.get("step_index") or 0),
+        "tools_used": bool(tool_lines),
+        "fallback_used": bool(payload.get("react_session_id") and react_loop.get("exit_path")),
+    }
+    dispatch = payload.get("turn_envelope") or {}
+    if dispatch:
+        oma["dispatch"] = dispatch.get("dispatch")
+
     return {
         "turn": int(state.get("session_turn") or 1),
         "task_id": state["task_id"],
@@ -109,6 +125,14 @@ def _build_turn_facts_snapshot(state: AgentState) -> dict[str, Any]:
         ),
         "built_at": datetime.now(timezone.utc).isoformat(),
         "engineering_trace": _engineering_trace_digest(state),
+        "oma": oma,
+        "fact_bundle_id": oma.get("fact_bundle_id"),
+        "rag_hit_count": oma.get("rag_hit_count"),
+        "rag_domains": oma.get("rag_domains"),
+        "react_used": oma.get("react_used"),
+        "react_steps": oma.get("react_steps"),
+        "tools_used": oma.get("tools_used"),
+        "fallback_used": oma.get("fallback_used"),
     }
 
 

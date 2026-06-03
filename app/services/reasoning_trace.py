@@ -316,7 +316,9 @@ def report_effective_plan_trace(state: dict[str, Any]) -> None:
     from app.services.route_audit.apply import writing_gate_allowed
 
     payload = state.get("input_payload") or {}
-    plan = list(state.get("plan") or [])
+    from app.services.turn_kind import plan_steps_for_display
+
+    plan = plan_steps_for_display(state) or list(state.get("plan") or [])
     tools = list(state.get("selected_tools") or [])
     trace_tools = list(tools)
     if writing_gate_allowed(state) and (payload.get("writing_intent") or {}).get("enabled"):

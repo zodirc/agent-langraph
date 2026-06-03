@@ -67,6 +67,26 @@ def phases_done_for(ws: dict[str, Any], chapter_index: int) -> list[str]:
     return list(by_ch.get(_chapter_key(chapter_index)) or [])
 
 
+def chapter_summary_already_done(state: AgentState, chapter_index: int) -> bool:
+    """True when chapter_summary should not run again for this chapter."""
+    progress = state.get("progress") or {}
+    ws = writing_state(progress)
+    if "chapter_summary" in phases_done_for(ws, chapter_index):
+        return True
+    task_id = state["task_id"]
+    from app.services.writing_memory import get_chapter_outcome
+
+    if get_chapter_outcome(task_id, chapter_index) is not None:
+        return True
+    bible = load_story_bible(task_id)
+    entry = (bible.get("chapters") or {}).get(_chapter_key(chapter_index)) or {}
+    if isinstance(entry, dict) and (
+        entry.get("summary") or entry.get("chapter_summary") or entry.get("ending_state")
+    ):
+        return True
+    return False
+
+
 def mark_phase_done(state: AgentState, chapter_index: int, phase: str) -> AgentState:
     progress = dict(state.get("progress") or {})
     ws = writing_state(progress)
@@ -106,6 +126,8 @@ def should_use_writing_llm_decide(mission: dict[str, Any]) -> bool:
         return False
     if not orchestration_enabled(mission):
         return False
+    if getattr(settings, "MISSION_OMA_DEFAULT_FOR_WRITING", True):
+        return bool(getattr(settings, "MISSION_WRITING_LLM_DECIDE", False))
     if getattr(settings, "MISSION_WRITING_LLM_DECIDE", True):
         return True
     return bool(getattr(settings, "MISSION_LLM_DECIDE", False))
@@ -348,6 +370,7 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
         from app.services.writing_quality import rubric_passes_gate, score_chapter_quality
 
         prev_text = extract_chapter_text(body_text, chapter - 1) if chapter > 1 else ""
+        rubric_dict: dict[str, Any] = {}
         if not chapter_text:
             result = {"issues": ["chapter text empty"], "pass": False, "summary": "no chapter to review"}
         else:
@@ -356,7 +379,6 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
                 prev_chapter_text=prev_text,
                 outline_slice=outline_slice or "",
                 story_bible_excerpt=bible,
-                use_llm=True,
             )
             llm_review = _invoke_phase_structured(
                 "Return JSON: issues (list of strings), pass (bool), "
@@ -372,19 +394,49 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
                 },
             )
             gate_pass = rubric_passes_gate(rubric)
+            gate_pass_final = gate_pass and bool(llm_review.get("pass", True))
+            polish_rec = bool(llm_review.get("polish_recommended")) or (
+                rubric.duplication_risk > 0.4 or not gate_pass
+            )
+            rubric_dict = rubric.to_dict()
             result = {
                 **llm_review,
-                "pass": gate_pass and bool(llm_review.get("pass", True)),
-                "chapter_quality": rubric.to_dict(),
-                "polish_recommended": bool(llm_review.get("polish_recommended"))
-                or rubric.duplication_risk > 0.4
-                or not gate_pass,
+                "pass": gate_pass_final,
+                "chapter_quality": rubric_dict,
+                "polish_recommended": polish_rec,
+                "polish_skipped": gate_pass_final and not polish_rec,
             }
-        reviews = load_chapter_reviews(task_id)
-        rev_map = dict(reviews.get("reviews") or {})
-        rev_map[_chapter_key(chapter)] = {**result, "at": _now_iso()}
-        reviews["reviews"] = rev_map
-        save_chapter_reviews(task_id, reviews)
+        from app.domain.review_verdict import ReviewVerdict, save_review_verdict
+
+        payload = state.get("input_payload") or {}
+        bundle = payload.get("fact_bundle") or {}
+        rag_meta = {
+            "outline_slice": bool(outline_slice),
+            "prev_chapter": chapter > 1,
+            "rag_used": bool(bundle.get("rag_hit_count")),
+            "react_steps": int(payload.get("react_steps") or 0),
+            "knowledge_used": bool(bundle.get("rag_hit_count")),
+            "memory_used": bool(state.get("memory_hits")),
+            "fact_bundle_id": str(
+                bundle.get("fact_bundle_id") or payload.get("fact_bundle_id") or ""
+            ),
+        }
+        verdict = ReviewVerdict.from_phase_result(
+            chapter_index=chapter,
+            phase_result=result,
+            rubric_dict=rubric_dict or dict(result.get("chapter_quality") or {}),
+            fact_bundle_id=rag_meta["fact_bundle_id"],
+            rag_meta=rag_meta,
+        )
+        if verdict.is_valid():
+            save_review_verdict(task_id, verdict)
+            result = verdict.to_dict()
+        else:
+            reviews = load_chapter_reviews(task_id)
+            rev_map = dict(reviews.get("reviews") or {})
+            rev_map[_chapter_key(chapter)] = {**result, "at": _now_iso()}
+            reviews["reviews"] = rev_map
+            save_chapter_reviews(task_id, reviews)
         state = mark_phase_done(state, chapter, "review_chapter")
         return _finish_phase(state, action, chapter, result, ms)
 
@@ -457,7 +509,6 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
                 prev_chapter_text=prev_text,
                 outline_slice=outline_slice or "",
                 story_bible_excerpt=bible,
-                use_llm=False,
             )
             gate_rubric = rubric.to_dict()
             gate_passed = rubric_passes_gate(rubric)
@@ -504,10 +555,13 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
             outline_slice=outline_slice or "",
             prev_chapter_text=prev_text,
             story_bible=bible,
-            use_llm=True,
+            outcome_use_llm=True,
             persist=True,
         )
         sync_story_bible_from_outcome(task_id, outcome)
+        from app.services.writing_knowledge_index import upsert_chapter_facts_for_outcome
+
+        upsert_chapter_facts_for_outcome(task_id, outcome)
         summary = {
             "summary": outcome.chapter_summary,
             "ending_state": outcome.ending_state,
@@ -603,12 +657,13 @@ def suggest_writing_phase_fallback(state: AgentState) -> StepDecision:
 
     next_ch = max(1, last_ch + (1 if body.strip() else 0))
     if last_ch > 0 and "chapter_summary" not in done:
-        return StepDecision(
-            action="continue",
-            next_executor="subgraph:writing",
-            params={"writing_phase": "chapter_summary", "chapter_index": last_ch},
-            rationale="extract chapter outcome",
-        )
+        if not chapter_summary_already_done(state, last_ch):
+            return StepDecision(
+                action="continue",
+                next_executor="subgraph:writing",
+                params={"writing_phase": "chapter_summary", "chapter_index": last_ch},
+                rationale="extract chapter outcome",
+            )
     if last_ch > 0 and "review_chapter" not in done:
         reviews = load_chapter_reviews(task_id)
         rev = (reviews.get("reviews") or {}).get(_chapter_key(last_ch)) or {}

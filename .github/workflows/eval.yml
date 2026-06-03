@@ -20,6 +20,8 @@ jobs:
         run: |
           SUITE=unit bash scripts/ci_eval.sh -q
           SUITE=integration bash scripts/ci_eval.sh -q
+      - name: OMAW golden (ADR-001 M8)
+        run: SUITE=oma bash scripts/ci_eval.sh -q
       - name: RAG golden eval (recall / MRR / faithfulness gates)
         run: SUITE=rag bash scripts/ci_eval.sh -q
       - name: MCP HTTP E2E

@@ -147,8 +147,20 @@ def planning_node(state: AgentState) -> AgentState:
             intent = payload.get("writing_intent") or {}
             payload = apply_planner_artifact_names(payload)
             trace_tools = ["writing_node"] if intent.get("enabled") else []
+            from app.services.turn_kind import plan_steps_for_display
+
+            skip_plan = plan_steps_for_display(
+                merge_state(
+                    state,
+                    input_payload=payload,
+                    mission=state.get("mission"),
+                    progress=state.get("progress"),
+                )
+            )
+            if not skip_plan:
+                skip_plan = ["mission_writing_step"]
             report_plan_trace(
-                [],
+                skip_plan,
                 trace_tools,
                 meta={
                     "跳过检索": bool(state.get("skip_retrieval")),
@@ -161,7 +173,7 @@ def planning_node(state: AgentState) -> AgentState:
             updated = merge_state(
                 state,
                 input_payload=payload,
-                plan=["mission_writing_step"],
+                plan=skip_plan,
                 selected_tools=[],
                 manuscript=ms.to_dict(),
                 skip_retrieval=False,
@@ -207,6 +219,7 @@ def planning_node(state: AgentState) -> AgentState:
             domain=str(planning_pack.name or ""),
             risk_level=str(payload.get("risk_level") or "LOW"),
             pack_tools=pack_tools,
+            state=state,
         )
         user_content = json.dumps(
             {
@@ -283,6 +296,12 @@ def planning_node(state: AgentState) -> AgentState:
             payload = normalize_payload_execution_fields({**payload, **patch})
         if result.get("force_slow_reasoning"):
             payload["force_slow_reasoning"] = True
+
+        from app.services.mission.batch_unit_capability import enrich_planning_result_with_batch_unit
+
+        result = enrich_planning_result_with_batch_unit(
+            result, merge_state(state, input_payload=payload, manuscript=ms.to_dict())
+        )
 
         from app.services.mission_intervention import apply_planning_intervention
 
@@ -490,6 +509,21 @@ def planning_node(state: AgentState) -> AgentState:
             trace_tools.extend(writing_tools)
         if mission_block:
             trace_tools.append("mission_runtime")
+        from app.services.turn_kind import plan_steps_for_display
+
+        authoritative_plan = plan_steps_for_display(
+            merge_state(
+                state,
+                input_payload=payload,
+                mission=payload.get("mission") or state.get("mission"),
+                progress=state.get("progress"),
+                plan=plan,
+            )
+        )
+        if authoritative_plan and any(
+            str(s).startswith(("contract:", "agenda:")) for s in authoritative_plan
+        ):
+            plan = authoritative_plan
         report_plan_trace(
             plan,
             trace_tools,
@@ -503,6 +537,10 @@ def planning_node(state: AgentState) -> AgentState:
                 "body_path": ms.body_path,
             },
         )
+
+        from app.services.intent_composer import bump_intent_revision
+
+        payload = bump_intent_revision(payload)
 
         updated = budget_ctx.apply_to_state(
             merge_state(

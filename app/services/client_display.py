@@ -21,6 +21,36 @@ def _orchestration_line(state: AgentState) -> str:
     return orchestration_summary(state) or ""
 
 
+def _turn_contract_display(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    from app.services.turn_contract import contract_from_payload
+
+    contract = contract_from_payload(payload)
+    if not contract:
+        return None
+    return {
+        "primary_op": contract.get("primary_op"),
+        "intent_kind": contract.get("intent_kind"),
+        "forbid": list(contract.get("forbid") or [])[:6],
+        "reason": str(contract.get("user_visible_reason") or "").strip() or None,
+    }
+
+
+def _turn_contract_summary_line(payload: dict[str, Any]) -> Optional[str]:
+    block = _turn_contract_display(payload)
+    if not block:
+        return None
+    op = str(block.get("primary_op") or "")
+    if op == "batch_unit_quality":
+        return "本回合计划：按已写章节逐章审阅（已暂停自动续写下一章）。"
+    if op == "edit_plot":
+        return "本回合计划：局部修订大纲（非续写正文）。"
+    if op == "review_outline":
+        return "本回合计划：检阅大纲。"
+    if block.get("reason"):
+        return str(block["reason"])[:200]
+    return f"本回合计划：{op}" if op else None
+
+
 def _intervention_display(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
     block = intervention_from_payload(payload)
     if not block:
@@ -254,6 +284,16 @@ def build_mission_paused_payload(
     }
 
 
+def _pending_steer_preview(pending: dict[str, Any]) -> Optional[str]:
+    entries = pending.get("messages") if isinstance(pending, dict) else None
+    if not isinstance(entries, list) or not entries:
+        return None
+    last = entries[-1]
+    if isinstance(last, dict):
+        return str(last.get("message") or "").strip()[:200] or None
+    return str(last).strip()[:200] or None
+
+
 def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[str, Any]:
     payload = state.get("input_payload") or {}
     pending = state.get("pending_user_message") or {}
@@ -265,14 +305,30 @@ def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[
     if isinstance(mc, dict):
         pause_reason = str(mc.get("pause_reason") or "")
 
+    contract_line = _turn_contract_summary_line(payload)
+    pending_contract = _turn_contract_display(payload)
+
     if queued:
         lines = [
             "steer_queued: will apply after the current mission step completes",
             f"queue_depth={depth}",
             "不会自动续跑；当前步结束后消费队列。",
         ]
+        if contract_line:
+            lines.append(f"queued_intent: {contract_line}")
+        elif str((intervention or {}).get("action") or "") == "batch_unit_quality":
+            lines.append("queued_intent: 逐章质量审阅（消费后将取消 pending 续写项）")
+        elif str((pending_contract or {}).get("primary_op") or "") == "batch_unit_quality":
+            lines.append("queued_intent: 逐章质量审阅（消费后将取消 pending 续写项）")
+        else:
+            preview = _pending_steer_preview(pending if isinstance(pending, dict) else {})
+            if preview:
+                lines.append(f"queued_goal: {preview}")
+            lines.append("续写已暂停直至队列消费；消费后将重新规划（非自动 append 下一章）。")
     else:
         lines = ["steer_applied: 插入/纠偏已写入任务状态"]
+        if contract_line:
+            lines.append(contract_line)
         if pause_reason == "worker_lost":
             lines.append(
                 "执行器已中断：不会自动写作；续跑请 /resume 或发送「继续写作」。"
@@ -292,6 +348,7 @@ def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[
             "queue_depth": depth,
             "status": state.get("status"),
             "intervention": intervention,
+            "turn_contract": pending_contract,
         },
     }
 

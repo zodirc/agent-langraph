@@ -161,6 +161,20 @@ class StateStore:
                     continue
                 payload_merged[key] = existing_payload[key]
             merged["input_payload"] = payload_merged
+        existing_progress = existing.get("progress")
+        incoming_progress = merged.get("progress")
+        if isinstance(existing_progress, dict) and isinstance(incoming_progress, dict):
+            merged_progress = {**existing_progress, **incoming_progress}
+            ex_ws = existing_progress.get("writing_state")
+            in_ws = incoming_progress.get("writing_state")
+            if isinstance(ex_ws, dict):
+                if not isinstance(in_ws, dict):
+                    merged_progress["writing_state"] = ex_ws
+                elif ex_ws.get("phases_done") and not in_ws.get("phases_done"):
+                    merged_progress["writing_state"] = {**ex_ws, **in_ws, "phases_done": ex_ws["phases_done"]}
+            if existing_progress.get("work_plan") and not incoming_progress.get("work_plan"):
+                merged_progress["work_plan"] = existing_progress["work_plan"]
+            merged["progress"] = merged_progress
         return ensure_agent_state(merged)
 
     def _save(self, state: AgentState) -> AgentState:

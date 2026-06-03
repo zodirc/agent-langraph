@@ -216,6 +216,48 @@ class MetricsService:
                     buckets=(0, 1, 2, 3, 4, 5, 6, 8),
                     **prom_kwargs,
                 )
+                self._prometheus["mission_dispatch_total"] = Counter(
+                    "agent_mission_dispatch_total",
+                    "OMAW worker dispatches",
+                    ["agent", "capability"],
+                    **prom_kwargs,
+                )
+                self._prometheus["fact_bundle_build_total"] = Counter(
+                    "agent_fact_bundle_build_total",
+                    "FactBundle builds for workers",
+                    ["agent", "capability"],
+                    **prom_kwargs,
+                )
+                self._prometheus["fact_bundle_hit_total"] = Counter(
+                    "agent_fact_bundle_hit_total",
+                    "FactBundle RAG hits by source",
+                    ["source_type"],
+                    **prom_kwargs,
+                )
+                self._prometheus["worker_react_enter_total"] = Counter(
+                    "agent_worker_react_enter_total",
+                    "Bounded ReAct subroutine entries",
+                    ["agent", "capability"],
+                    **prom_kwargs,
+                )
+                self._prometheus["worker_react_abort_total"] = Counter(
+                    "agent_worker_react_abort_total",
+                    "Bounded ReAct aborts",
+                    ["agent", "capability", "reason"],
+                    **prom_kwargs,
+                )
+                self._prometheus["review_verdict_total"] = Counter(
+                    "agent_review_verdict_total",
+                    "ReviewVerdict outcomes",
+                    ["qualified"],
+                    **prom_kwargs,
+                )
+                self._prometheus["acceptance_fail_total"] = Counter(
+                    "agent_acceptance_fail_total",
+                    "OMAW acceptance failures",
+                    ["reason"],
+                    **prom_kwargs,
+                )
             except ImportError:
                 pass
 
@@ -706,6 +748,59 @@ class MetricsService:
             self._prometheus["react_runtime_upgrade"].labels(
                 runtime=str(runtime_upgrade)[:20]
             ).inc()
+
+    def inc_mission_dispatch(self, agent: str, capability: str) -> None:
+        key = f"oma_dispatch:{agent}:{capability}"
+        self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "mission_dispatch_total" in self._prometheus:
+            self._prometheus["mission_dispatch_total"].labels(
+                agent=agent[:20], capability=capability[:30]
+            ).inc()
+
+    def inc_fact_bundle_build(self, agent: str, capability: str) -> None:
+        key = f"oma_fact_bundle:{agent}:{capability}"
+        self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "fact_bundle_build_total" in self._prometheus:
+            self._prometheus["fact_bundle_build_total"].labels(
+                agent=agent[:20], capability=capability[:30]
+            ).inc()
+
+    def inc_fact_bundle_hit(self, source_type: str) -> None:
+        key = f"oma_fact_hit:{source_type}"
+        self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "fact_bundle_hit_total" in self._prometheus:
+            self._prometheus["fact_bundle_hit_total"].labels(
+                source_type=source_type[:30]
+            ).inc()
+
+    def inc_worker_react_enter(self, agent: str, capability: str) -> None:
+        key = f"oma_react_enter:{agent}:{capability}"
+        self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "worker_react_enter_total" in self._prometheus:
+            self._prometheus["worker_react_enter_total"].labels(
+                agent=agent[:20], capability=capability[:30]
+            ).inc()
+
+    def inc_worker_react_abort(self, agent: str, capability: str, reason: str) -> None:
+        key = f"oma_react_abort:{reason}"
+        self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "worker_react_abort_total" in self._prometheus:
+            self._prometheus["worker_react_abort_total"].labels(
+                agent=agent[:20], capability=capability[:30], reason=reason[:40]
+            ).inc()
+
+    def inc_review_verdict(self, qualified: bool) -> None:
+        label = "true" if qualified else "false"
+        key = f"oma_verdict:{label}"
+        self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "review_verdict_total" in self._prometheus:
+            self._prometheus["review_verdict_total"].labels(qualified=label).inc()
+
+    def inc_acceptance_fail(self, reason: str) -> None:
+        key = f"oma_acceptance_fail:{reason[:40]}"
+        self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "acceptance_fail_total" in self._prometheus:
+            self._prometheus["acceptance_fail_total"].labels(reason=reason[:40]).inc()
 
     def inc_policy_review(self) -> None:
         self._inc("policy_reviews")

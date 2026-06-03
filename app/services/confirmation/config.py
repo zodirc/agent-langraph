@@ -24,8 +24,10 @@ class ConfirmationGatesConfig:
             "edit_plot",
             "review_outline",
             "enqueue_work",
+            "batch_unit_quality",
         }
     )
+    plan_gate_min_prepend_items: int = 3
     outcome_work_item_kinds: frozenset[str] = frozenset(
         {
             "write_outline",
@@ -102,6 +104,7 @@ def load_confirmation_gates_config() -> ConfirmationGatesConfig:
 
     return ConfirmationGatesConfig(
         enabled=bool(raw.get("enabled", True)),
+        plan_gate_min_prepend_items=int(raw.get("plan_gate_min_prepend_items", 3)),
         material_intervention_actions=_frozenset(
             "material_intervention_actions",
             ConfirmationGatesConfig.material_intervention_actions,

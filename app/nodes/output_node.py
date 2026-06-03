@@ -5,7 +5,7 @@ Then: output → memory_writeback → END; mission may stay MISSION_PAUSED."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from app.config.settings import settings
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
@@ -18,6 +18,21 @@ from app.services.state_store import get_state_store
 
 def _resolve_output_status(state: AgentState) -> str:
     """Keep orchestrated missions resumable when a step ends in pause, not user-facing complete."""
+    from app.services.mission_invariants import mission_output_must_pause
+    from app.services.turn_contract import (
+        contract_requires_side_effects,
+        is_turn_contract_fulfilled,
+    )
+
+    if mission_output_must_pause(state):
+        return TaskStatus.MISSION_PAUSED.value
+
+    payload = state.get("input_payload") or {}
+    if contract_requires_side_effects(payload, state=state) and not is_turn_contract_fulfilled(
+        state
+    ):
+        return TaskStatus.MISSION_PAUSED.value
+
     if state.get("status") == TaskStatus.REJECTED.value:
         return TaskStatus.REJECTED.value
     control = state.get("mission_control") or {}
@@ -96,6 +111,23 @@ def output_node(state: AgentState) -> AgentState:
                 "citations": merge_citations(answer, retrieved),
             }
 
+        from app.services.turn_contract import (
+            contract_requires_side_effects,
+            is_turn_contract_fulfilled,
+        )
+        from app.services.turn_contract_lifecycle import (
+            REASON_INCONSISTENT,
+            invalidate_turn_contract_payload,
+        )
+
+        payload_out = dict(state.get("input_payload") or {})
+        status_override: Optional[str] = None
+        if contract_requires_side_effects(payload_out, state=state) and not is_turn_contract_fulfilled(
+            state
+        ):
+            payload_out = invalidate_turn_contract_payload(payload_out, REASON_INCONSISTENT)
+            status_override = TaskStatus.MISSION_PAUSED.value
+
         file_artifacts = collect_file_artifacts(state.get("tool_results"))
         artifacts: list[dict[str, Any]] = [
             {
@@ -105,12 +137,14 @@ def output_node(state: AgentState) -> AgentState:
             *file_artifacts,
         ]
 
+        resolved_status = status_override or _resolve_output_status(state)
         updated = merge_state(
             state,
+            input_payload=payload_out,
             final_answer=answer,
             structured_output=structured,
             artifacts=artifacts,
-            status=_resolve_output_status(state),
+            status=resolved_status,
             current_node="output",
             audit_log=append_audit(
                 state,

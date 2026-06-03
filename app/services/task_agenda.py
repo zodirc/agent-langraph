@@ -15,7 +15,7 @@ ACTIVE_STATUSES = frozenset({"pending", "running", "blocked", "failed"})
 
 def ensure_agenda_fields(plan: dict[str, Any]) -> dict[str, Any]:
     """Normalize work_plan items with agenda metadata."""
-    out = dict(plan or {})
+    out = repair_work_plan_dependencies(dict(plan or {}))
     items: list[dict[str, Any]] = []
     for row in list(out.get("items") or []):
         if not isinstance(row, dict):
@@ -32,6 +32,50 @@ def ensure_agenda_fields(plan: dict[str, Any]) -> dict[str, Any]:
         items.append(item)
     out["items"] = items
     out.setdefault("agenda_version", int(out.get("agenda_version") or 1))
+    return out
+
+
+def repair_work_plan_dependencies(plan: dict[str, Any]) -> dict[str, Any]:
+    """Remove self-dependencies that block lazy work_plan enqueue (wi-step-N on itself)."""
+    items_in: list[dict[str, Any]] = [
+        dict(row)
+        for row in (plan.get("items") or [])
+        if isinstance(row, dict)
+    ]
+    if not items_in:
+        return dict(plan or {})
+    repaired: list[dict[str, Any]] = []
+    changed = False
+    for row in items_in:
+        item = dict(row)
+        item_id = str(item.get("id") or "")
+        raw_deps = item.get("depends_on")
+        if raw_deps is None:
+            deps = []
+        elif not isinstance(raw_deps, list):
+            deps = [str(raw_deps)]
+        else:
+            deps = [str(d) for d in raw_deps if str(d)]
+        if item_id:
+            cleaned = [d for d in deps if d != item_id]
+            if len(cleaned) != len(deps):
+                changed = True
+            deps = cleaned
+        if deps != item.get("depends_on"):
+            changed = True
+        item["depends_on"] = deps
+        if (
+            str(item.get("status") or "") == "blocked"
+            and not deps
+            and item_id
+        ):
+            item["status"] = "pending"
+            changed = True
+        repaired.append(item)
+    if not changed:
+        return dict(plan or {})
+    out = dict(plan or {})
+    out["items"] = repaired
     return out
 
 

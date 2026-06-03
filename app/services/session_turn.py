@@ -150,7 +150,11 @@ def prepare_session_turn(
                 )
                 from app.services.mission_steer import complete_steer_planning
 
-                if is_mechanical_resume_decision(decision):
+                from app.services.mission_steer import steer_needs_planning_llm
+
+                if is_mechanical_resume_decision(decision) and not steer_needs_planning_llm(
+                    message=goal
+                ):
                     merged = issue_execution_grant_to_payload(
                         merged, source=str(decision.source)
                     )
@@ -158,41 +162,46 @@ def prepare_session_turn(
             elif existing.get("mission") and decision.intent == "isolate_qa":
                 merged = apply_qa_turn_isolation(merged, existing)
         if goal:
-            from app.services.mission_steer import (
-                _append_steer_goal,
-                apply_steer_planning_gate,
-                steer_needs_planning_llm,
-            )
-
-            merged = _append_steer_goal(merged, goal)
-            from app.services.mission_steer_outcome_confirm import clear_steer_outcome_flags
-
-            merged = clear_steer_outcome_flags(merged)
-            merged.pop("steer_outcome_confirmed", None)
-            merged.pop("steer_outcome_confirmed_for", None)
             mission_active = bool(existing.get("mission")) and not merged.get(
                 "mission_suspended"
             )
-            from app.services.mission_execution import has_execution_grant
-
-            if mission_active and steer_needs_planning_llm(message=goal):
-                if not has_execution_grant(merged):
-                    merged = apply_steer_planning_gate(merged)
-                    merged["writing_intent"] = {
-                        "enabled": False,
-                        "source": "await_steer_planning",
-                    }
-                    merged.pop("current_work_item", None)
-                    merged["skip_planning_llm"] = False
-            from app.services.mission_steer import (
-                apply_review_outline_mode,
-                goal_requests_outline_read,
-            )
-
-            if mission_active and goal_requests_outline_read(goal):
-                merged = apply_review_outline_mode(
-                    merged, existing.get("mission") or {}
+            if mission_active:
+                from app.services.mission_steer import (
+                    apply_review_outline_mode,
+                    apply_steer_message,
+                    goal_requests_outline_read,
                 )
+
+                steer_state = merge_state(
+                    existing,
+                    input_payload=merged,
+                    conversation_history=history,
+                    mission=existing.get("mission"),
+                    progress=existing.get("progress"),
+                    manuscript=existing.get("manuscript"),
+                )
+                steer_state = apply_steer_message(
+                    steer_state,
+                    goal,
+                    source="session_turn",
+                    skip_history_append=True,
+                    persist=False,
+                )
+                merged = dict(steer_state.get("input_payload") or merged)
+                history = list(
+                    steer_state.get("conversation_history")
+                    or merged.get("conversation_history")
+                    or history
+                )
+                merged["conversation_history"] = history
+                if goal_requests_outline_read(goal):
+                    merged = apply_review_outline_mode(
+                        merged, existing.get("mission") or {}
+                    )
+            else:
+                from app.services.mission_steer import _append_steer_goal
+
+                merged = _append_steer_goal(merged, goal)
         elif not merged.get("goal"):
             merged["goal"] = str(existing.get("input_payload", {}).get("goal") or "")
         payload = merged

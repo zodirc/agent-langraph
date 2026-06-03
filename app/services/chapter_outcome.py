@@ -85,25 +85,32 @@ def extract_chapter_outcome(
     prev_chapter_text: str = "",
     story_bible: Optional[dict[str, Any]] = None,
     quality_rubric: Optional[ChapterQualityRubric] = None,
-    use_llm: bool = True,
+    use_llm: Optional[bool] = None,
+    outcome_use_llm: Optional[bool] = None,
     persist: bool = True,
 ) -> ChapterOutcome:
+    from app.services.writing_quality import chapter_outcome_use_llm, quality_score_use_llm
+
     rubric = quality_rubric
     if rubric is None:
+        quality_llm = use_llm if use_llm is not None else quality_score_use_llm()
         rubric = score_chapter_quality(
             chapter_text=chapter_text,
             prev_chapter_text=prev_chapter_text,
             outline_slice=outline_slice,
             story_bible_excerpt=story_bible,
-            use_llm=use_llm,
+            use_llm=quality_llm,
         )
+    narrative_llm = (
+        outcome_use_llm if outcome_use_llm is not None else chapter_outcome_use_llm()
+    )
 
     summary = ""
     ending = ""
     hook = ""
     events: list[NarrativeEvent] = []
 
-    if use_llm and len((chapter_text or "").strip()) >= 50:
+    if narrative_llm and len((chapter_text or "").strip()) >= 50:
         try:
             from app.services.llm_client import invoke_structured
 

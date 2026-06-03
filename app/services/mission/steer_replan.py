@@ -146,6 +146,7 @@ def apply_work_plan_patch(
 
     action = str(intervention.get("action") or "")
     auto_cancel = cfg.cancel_on_intervention.get(action, frozenset())
+    cancel_kinds = {str(k) for k in (patch.get("cancel_kinds") or [])}
     plan = _plan(state)
     items = list(plan.get("items") or [])
 
@@ -156,9 +157,10 @@ def apply_work_plan_patch(
             row["status"] = "cancelled"
             cancelled.append(wid)
             continue
+        row_kind = str(row.get("kind") or "")
         if (
             str(row.get("status") or "pending") == "pending"
-            and str(row.get("kind") or "") in auto_cancel
+            and (row_kind in auto_cancel or row_kind in cancel_kinds)
         ):
             row["status"] = "cancelled"
             cancelled.append(wid)

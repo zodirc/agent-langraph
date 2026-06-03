@@ -162,6 +162,20 @@ mission:
   max_failures: 5
   writing_max_steps: 500
   outline_max_chars: 12000
+  batch_unit_max_per_plan: 12
+
+confirmation_gates:
+  enabled: true
+  plan_gate_min_prepend_items: 3
+  material_intervention_actions:
+    - rewrite_outline
+    - reset_body
+    - edit_plot
+    - review_outline
+    - enqueue_work
+    - batch_unit_quality
+  cancel_on_intervention:
+    batch_unit_quality: [append_chapter, append_body, write_body]
 
 # Must mirror config.yaml route_audit (kinds + conflicts); enabled-only is a no-op
 route_audit:
@@ -298,6 +312,9 @@ delivery:
 
 manuscript:
   quality_gate_threshold: 0.65
+  quality_score_use_llm: true
+  quality_score_llm_min_chars: 80
+  chapter_outcome_use_llm: true
   l2_token_budget: 1500
   l3_token_budget: 1200
   alignment_recent_window: 2

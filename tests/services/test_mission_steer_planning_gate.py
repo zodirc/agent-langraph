@@ -5,6 +5,7 @@ from app.services.mission_service import prepare_state_for_mission_act
 from app.services.writing_phases import apply_writing_phase_from_decision
 from app.services.mission_steer import (
     apply_steer_message,
+    apply_steer_planning_gate,
     complete_steer_planning,
     mission_must_run_planning,
     steer_requires_planning,
@@ -50,6 +51,15 @@ def test_mission_must_run_planning_when_gate_open(base_state):
     assert mission_must_run_planning(state) is True
     payload = complete_steer_planning(state["input_payload"])
     state = merge_state(state, input_payload=payload)
+    assert mission_must_run_planning(state) is False
+
+
+def test_mission_must_not_replan_when_steer_applied_at_and_planning_done(base_state):
+    """Regression: steer_applied_at alone must not force endless replanning."""
+    payload = complete_steer_planning(apply_steer_planning_gate({"steer_applied_at": "t"}))
+    state = merge_state(base_state, input_payload=payload)
+    assert payload.get("steer_applied_at")
+    assert payload.get("steer_planning_done") is True
     assert mission_must_run_planning(state) is False
 
 

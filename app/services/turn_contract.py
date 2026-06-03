@@ -42,7 +42,7 @@ def contract_blocks_writing(payload: dict[str, Any]) -> bool:
     if forbid & _WRITE_ACTIONS:
         return True
     primary = str(contract.get("primary_op") or "")
-    if primary in ("edit_plot", "review_outline", "run_tools"):
+    if primary in ("edit_plot", "review_outline", "run_tools", "batch_unit_quality"):
         return True
     intent = payload.get("writing_intent") or {}
     if intent.get("enabled") is False and primary in ("edit_plot", "review_outline", "run_tools"):
@@ -216,6 +216,17 @@ def _contract_from_intervention(
             "user_visible_reason": str(intervention.get("reason") or ""),
         }
 
+    if action == "batch_unit_quality":
+        return {
+            "intent_kind": "batch_quality",
+            "primary_op": "batch_unit_quality",
+            "ops": [{"op": "evaluate", "unit": "chapter"}],
+            "tools": tools or ["read_text_artifact"],
+            "forbid": list(_WRITE_ACTIONS),
+            "override_step_policy": True,
+            "user_visible_reason": str(intervention.get("reason") or ""),
+        }
+
     return {
         "intent_kind": "mission_control",
         "primary_op": action or "continue",
@@ -264,6 +275,18 @@ def _contract_from_planning_signals(
             "user_visible_reason": "",
         }
 
+    if action in ("pause", "batch_unit_quality"):
+        forbid = list(_WRITE_ACTIONS)
+        return {
+            "intent_kind": "mission_control" if action == "pause" else "batch_quality",
+            "primary_op": action,
+            "ops": [{"op": "evaluate", "unit": "chapter"}] if action == "batch_unit_quality" else [],
+            "tools": tools,
+            "forbid": forbid,
+            "override_step_policy": True,
+            "user_visible_reason": "",
+        }
+
     return {
         "intent_kind": "reasoning_only",
         "primary_op": "reasoning",
@@ -306,6 +329,15 @@ def materialize_writing_intent_from_contract(
         return {
             "enabled": False,
             "action": "review_outline",
+            "source": "turn_contract",
+            "mission_step": step,
+            "contract_source": True,
+        }
+
+    if primary == "batch_unit_quality":
+        return {
+            "enabled": False,
+            "action": "batch_unit_quality",
             "source": "turn_contract",
             "mission_step": step,
             "contract_source": True,
@@ -380,7 +412,13 @@ def finalize_turn_execution_plan(
     payload = apply_turn_contract_to_payload(payload, contract)
 
     if str(mission.get("kind") or "").lower() == "writing":
-        if contract.get("override_step_policy"):
+        primary = str(contract.get("primary_op") or "")
+        use_contract_intent = bool(
+            contract.get("override_step_policy")
+            or contract_blocks_writing(payload)
+            or primary in ("batch_unit_quality", "pause", "edit_plot", "review_outline")
+        )
+        if use_contract_intent:
             payload["writing_intent"] = materialize_writing_intent_from_contract(
                 contract, state, mission=mission
             )
@@ -429,11 +467,88 @@ def validate_turn_contract_execution(state: AgentState) -> list[str]:
     if contract_blocks_writing(payload):
         for action in facts.get("executed_actions") or []:
             act = str(action).lower()
-            if "append" in act or "write_body" in act or "writing" in act:
+            if "append" in act or "write_body" in act:
                 issues.append("contract_forbid_writing_violated")
                 break
 
+    primary = str(contract.get("primary_op") or "")
+    if primary == "batch_unit_quality":
+        actions = {str(a) for a in (facts.get("executed_actions") or [])}
+        obs = state.get("observation") or {}
+        actions.update(str(a) for a in (obs.get("executed_actions") or []))
+        if not any("review_chapter" in a or a == "writing:review_chapter" for a in actions):
+            for entry in state.get("audit_log") or []:
+                detail = entry.get("detail") if isinstance(entry.get("detail"), dict) else {}
+                phase = str(detail.get("writing_phase") or detail.get("action") or "")
+                if phase == "review_chapter" and entry.get("action") == "success":
+                    break
+            else:
+                issues.append("contract_batch_unit_no_review_executed")
+
     return issues
+
+
+_EXECUTION_PRIMARY_OPS = frozenset(
+    {
+        "batch_unit_quality",
+        "edit_plot",
+        "review_outline",
+        "run_tools",
+        "write_outline",
+        "reset_body",
+        "append_body",
+        "write_body",
+    }
+)
+
+
+def contract_requires_side_effects(
+    payload: dict[str, Any],
+    *,
+    state: AgentState | dict[str, Any] | None = None,
+) -> bool:
+    """True when this turn must mutate artifacts or run tools — not reasoning-only."""
+    contract = contract_from_payload(payload)
+    if not contract:
+        return False
+    primary = str(contract.get("primary_op") or "")
+    if primary in ("reasoning", "explain_only"):
+        return False
+    if primary == "pause" and state is not None:
+        from app.services.turn_kind import agenda_has_executor_pending
+
+        if agenda_has_executor_pending(state):  # type: ignore[arg-type]
+            return True
+        return False
+    if contract_tool_names(payload):
+        return True
+    ops = contract.get("ops") or []
+    if ops:
+        return True
+    if primary in _EXECUTION_PRIMARY_OPS:
+        return True
+    intent = payload.get("writing_intent") or {}
+    return bool(intent.get("enabled"))
+
+
+def is_turn_contract_fulfilled(state: AgentState) -> bool:
+    """Mechanical check: contract side effects were observed in turn_facts."""
+    payload = state.get("input_payload") or {}
+    if not contract_requires_side_effects(payload, state=state):
+        return True
+    issues = validate_turn_contract_execution(state)
+    if issues:
+        from app.services.metrics_service import get_metrics_service
+
+        get_metrics_service().inc_contract_event("unfulfilled")
+    return len(issues) == 0
+
+
+def record_contract_fulfilled(state: AgentState) -> None:
+    """Metrics hook when a side-effect contract completes."""
+    from app.services.metrics_service import get_metrics_service
+
+    get_metrics_service().inc_contract_event("fulfilled")
 
 
 def planning_fallback_from_state(state: dict[str, Any] | None) -> Optional[dict[str, Any]]:
@@ -474,6 +589,12 @@ def planning_fallback_from_state(state: dict[str, Any] | None) -> Optional[dict[
         )
 
     intervention = intervention_from_payload(payload)
+
+    from app.services.mission.batch_unit_work_plan import build_batch_unit_planning_fallback
+
+    batch_fb = build_batch_unit_planning_fallback(state)  # type: ignore[arg-type]
+    if batch_fb:
+        return batch_fb
 
     edit_plot_pending = _pending_kind("edit_plot") or (
         intervention and str(intervention.get("action")) == "edit_plot"
@@ -541,6 +662,21 @@ def planning_fallback_from_state(state: dict[str, Any] | None) -> Optional[dict[
     first_step = str(policy.get("first_step") or "outline")
     needs_outline = outline_bytes <= 0 and first_step in ("outline", "write_outline")
 
+    from app.services.intent_composer import grant_may_mechanical_forward
+
+    if payload.get("execution_grant") and grant_may_mechanical_forward(payload, state=state):  # type: ignore[arg-type]
+        policy = mission.get("step_policy") if isinstance(mission.get("step_policy"), dict) else {}
+        action = str(policy.get("then") or "append_body")
+        return {
+            "plan": ["append next chapter via mission"],
+            "selected_tools": [],
+            "writing_intent": {"enabled": True, "action": action},
+            "skip_retrieval": False,
+            "risk_level": "LOW",
+            "parser_fallback": True,
+            "fallback_reason": "execution_grant_forward",
+        }
+
     if contract_replan_required(payload) and (needs_outline or _outline_work_pending()):
         return {
             "plan": ["write outline via writing"],
@@ -553,19 +689,6 @@ def planning_fallback_from_state(state: dict[str, Any] | None) -> Optional[dict[
             "risk_level": "LOW",
             "parser_fallback": True,
             "fallback_reason": "contract_replan_write_outline",
-        }
-
-    if payload.get("execution_grant"):
-        policy = mission.get("step_policy") if isinstance(mission.get("step_policy"), dict) else {}
-        action = str(policy.get("then") or "append_body")
-        return {
-            "plan": ["append next chapter via mission"],
-            "selected_tools": [],
-            "writing_intent": {"enabled": True, "action": action},
-            "skip_retrieval": False,
-            "risk_level": "LOW",
-            "parser_fallback": True,
-            "fallback_reason": "execution_grant_forward",
         }
 
     return None

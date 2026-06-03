@@ -106,9 +106,14 @@ def mission_decide_node(state: AgentState) -> AgentState:
     forced_pause = bool(
         str(intervention.get("action") or "") == "pause" and intervention.get("force")
     )
-    if has_execution_grant(payload_for_decide) and (
-        eval_result.done and eval_result.action == "pause"
-    ) and not forced_pause:
+    from app.services.intent_composer import grant_may_mechanical_forward
+
+    if (
+        has_execution_grant(payload_for_decide)
+        and grant_may_mechanical_forward(payload_for_decide, state=state)
+        and (eval_result.done and eval_result.action == "pause")
+        and not forced_pause
+    ):
         from app.services.progress_evaluator import EvalResult
 
         eval_result = EvalResult(
@@ -125,10 +130,48 @@ def mission_decide_node(state: AgentState) -> AgentState:
         suggest_writing_phase_fallback,
     )
 
-    use_writing_llm = should_use_writing_llm_decide(mission)
-    use_llm = bool(getattr(settings, "MISSION_LLM_DECIDE", False)) or use_writing_llm
+    from app.services.mission_oma.orchestrator import (
+        mechanical_step_decision,
+        should_use_mission_oma,
+        stamp_dispatch_context,
+    )
 
-    if use_llm:
+    use_oma = should_use_mission_oma(state)
+    use_writing_llm = should_use_writing_llm_decide(mission) and not use_oma
+    use_llm = (bool(getattr(settings, "MISSION_LLM_DECIDE", False)) or use_writing_llm) and not use_oma
+
+    if use_oma:
+        if eval_result.done and eval_result.action == "finish":
+            decision = StepDecision(action="finish", rationale=eval_result.reason)
+            source = "eval_override"
+        elif eval_result.done and eval_result.action == "pause":
+            decision = StepDecision(action="pause", rationale=eval_result.reason)
+            source = "eval_override"
+        else:
+            decision = mechanical_step_decision(state)
+            source = "oma_mechanical"
+        updated = stamp_dispatch_context(
+            merge_state(
+                state,
+                step_decision=decision.to_dict(),
+                status=TaskStatus.MISSION_RUNNING.value,
+                current_node="mission_decide",
+                audit_log=append_audit(
+                    state,
+                    "mission_decide",
+                    "success",
+                    {
+                        "source": source,
+                        "action": decision.action,
+                        "next_executor": decision.next_executor,
+                        "writing_phase": (decision.params or {}).get("writing_phase"),
+                    },
+                ),
+            )
+        )
+        get_state_store().save(updated)
+        return updated
+    elif use_llm:
         decide_payload = (
             build_writing_decide_payload(
                 state,

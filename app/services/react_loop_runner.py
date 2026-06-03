@@ -236,7 +236,24 @@ def _execute_retrieve_memory(state: AgentState, decision: ReactDecision) -> tupl
 def _execute_call_tool(state: AgentState, decision: ReactDecision) -> tuple[AgentState, dict]:
     from app.nodes.tool_node import tool_execution_node
 
-    tools = decision.action_input.get("tools") or _effective_tools(state)
+    payload = state.get("input_payload") or {}
+    if payload.get("worker_react") or (state.get("react_loop") or {}).get("mode") == "oma_worker":
+        allowed = frozenset(
+            {"read_text_artifact", "grep_file", "read_file", "ls_path", "grep_file"}
+        )
+        tools = [
+            t
+            for t in (decision.action_input.get("tools") or _effective_tools(state))
+            if str(t) in allowed
+        ]
+        if not tools:
+            return state, {
+                "action": "call_tool",
+                "status": "blocked",
+                "error": "oma_react_forbids_artifact_write",
+            }
+    else:
+        tools = decision.action_input.get("tools") or _effective_tools(state)
     if tools and not state.get("selected_tools"):
         state = merge_state(state, selected_tools=list(tools))
     updated = tool_execution_node(state)

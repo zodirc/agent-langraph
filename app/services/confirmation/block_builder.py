@@ -54,6 +54,13 @@ def build_intent_confirmation_block(
     else:
         lines.append("规划模型已根据你的介入更新执行方案，请确认后再继续。")
 
+    patch = planning_result.get("work_plan_patch")
+    if isinstance(patch, dict):
+        prepend = patch.get("prepend") or patch.get("prepend_items") or []
+        if prepend:
+            kinds = [str(r.get("kind")) for r in prepend[:6] if isinstance(r, dict)]
+            lines.append(f"编排将插入 {len(prepend)} 项：{', '.join(kinds)}")
+
     if intervention.get("action"):
         lines.append(f"拟执行动作：{intervention['action']}")
         if intervention.get("force"):

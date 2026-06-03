@@ -57,21 +57,34 @@ def issue_execution_grant_to_payload(
     payload: dict[str, Any],
     *,
     source: str = "resume",
+    scope: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Grant one mission_act; clear steer gates so resume is not blocked by stale DB flags."""
+    """Grant one mission_act; clear steer gates only when mechanical resume is safe."""
+    from app.services.intent_composer import (
+        GRANT_SCOPE_MECHANICAL_RESUME,
+        may_issue_execution_grant,
+        record_grant_steer_conflict,
+        resolve_grant_scope,
+    )
     from app.services.turn_contract_lifecycle import (
         REASON_EXECUTION_GRANT,
         invalidate_turn_contract_payload,
     )
 
+    if not may_issue_execution_grant(payload):
+        return record_grant_steer_conflict(payload, reason="steer_planning_pending")
+
+    resolved_scope = str(scope or resolve_grant_scope(source=source))
     out = invalidate_turn_contract_payload(dict(payload), REASON_EXECUTION_GRANT)
     out["execution_grant"] = {
         "issued_at": _now_iso(),
         "source": str(source),
+        "scope": resolved_scope,
         "consume_once": True,
     }
-    out["steer_planning_done"] = True
-    out.pop("require_planning_after_steer", None)
+    if resolved_scope == GRANT_SCOPE_MECHANICAL_RESUME:
+        out["steer_planning_done"] = True
+        out.pop("require_planning_after_steer", None)
     intervention = out.get("mission_intervention")
     if isinstance(intervention, dict):
         if str(intervention.get("action") or "") == "pause" and bool(intervention.get("force")):
@@ -118,6 +131,7 @@ def work_item_satisfied(
     *,
     state: AgentState,
     mission: dict[str, Any],
+    params: Optional[dict[str, Any]] = None,
 ) -> bool:
     """Whether a work-plan item kind is already satisfied by manuscript facts."""
     stored = state.get("manuscript") or {}
@@ -135,6 +149,36 @@ def work_item_satisfied(
         return bool(body_path) and body_bytes >= min_body
     if kind == "reset_body":
         return not manuscript_has_body(ms) or int(ms.body_bytes or 0) == 0
+    if kind in ("review_chapter", "polish_chapter"):
+        from app.domain.review_verdict import ReviewVerdict, load_review_verdict
+        from app.services.writing_phases import _chapter_key, load_chapter_reviews
+
+        wi_params = ((state.get("input_payload") or {}).get("current_work_item") or {}).get(
+            "params"
+        )
+        row_params = params if isinstance(params, dict) else (wi_params if isinstance(wi_params, dict) else {})
+        chapter = int(row_params.get("chapter_index") or 0)
+        if chapter < 1:
+            return False
+        verdict = load_review_verdict(state["task_id"], chapter)
+        if verdict and verdict.is_valid():
+            rev = verdict.to_dict()
+        else:
+            reviews = load_chapter_reviews(state["task_id"])
+            rev = (reviews.get("reviews") or {}).get(_chapter_key(chapter)) or {}
+            verdict = ReviewVerdict.from_dict(rev)
+    if kind == "review_chapter":
+        if bool(row_params.get("after_polish")):
+            return bool(verdict and verdict.qualified)
+        if verdict and verdict.is_valid():
+            return True
+        return bool(rev)
+    if kind == "polish_chapter":
+        if verdict and verdict.qualified and not verdict.polish_recommended:
+            return True
+        if rev and rev.get("pass") and not rev.get("polish_recommended", True):
+            return True
+        return bool(rev.get("polished_at") or rev.get("polish_skipped"))
     return False
 
 
@@ -211,7 +255,12 @@ def reconcile_work_plan(state: AgentState) -> AgentState:
             items = list(plan.get("items") or [])
             changed = True
             continue
-        if work_item_satisfied(kind, state=state, mission=mission):
+        if work_item_satisfied(
+            kind,
+            state=state,
+            mission=mission,
+            params=row.get("params") if isinstance(row.get("params"), dict) else None,
+        ):
             items[idx] = {
                 **row,
                 "status": "done",
@@ -219,17 +268,31 @@ def reconcile_work_plan(state: AgentState) -> AgentState:
             }
             changed = True
 
-    seen_pending_kinds: set[str] = set()
+    def _pending_dedupe_key(row: dict[str, Any]) -> str:
+        kind = str(row.get("kind") or "")
+        params = row.get("params") if isinstance(row.get("params"), dict) else {}
+        if kind == "review_chapter":
+            return (
+                f"{kind}:{params.get('chapter_index')}:"
+                f"{bool(params.get('after_polish'))}"
+            )
+        if kind in ("polish_chapter", "append_body", "write_body", "append_chapter"):
+            return f"{kind}:{params.get('chapter_index')}"
+        return kind
+
+    seen_pending_keys: set[str] = set()
     deduped: list[dict[str, Any]] = []
     for row in items:
-        kind = str(row.get("kind") or "")
         status = str(row.get("status") or "pending")
-        if status == "pending" and kind in seen_pending_kinds:
-            row = {**row, "status": "superseded", "superseded_by": "duplicate_pending"}
+        dedupe_key = _pending_dedupe_key(row)
+        if status == "pending" and dedupe_key in seen_pending_keys:
+            deduped.append(
+                {**row, "status": "superseded", "superseded_by": "duplicate_pending"}
+            )
             changed = True
             continue
         if status == "pending":
-            seen_pending_kinds.add(kind)
+            seen_pending_keys.add(dedupe_key)
         deduped.append(row)
     items = deduped
 
@@ -318,9 +381,19 @@ def should_skip_llm_reasoning_on_finalize(state: AgentState) -> bool:
     Writing missions without artifact delta this turn should not run full reasoning
     (avoids regurgitating outline into the user answer).
     """
+    from app.services.turn_contract import (
+        contract_requires_side_effects,
+        is_turn_contract_fulfilled,
+    )
+
     mission = state.get("mission") or {}
     if str(mission.get("kind")) != "writing":
         return False
+    payload = state.get("input_payload") or {}
+    if contract_requires_side_effects(payload, state=state) and not is_turn_contract_fulfilled(
+        state
+    ):
+        return True
     obs = state.get("observation") or {}
     delta = obs.get("artifact_delta") or {}
     if delta.get("has_change"):

@@ -38,6 +38,7 @@ class ProgressStateModel(BaseModel):
     blockers: list[str] = Field(default_factory=list)
     consecutive_failures: int = 0
     work_plan: Optional[dict[str, Any]] = None
+    writing_state: Optional[dict[str, Any]] = None
     started_at: str = ""
     updated_at: str = ""
 
@@ -62,7 +63,10 @@ def _looks_like_mission(data: dict[str, Any]) -> bool:
 
 
 def _looks_like_progress(data: dict[str, Any]) -> bool:
-    return any(k in data for k in ("phase", "steps_completed", "metrics", "blockers"))
+    return any(
+        k in data
+        for k in ("phase", "steps_completed", "metrics", "blockers", "writing_state", "work_plan")
+    )
 
 
 def _looks_like_step_decision(data: dict[str, Any]) -> bool:

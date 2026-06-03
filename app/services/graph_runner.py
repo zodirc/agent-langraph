@@ -129,13 +129,25 @@ def _prepare_mission_for_turn(
             from app.services.mission_execution import has_execution_grant
             from app.services.mission_schema import apply_mission_step_to_payload
 
-            if has_execution_grant(payload_after):
+            from app.services.intent_composer import grant_may_mechanical_forward
+
+            if has_execution_grant(payload_after) and grant_may_mechanical_forward(
+                payload_after, state=state
+            ):
                 payload_after = apply_mission_step_to_payload(state)
                 state = merge_state(
                     state,
                     input_payload=payload_after,
                     status=TaskStatus.MISSION_RUNNING.value,
                 )
+            elif has_execution_grant(payload_after):
+                from app.services.intent_composer import record_grant_steer_conflict
+
+                payload_after = record_grant_steer_conflict(
+                    payload_after, reason="steer_requires_planning"
+                )
+                payload_after["skip_planning_llm"] = False
+                state = merge_state(state, input_payload=payload_after)
             else:
                 payload_after["skip_planning_llm"] = False
                 payload_after["writing_intent"] = {
@@ -431,10 +443,17 @@ class GraphRunner:
         """
         try:
             if mode == "supervisor":
+                from app.services.manuscript_supervisor_guard import (
+                    reject_supervisor_for_manuscript,
+                )
+
+                blocked = reject_supervisor_for_manuscript(state)
+                if blocked is not None:
+                    return blocked
                 return run_supervisor_graph(state)
             if mode == "exploration":
                 return run_exploration_graph(state, thread_id=thread)
-            if mode == "mission":
+            if mode in ("mission", "mission_oma"):
                 return run_mission_graph(state, thread_id=thread)
             payload = state.get("input_payload") or {}
             if payload.get("enable_planning_mission_handoff"):
@@ -461,10 +480,13 @@ class GraphRunner:
             raise
 
     def _finalize_turn(self, state: AgentState) -> AgentState:
+        from app.services.mission_worker_lost import reconcile_worker_lost
         from app.services.otel_export import finalize_trace_export
 
         state = finalize_trace_export(state)
-        return finalize_turn_history(state)
+        state = finalize_turn_history(state)
+        # Graph worker already ended (_end_task_graph_run); persist orphan MISSION_RUNNING as PAUSED.
+        return reconcile_worker_lost(state, persist=False)
 
     def start_task(
         self,

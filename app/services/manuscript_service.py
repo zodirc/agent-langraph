@@ -27,6 +27,9 @@ _MISSION_PHASE_GOAL_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 _OUTLINE_MARKERS = ("outline", "大纲", "提纲")
+_CHAPTER_FOOTER_RE = re.compile(r"（第\s*[^）]{1,12}章完）")
+_CHAPTER_HEADER_MD_RE = re.compile(r"^#{1,3}\s*第\s*.+章", re.MULTILINE)
+_BEAT_LINE_RE = re.compile(r"^(\s*[-*•]|\s*\d+[\.\)、]|【)")
 
 
 @dataclass
@@ -253,6 +256,26 @@ def sync_payload_artifact_names(
     return out
 
 
+def _looks_like_body_in_outline(text: str) -> tuple[bool, str]:
+    """Heuristic: reject full chapter prose saved as outline."""
+    if _CHAPTER_FOOTER_RE.search(text):
+        return True, "chapter footer in outline"
+    headers = list(_CHAPTER_HEADER_MD_RE.finditer(text))
+    if len(headers) == 1:
+        chunk = text[headers[0].end() :].strip()
+        if len(chunk) > 400:
+            lines = [ln.strip() for ln in chunk.splitlines() if ln.strip()]
+            if len(lines) >= 5:
+                beat_like = sum(1 for ln in lines if _BEAT_LINE_RE.match(ln))
+                if beat_like / len(lines) < 0.2:
+                    return True, "single-chapter narrative prose in outline"
+    if text.count("」") >= 6 and text.count("「") >= 6:
+        dialogue = re.findall(r"「[^」]{4,}」", text)
+        if sum(len(m) for m in dialogue) > len(text) * 0.15:
+            return True, "dialogue-heavy prose in outline"
+    return False, ""
+
+
 def _placeholder_patterns() -> tuple[str, ...]:
     raw = getattr(settings, "MANUSCRIPT_PLACEHOLDER_PATTERNS", None)
     if isinstance(raw, (list, tuple)) and raw:
@@ -425,6 +448,11 @@ def validate_manuscript_content(
 
     if text.count("（待续写") >= 2 or text.count("【本回合") >= 1:
         return False, "template placeholder block"
+
+    if action in ("write_outline", "rewrite_outline"):
+        bad, reason = _looks_like_body_in_outline(text)
+        if bad:
+            return False, reason
 
     return True, "ok"
 

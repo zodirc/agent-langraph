@@ -73,6 +73,12 @@ def intent_gate_required(ctx: GateContext) -> bool:
     if ctx.planning_result.get("steer_intent_summary"):
         return True
 
+    patch = ctx.planning_result.get("work_plan_patch")
+    if isinstance(patch, dict):
+        prepend = patch.get("prepend") or patch.get("prepend_items") or []
+        if len(prepend) >= cfg.plan_gate_min_prepend_items:
+            return True
+
     return False
 
 

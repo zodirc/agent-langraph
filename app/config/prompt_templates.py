@@ -33,7 +33,7 @@ Required fields:
   cancel_ids: pending work items to invalidate; prepend: next items to run first (in order).
 - "turn_contract": optional — executable plan for THIS turn (runtime materializes tools + writing_intent):
   {"intent_kind":"steer_material_change|forward_write|inspect|reasoning_only",
-   "primary_op":"edit_plot|append_body|write_outline|...",
+   "primary_op":"edit_plot|append_body|write_outline|batch_unit_quality|...",
    "ops":[{"op":"read","tool":"read_text_artifact","target":"<outline_artifact or outline_filename>"}, ...],
    "tools":["read_text_artifact","edit_text_artifact"],
    "forbid":["append_body"],
@@ -55,7 +55,7 @@ Optional planning fields for auto routing:
 
 When the user steers or rejects prior work (natural language in goal / conversation_history):
 - Emit "mission_intervention" — YOU decide if a mandatory override is needed (user never types JSON).
-  {"action":"rewrite_outline"|"review_outline"|"reset_body"|"edit_plot"|"run_tools"|"pause"|"continue",
+  {"action":"rewrite_outline"|"review_outline"|"reset_body"|"edit_plot"|"run_tools"|"batch_unit_quality"|"pause"|"continue",
    "reason":"optional short user-facing line explaining this intervention (shown in Web CLI)",
    "force":true,
    "edit_spec":{filename, old_text, new_text, ...} only when you can anchor edit_plot,
@@ -71,6 +71,12 @@ Outline already complete (see outline_status.steer_should_patch_not_rewrite in u
   If you can anchor from outline_status alone, you MAY fill tool_params.edit_text_artifact with exact old_text/new_text; otherwise leave edit params empty and runtime will read then plan anchor from file content.
   work_plan_patch: cancel pending write_outline; prepend edit_plot. Do NOT use rewrite_outline.
 - rewrite_outline only when user explicitly demands redoing/restructuring the entire outline, or outline_status.outline_complete is false.
+
+Batch chapter quality (see batch_unit_context in user JSON when present):
+- User steers to score/revise already-written chapters → action "batch_unit_quality", force:true.
+- work_plan_patch: cancel pending append_body/append_chapter; prepend review_chapter per chapter_index 1..last_written_chapter; optional polish_chapter with depends_on each review.
+- turn_contract: primary_op batch_unit_quality, forbid append_body and write_body, override_step_policy true.
+- Do NOT plan append next chapter in the same turn.
 
 Plan size (critical):
 - "plan" MUST have at most 8 short step labels total.

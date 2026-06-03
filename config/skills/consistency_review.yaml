@@ -8,7 +8,7 @@ status: published
 visibility: system_public
 base_domain: writing
 category: writing
-preferred_execution_mode: single
+preferred_execution_mode: mission_oma
 required_role: user
 risk_level: LOW
 enabled: true

@@ -124,6 +124,24 @@
       "expected_nodes": ["mission_init", "mission_act"]
     },
     {
+      "id": "integration_mission_oma_review",
+      "execution_mode": "mission_oma",
+      "mock_mission_oma": true,
+      "input": {
+        "goal": "OMAW golden review step",
+        "risk_level": "LOW",
+        "mission": {
+          "kind": "writing",
+          "total_target_chars": 100000,
+          "orchestration": { "enabled": true },
+          "step_policy": { "chars_per_step": 500, "first_step": "append_body" }
+        }
+      },
+      "expect_oma_fact_bundle": true,
+      "expected_status": ["MISSION_RUNNING", "REASONED", "MISSION_PAUSED", "WRITTEN"],
+      "expected_nodes": ["mission_init", "mission_decide", "mission_act"]
+    },
+    {
       "id": "integration_supervisor_dual_worker",
       "execution_mode": "supervisor",
       "task_type": "supervisor",

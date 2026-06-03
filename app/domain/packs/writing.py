@@ -619,7 +619,11 @@ WRITING_PACK = WritingPack(
         "grep_file",
         "replace_in_file",
     ],
-    planning_hints=["mission.step_policy", "append_body per step"],
+    planning_hints=[
+        "mission.step_policy",
+        "append_body per step",
+        "batch_unit_quality: work_plan_patch review_chapter per written chapter",
+    ],
     system_prompt=(
         "Long-form writing: one step_policy step per mission loop; "
         "never put full book in one artifact call."

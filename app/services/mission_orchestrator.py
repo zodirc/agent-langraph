@@ -90,6 +90,11 @@ def append_work_items(plan: dict[str, Any], new_items: list[dict[str, Any]]) -> 
 
     plan = ensure_agenda_fields(plan)
     items = list(plan.get("items") or [])
+    existing_ids = {
+        str(row.get("id"))
+        for row in items
+        if isinstance(row, dict) and row.get("id")
+    }
     last_id: Optional[str] = None
     if items:
         tail = items[-1]
@@ -97,11 +102,18 @@ def append_work_items(plan: dict[str, Any], new_items: list[dict[str, Any]]) -> 
             last_id = str(tail["id"])
     for item in new_items:
         row = dict(item)
+        row_id = str(row.get("id") or "")
+        if row_id and row_id in existing_ids:
+            continue
         if not row.get("depends_on") and last_id:
-            row["depends_on"] = [last_id]
+            if row_id and row_id == last_id:
+                row["depends_on"] = []
+            else:
+                row["depends_on"] = [last_id]
         items.append(row)
-        if row.get("id"):
-            last_id = str(row["id"])
+        if row_id:
+            existing_ids.add(row_id)
+            last_id = row_id
     return {
         **plan,
         "items": items,

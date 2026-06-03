@@ -2050,11 +2050,17 @@ function resetWritingStream() {
   writingStreamCharsThisTurn = 0;
 }
 
-function writingFileStatusLabel(status) {
+function isOutlineArtifactFilename(filename) {
+  const name = String(filename || "").toLowerCase();
+  return name.includes("大纲") || name.includes("outline");
+}
+
+function writingFileStatusLabel(status, filename = "") {
+  const outline = isOutlineArtifactFilename(filename);
   if (status === "stopped") return "已停止";
-  if (status === "preview") return "待确认节选";
-  if (status === "done") return "已追加";
-  if (status === "writing") return "正在追加";
+  if (status === "preview") return outline ? "待确认大纲节选" : "待确认节选";
+  if (status === "done") return outline ? "大纲已写入" : "已追加";
+  if (status === "writing") return outline ? "正在生成大纲" : "正在追加";
   return "等待";
 }
 
@@ -2103,7 +2109,7 @@ function extractFilenameFromTitle(title) {
 
 function syncWritingFileToggleLabel(block) {
   if (!block?.toggleEl) return;
-  const status = writingFileStatusLabel(block.status);
+  const status = writingFileStatusLabel(block.status, block.filename);
   const active = block === activeWritingBlock ? " · 当前" : "";
   const chevron = block.collapsed ? "▸" : "▾";
   block.toggleEl.textContent = `${chevron} ${block.filename} — ${status}${active}`;

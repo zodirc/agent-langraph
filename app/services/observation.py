@@ -30,10 +30,16 @@ def build_observation(
     for line in tool_lines:
         if line.get("status") in ("ok", "success") or line.get("output") or line.get("path"):
             executed_actions.append(f"tool:{line['tool']}")
-    if state.get("status") in ("WRITTEN", "TOOL_EXECUTED", "REASONED") and writing_intent.get(
-        "enabled"
+    write_statuses = ("WRITTEN", "TOOL_EXECUTED", "REASONED")
+    phase_action = str(
+        writing_intent.get("action")
+        or (payload.get("writing_phase") if isinstance(payload.get("writing_phase"), str) else "")
+        or ""
+    )
+    if state.get("status") in write_statuses and (
+        writing_intent.get("enabled") or phase_action
     ):
-        executed_actions.append(f"writing:{writing_intent.get('action', 'write')}")
+        executed_actions.append(f"writing:{phase_action or writing_intent.get('action', 'write')}")
     if manuscript.get("body_path") and manuscript.get("body_bytes"):
         executed_actions.append(
             f"artifact:{manuscript['body_path']}:{manuscript['body_bytes']}B"

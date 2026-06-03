@@ -16,7 +16,11 @@ from app.services.retrieval_policy import (
 )
 from app.services.route_audit.apply import writing_gate_allowed
 from app.services.react_entry import should_enter_react_loop
-from app.services.turn_contract import contract_blocks_writing, contract_tool_names
+from app.services.turn_contract import (
+    contract_blocks_writing,
+    contract_requires_side_effects,
+    contract_tool_names,
+)
 
 
 def _failed_route(state: AgentState, retry_node: str) -> str:
@@ -62,10 +66,15 @@ def route_after_retrieval(state: AgentState) -> str:
     """Skip tool_execution when no registered tools were selected."""
     if str(state.get("status", "")) == TaskStatus.FAILED.value:
         return _failed_route(state, "retrieval")
+    payload = state.get("input_payload") or {}
     if state.get("selected_tools"):
         return "tool_execution"
     if _writing_route_allowed(state):
         return "writing"
+    if contract_requires_side_effects(payload, state=state) and contract_tool_names(
+        payload
+    ):
+        return "tool_execution"
     return "reasoning"
 
 
@@ -79,8 +88,13 @@ def route_after_tool(state: AgentState) -> str:
         if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
             return "dead_letter"
         return "tool_execution"
+    payload = state.get("input_payload") or {}
     if _writing_route_allowed(state):
         return "writing"
+    if contract_requires_side_effects(payload, state=state) and contract_tool_names(
+        payload
+    ):
+        return "tool_execution"
     return "reasoning"
 
 
@@ -137,6 +151,10 @@ def route_after_planning(state: AgentState) -> str:
             return "tool_execution"
         if _writing_route_allowed(state):
             return "writing"
+        if contract_requires_side_effects(payload, state=state) and contract_tool_names(
+            payload
+        ):
+            return "tool_execution"
         return "reasoning"
     if (
         needs_session_memory_retrieval(state)
@@ -168,6 +186,10 @@ def route_after_planning(state: AgentState) -> str:
         return "tool_execution"
     if _writing_route_allowed(state):
         return "writing"
+    if contract_requires_side_effects(payload, state=state) and contract_tool_names(
+        payload
+    ):
+        return "tool_execution"
     return "reasoning"
 
 

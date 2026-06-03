@@ -72,6 +72,40 @@ def reasoning_node(state: AgentState) -> AgentState:
             if state.get("mission")
             else build_turn_facts(state)
         )
+        force_llm = bool(payload.get("force_slow_reasoning"))
+
+        from app.services.turn_contract import (
+            contract_requires_side_effects,
+            is_turn_contract_fulfilled,
+        )
+
+        if (
+            contract_requires_side_effects(payload, state=state)
+            and not is_turn_contract_fulfilled(state)
+            and not force_llm
+        ):
+            updated = merge_state(
+                state,
+                reasoning_result={
+                    "summary": (
+                        "本回合执行契约尚未完成（需先运行工具或写作阶段），"
+                        "不会用推理代替实际审阅/修改。"
+                    ),
+                    "confidence": 0.85,
+                    "risk_level": "MEDIUM",
+                    "structured": {"source": "contract_unfulfilled"},
+                },
+                status=TaskStatus.REASONED.value,
+                current_node="reasoning",
+                audit_log=append_audit(
+                    state,
+                    "reasoning",
+                    "contract_unfulfilled",
+                    {"blocked_llm": True},
+                ),
+            )
+            get_state_store().save(updated)
+            return updated
 
         if should_use_execution_summary(state, turn_facts):
             tools_only = summary_from_turn_execution(turn_facts, state)
@@ -105,7 +139,6 @@ def reasoning_node(state: AgentState) -> AgentState:
             get_state_store().save(updated)
             return updated
 
-        force_llm = bool(payload.get("force_slow_reasoning"))
         fast = None if force_llm else try_fast_reasoning(state)
         reasoning_source = "fast"
         report_boundary("reasoning", "enter")

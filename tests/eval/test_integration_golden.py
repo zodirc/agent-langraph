@@ -55,6 +55,46 @@ def _mock_planning_mission(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _mock_mission_oma(monkeypatch: pytest.MonkeyPatch, test_settings) -> None:
+    _mock_mission_writing(monkeypatch, test_settings)
+    import json as _json
+
+    def fake_invoke(system, user_payload):
+        data = (
+            _json.loads(user_payload)
+            if isinstance(user_payload, str)
+            else user_payload
+        )
+        return {
+            "issues": [],
+            "pass": True,
+            "summary": "oma review",
+            "polish_recommended": False,
+        }
+
+    monkeypatch.setattr(
+        "app.services.writing_phases._invoke_phase_structured",
+        lambda system, payload: fake_invoke(system, payload),
+    )
+    from app.domain.writing_memory_models import ChapterQualityRubric
+
+    monkeypatch.setattr(
+        "app.services.writing_quality.score_chapter_quality",
+        lambda **kw: ChapterQualityRubric(
+            continuity_score=0.8,
+            outline_alignment=0.8,
+            character_consistency=0.8,
+            duplication_risk=0.1,
+            chapter_completion=0.9,
+            hook_quality=0.7,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.fact_bundle_builder._hybrid_retrieve",
+        lambda *a, **k: [],
+    )
+
+
 def _mock_mission_writing(monkeypatch: pytest.MonkeyPatch, test_settings) -> None:
     import app.services.artifact_tools as art
     from app.domain.packs import writing as writing_mod
@@ -85,7 +125,9 @@ def test_integration_golden(
         _mock_supervisor_workers(monkeypatch)
     if case.get("mock_planning_mission"):
         _mock_planning_mission(monkeypatch)
-    if case.get("mock_mission_writing"):
+    if case.get("mock_mission_oma"):
+        _mock_mission_oma(monkeypatch, test_settings)
+    elif case.get("mock_mission_writing"):
         _mock_mission_writing(monkeypatch, test_settings)
     runner = GraphRunner()
     payload = dict(case.get("input") or {})
@@ -120,5 +162,19 @@ def test_integration_golden(
         assert max(step, completed) >= int(min_steps)
     if case.get("expect_mission_handoff"):
         assert state.get("mission") or (state.get("input_payload") or {}).get("mission")
+    if case.get("expect_oma_fact_bundle"):
+        payload = state.get("input_payload") or {}
+        fb = payload.get("fact_bundle_id") or (payload.get("fact_bundle") or {}).get(
+            "fact_bundle_id"
+        )
+        from app.services.writing_phases import load_chapter_reviews
+
+        reviews = load_chapter_reviews(state["task_id"])
+        has_verdict = any(
+            (v.get("evidence") or {}).get("fact_bundle_id")
+            for v in (reviews.get("reviews") or {}).values()
+            if isinstance(v, dict)
+        )
+        assert fb or has_verdict, "expected OMAW fact_bundle or reviewed verdict"
     passed = 1.0 if state["status"] == TaskStatus.COMPLETED.value else 0.5
     record(case["id"], passed=passed)

@@ -32,6 +32,7 @@ InterventionAction = Literal[
     "pause",
     "continue",
     "enqueue_work",
+    "batch_unit_quality",
 ]
 
 _ALLOWED_ACTIONS = frozenset(
@@ -44,6 +45,7 @@ _ALLOWED_ACTIONS = frozenset(
         "pause",
         "continue",
         "enqueue_work",
+        "batch_unit_quality",
     }
 )
 
@@ -125,6 +127,8 @@ def intervention_to_writing_intent(
         return {**base, "enabled": False, "action": "run_tools"}
     if action == "pause":
         return {**base, "enabled": False, "action": "pause"}
+    if action == "batch_unit_quality":
+        return {**base, "enabled": False, "action": "batch_unit_quality"}
     return {**base, "enabled": False, "action": action}
 
 

@@ -23,6 +23,24 @@ _OUTLINE_CHAPTER_RE = re.compile(
     re.MULTILINE,
 )
 
+_OUTLINE_WRITING_ACTIONS = frozenset({"write_outline", "rewrite_outline"})
+
+_OUTLINE_CONTINUATION_RULES = [
+    "Write a full-book OUTLINE only — chapter titles plus plot beats (bullets or short lines).",
+    "Do NOT write full chapter prose, dialogue scenes, or narrative paragraphs in the outline file.",
+    "Do NOT use chapter footers like （第N章完） in the outline.",
+    "Cover all major chapters with foreshadowing notes where relevant.",
+    "Reuse existing_outline_excerpt when revising; keep structure consistent unless the goal says otherwise.",
+]
+
+_BODY_CONTINUATION_RULES = [
+    "Write ONLY the next chapter; do not rewrite earlier chapters.",
+    "Follow outline_for_chapter and current_chapter_goal plot beats.",
+    "Stay consistent with novel_tail, prev_chapter_outcome, and story_bible_entries.",
+    "Resolve open_loops from prior chapters when outline requires it.",
+    "End with a single chapter footer like （第N章完） matching chapter_index.",
+]
+
 _CN_DIGITS = {
     "零": 0,
     "一": 1,
@@ -306,8 +324,13 @@ def build_writing_context(
 
     intent = payload.get("writing_intent") or {}
     action = str(intent.get("action") or "append_body")
+    is_outline_step = action in _OUTLINE_WRITING_ACTIONS
 
-    l2 = _l2_chapter_window(task_id, next_chapter=next_chapter, outline_full=outline_full)
+    l2 = (
+        {}
+        if is_outline_step
+        else _l2_chapter_window(task_id, next_chapter=next_chapter, outline_full=outline_full)
+    )
 
     from app.services.writing_memory import activate_story_bible_entries, load_story_bible
 
@@ -327,8 +350,61 @@ def build_writing_context(
     goal = str(payload.get("goal") or payload.get("query") or "")
     guidelines_excerpt = resolve_writing_guidelines_excerpt(
         state,
-        query_hint=f"{goal} {action} chapter {next_chapter}",
+        query_hint=(
+            f"{goal} {action} outline"
+            if is_outline_step
+            else f"{goal} {action} chapter {next_chapter}"
+        ),
     )
+
+    bundle = payload.get("fact_bundle") or intent.get("fact_bundle") or {}
+    if not isinstance(bundle, dict):
+        bundle = {}
+    oma_evidence = str(
+        payload.get("oma_fact_evidence") or bundle.get("evidence_text") or ""
+    ).strip()
+
+    if is_outline_step:
+        outline_excerpt = (outline_full or "").strip()[:8000] or None
+        memory_tier: dict[str, list[str]] = {
+            "L3": ["style_contract"],
+            "RAG": ["writing_guidelines_excerpt"] if guidelines_excerpt else [],
+        }
+        if oma_evidence:
+            memory_tier["RAG"] = [*memory_tier.get("RAG", []), "fact_bundle_evidence"]
+        return {
+            "body_filename": body_name,
+            "outline_filename": outline_name,
+            "chapter_index": None,
+            "last_written_chapter": last_chapter,
+            "action": action,
+            "writing_mode": "outline",
+            "novel_tail": None,
+            "novel_head": None,
+            "outline_for_chapter": None,
+            "existing_outline_excerpt": outline_excerpt,
+            "body_total_chars": len(body_text),
+            "writing_guidelines_excerpt": guidelines_excerpt,
+            "fact_bundle_id": str(
+                bundle.get("fact_bundle_id") or payload.get("fact_bundle_id") or ""
+            ),
+            "fact_bundle_evidence": oma_evidence[:8000] if oma_evidence else None,
+            "memory_tier": memory_tier,
+            "story_bible_entries": None,
+            "open_loops": open_loops or None,
+            "timeline_state": [t.to_dict() for t in bible.timeline[-8:]] or None,
+            "style_contract": style if any(style.values()) or style.get("constraints") else None,
+            "continuation_rules": list(_OUTLINE_CONTINUATION_RULES),
+        }
+
+    memory_tier = {
+        "L1": ["novel_tail", "novel_head"],
+        "L2": list(l2.keys()),
+        "L3": ["story_bible_entries", "open_loops", "style_contract"],
+        "RAG": ["writing_guidelines_excerpt"] if guidelines_excerpt else [],
+    }
+    if oma_evidence:
+        memory_tier["RAG"] = [*memory_tier.get("RAG", []), "fact_bundle_evidence"]
 
     return {
         "body_filename": body_name,
@@ -336,29 +412,21 @@ def build_writing_context(
         "chapter_index": next_chapter,
         "last_written_chapter": last_chapter,
         "action": action,
+        "writing_mode": "body",
         "novel_tail": tail or None,
         "novel_head": head or None,
         "outline_for_chapter": outline_slice or None,
         "body_total_chars": len(body_text),
         "writing_guidelines_excerpt": guidelines_excerpt,
-        "memory_tier": {
-            "L1": ["novel_tail", "novel_head"],
-            "L2": list(l2.keys()),
-            "L3": ["story_bible_entries", "open_loops", "style_contract"],
-            "RAG": ["writing_guidelines_excerpt"] if guidelines_excerpt else [],
-        },
+        "fact_bundle_id": str(bundle.get("fact_bundle_id") or payload.get("fact_bundle_id") or ""),
+        "fact_bundle_evidence": oma_evidence[:8000] if oma_evidence else None,
+        "memory_tier": memory_tier,
         **l2,
         "story_bible_entries": activated or None,
         "open_loops": open_loops or None,
         "timeline_state": [t.to_dict() for t in bible.timeline[-8:]] or None,
         "style_contract": style if any(style.values()) or style.get("constraints") else None,
-        "continuation_rules": [
-            "Write ONLY the next chapter; do not rewrite earlier chapters.",
-            "Follow outline_for_chapter and current_chapter_goal plot beats.",
-            "Stay consistent with novel_tail, prev_chapter_outcome, and story_bible_entries.",
-            "Resolve open_loops from prior chapters when outline requires it.",
-            "End with a single chapter footer like （第N章完） matching chapter_index.",
-        ],
+        "continuation_rules": list(_BODY_CONTINUATION_RULES),
     }
 
 

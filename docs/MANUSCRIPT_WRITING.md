@@ -239,6 +239,16 @@ Runtime 只依赖 `ManuscriptService` 接口，不依赖中文正则。
 
 进度追踪：`progress.writing_state.phases_done`（按章记录已完成阶段）。
 
+#### 章节质量评分（`writing_quality`）
+
+| 配置 | 默认 | 说明 |
+|------|------|------|
+| `manuscript.quality_score_use_llm` | `true` | 每章 rubric 由 **reflection** 模型研判（连贯性/纲对齐/人物/钩子等），非字面启发式 |
+| `manuscript.quality_score_llm_min_chars` | `80` | 低于此长度仍用启发式 |
+| `manuscript.chapter_outcome_use_llm` | `false` | `append_body` 后是否额外跑章节摘要/events LLM（与评分独立） |
+
+启发式仅在 `MODEL_ENABLED=false`、配置关闭或 LLM 调用失败时作 fallback。
+
 | 来源 | 说明 |
 |------|------|
 | **显式计划** | `mission.work_plan.items` 或 LLM 调用 `set_mission_work_plan` |
@@ -425,7 +435,7 @@ Mission graph 的 streaming 更新块可能只包含局部字段。为了避免�
 1. `_append_steer_goal` 合并用户纠正  
 2. `apply_steer_planning_gate` → `require_planning_after_steer=true`  
 3. `writing_intent.enabled=false`（`await_steer_planning`），避免沿用上一轮 `append_body`  
-4. `prepare_state_for_mission_act`：只要 `steer_requires_planning`，**强制**关闭写作并走 `run_pipeline_request`（含 `planning_node`）
+4. `prepare_state_for_mission_act`：只要 `steer_requires_planning`，**强制**关闭写作；OMAW（`execution_mode=mission_oma`）在 `mission_act` 走 **`run_planner_worker`**（仅 `planning_node` + 确认门闸），**不**走 `run_pipeline_request` 内联 reasoning 执行链
 
 审计中应出现 **`planning`** 节点；若只有 `mission_act` → `subgraph:writing`，检查容器是否已部署上述逻辑。
 
@@ -446,10 +456,11 @@ Mission graph 的 streaming 更新块可能只包含局部字段。为了避免�
 - 未指定时按 `total_target_chars / chars_per_step`（+ 大纲一步）机械估算
 - 详见 `app/services/mission_schema.py` 中 `resolve_mission_budget_dict`
 
-### 与「多 Agent / 子 Agent」的关系
+### 与「多 Agent」的关系（见 ADR-001 Mission OMAW）
 
-- **Mission 写作**：单控制循环 + **模型自选 `writing_phase`**（写 / 审 / 润 / 摘要 / 一致性 / 卷检查点），**不是**每章自动 spawn 独立 Agent 进程
-- **Supervisor**：`task_type=supervisor` 时多 worker 分工，面向通用多域子任务，**默认不与**长篇 mission 写作链打通
-- 若需真·并行多 Agent，需在 Supervisor 域定制 decompose + 共享 manuscript 目录与合并策略
+- **唯一长期方案**：[`ADR_MISSION_LIFECYCLE_V2.md`](ADR_MISSION_LIFECYCLE_V2.md) — 一任务、一手稿、**Orchestrator + 角色 Worker**（Writer / Reviewer / Editor / Planner），经 `AgentMessage` 派单，可并行审阅多章。
+- **当前实现（OMAW）**：`execution_mode=mission_oma`；`mission_decide` 机械派单 → `mission_act` → `build_fact_bundle` → Worker（writer/reviewer/editor/planner/continuity）；`ReviewVerdict` 为合格唯一语义；并行 batch 审阅经 `run_subtasks_via_a2a` 且 `context` 绑定 `manuscript_paths` + `chapter_index`。
+- **禁止**：`task_type=supervisor` 用于手稿 mission（见 `manuscript_supervisor_guard`）；默认禁止 `run_pipeline_request` 作为写作执行器（`writing_llm_decide=false`）。
+- **模块**：`app/services/mission_oma/`、`fact_bundle_builder.py`、`worker_react_bridge.py`、`domain/review_verdict.py`。
 
 **延伸阅读**：[`ROUTE_AUDIT.md`](ROUTE_AUDIT.md) · [`REASONING_SHORTCUT.md`](REASONING_SHORTCUT.md)。

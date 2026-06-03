@@ -21,12 +21,20 @@ def test_lazy_items_get_sequential_dependencies(base_state):
     state = merge_state(
         base_state,
         mission=mission,
+        mission_step=1,
         progress={"work_plan": plan},
         manuscript={"body_bytes": 5000, "body_path": "novel.txt", "outline_bytes": 100, "outline_path": "o.md"},
     )
-    item2 = build_next_lazy_work_item(state, mission)
+    item2 = build_next_lazy_work_item(merge_state(state, mission_step=2), mission)
     plan = append_work_items(plan, [item2])
     assert plan["items"][1].get("depends_on") == [plan["items"][0]["id"]]
+
+
+def test_append_duplicate_lazy_id_no_self_dependency(base_state):
+    item = {"id": "wi-step-2", "kind": "append_body", "status": "pending", "params": {}}
+    plan = {"mode": "lazy", "items": [dict(item, status="done")]}
+    plan = append_work_items(plan, [item])
+    assert len(plan["items"]) == 1
 
 
 def test_mark_current_work_item_failed_blocks_dependents(base_state):

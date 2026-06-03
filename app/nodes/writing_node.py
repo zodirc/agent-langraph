@@ -115,6 +115,31 @@ def writing_node(state: AgentState) -> AgentState:
 
         payload = dict(state.get("input_payload") or {})
         intent = dict(payload.get("writing_intent") or {})
+
+        from app.config.settings import settings
+
+        if intent.get("enabled"):
+            from app.services.mission_oma.orchestrator import should_use_mission_oma
+
+            if should_use_mission_oma(state) and getattr(
+                settings, "MISSION_OMA_REQUIRE_FACT_BUNDLE", True
+            ):
+                bundle = payload.get("fact_bundle") or intent.get("fact_bundle") or {}
+                if not str(bundle.get("fact_bundle_id") or payload.get("fact_bundle_id") or ""):
+                    return merge_state(
+                        state,
+                        status=TaskStatus.FAILED.value,
+                        errors=list(state.get("errors") or [])
+                        + ["OMAW: writing blocked without fact_bundle"],
+                        current_node="writing",
+                        audit_log=append_audit(
+                            state,
+                            "writing",
+                            "blocked",
+                            {"reason": "missing_fact_bundle"},
+                        ),
+                    )
+
         if not intent.get("enabled"):
             return merge_state(
                 state,
@@ -384,6 +409,10 @@ def writing_node(state: AgentState) -> AgentState:
             ms = resolve_manuscript(task_id, ms.to_dict())
             ms.body_outline_revision_seen = int(ms.outline_revision or 0)
 
+        bundle = payload.get("fact_bundle") or intent.get("fact_bundle") or {}
+        if isinstance(bundle, dict) and bundle.get("evidence_text"):
+            payload["oma_fact_evidence"] = str(bundle["evidence_text"])[:8000]
+
         if ms.body_path and action in ("append_body", "write_body"):
             body_text = read_body_text(task_id, ms.body_path, state=state)
             wctx = build_writing_context(
@@ -425,10 +454,14 @@ def writing_node(state: AgentState) -> AgentState:
                         outline_slice=outline_slice,
                         prev_chapter_text=prev_text,
                         story_bible=load_story_bible(task_id),
-                        use_llm=False,
                         persist=True,
                     )
                     sync_story_bible_from_outcome(task_id, outcome)
+                    from app.services.writing_knowledge_index import (
+                        upsert_chapter_facts_for_outcome,
+                    )
+
+                    upsert_chapter_facts_for_outcome(task_id, outcome)
                     payload["last_chapter_outcome"] = outcome.to_dict()
                     if outcome.quality_rubric:
                         chapter_quality_metrics = outcome.quality_rubric.to_dict()

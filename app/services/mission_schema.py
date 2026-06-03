@@ -185,8 +185,17 @@ def build_mission_dict(
             **dict(block.get("constraints") or {}),
             "no_human": autonomous,
         },
-        execution_mode="autonomous" if autonomous else str(
-            block.get("execution_mode", "interactive")
+        execution_mode=(
+            "autonomous"
+            if autonomous
+            else str(
+                block.get("execution_mode")
+                or (
+                    getattr(settings, "MISSION_EXECUTION_MODE", "mission_oma")
+                    if kind == "writing"
+                    else "interactive"
+                )
+            )
         ),
         orchestration=orch_block,
         budget=MissionBudget.from_dict(resolve_mission_budget_dict(block, kind=kind)),

@@ -273,20 +273,46 @@ def adapt_raw_response(raw: Any) -> ArtifactDraft:
     return draft
 
 
-def _writing_system_prompt(*, segment_index: int = 0) -> str:
+def _resolve_writing_mode(
+    *,
+    user_payload: dict[str, Any],
+    filename: str,
+) -> str:
+    mode = str(user_payload.get("writing_mode") or "").strip().lower()
+    if mode in ("outline", "body"):
+        return mode
+    ctx = user_payload.get("writing_context") or {}
+    action = str(ctx.get("action") or user_payload.get("writing_action") or "").lower()
+    if action in ("write_outline", "rewrite_outline"):
+        return "outline"
+    fname = (filename or str(user_payload.get("filename") or "")).lower()
+    if "outline" in fname or "大纲" in fname:
+        return "outline"
+    return "body"
+
+
+def _writing_system_prompt(*, segment_index: int = 0, writing_mode: str = "body") -> str:
     base = (
         "You are a creative writing assistant for long-form Chinese fiction. "
         f"You MUST call the tool `{ARTIFACT_TOOL_NAME}` with the full plain text to save. "
         "Tool arguments must be a single JSON object with only the required `content` key—"
         "no reasoning, thinking, or analysis fields. "
         "Do not output thinking-only blocks. "
-        "Use writing_context when present: continue from novel_tail, follow outline_for_chapter, "
-        "obey writing_guidelines_excerpt when present (natural tone, avoid AI-template phrases, "
-        "UTF-8 TXT paragraph and dialogue layout, chapter header/footer), "
-        "write only the chapter indicated by chapter_index, never repeat earlier chapters or scenes. "
-        "Plant and resolve foreshadowing consistently with prior tail and outline. "
-        "The content field must be story/outline prose in Chinese, not meta commentary."
+        "Obey writing_context.continuation_rules and writing_guidelines_excerpt when present. "
+        "The content field must be Chinese text for the artifact, not meta commentary."
     )
+    if writing_mode == "outline":
+        base += (
+            " OUTLINE mode: produce a full-book outline (title, characters, per-chapter plot beats "
+            "as bullets or short lines). Do NOT write full chapter prose, dialogue scenes, or "
+            "chapter footers （第N章完）. Ignore chapter_index for drafting a single chapter."
+        )
+    else:
+        base += (
+            " BODY mode: continue from novel_tail when present; follow outline_for_chapter; "
+            "write only the chapter indicated by chapter_index; use UTF-8 TXT paragraph/dialogue "
+            "layout and a chapter footer （第N章完）; never repeat earlier chapters or scenes."
+        )
     if segment_index > 0:
         base += (
             "\nThis is a continuation segment: keep output concise, start the tool `content` "
@@ -658,12 +684,16 @@ def invoke_artifact_draft(
     caps = build_model_capabilities()
     preferred = (caps.get("structured_output") or {}).get("preferred", "tool")
     segment_index = int(user_payload.get("chunk_index") or 0)
-    system = _writing_system_prompt(segment_index=segment_index)
+    fname = filename or str(user_payload.get("filename") or "artifact.txt")
+    writing_mode = _resolve_writing_mode(user_payload=user_payload, filename=fname)
+    system = _writing_system_prompt(
+        segment_index=segment_index,
+        writing_mode=writing_mode,
+    )
     user = json.dumps(
         {"task": task_desc, **user_payload},
         ensure_ascii=False,
     )
-    fname = filename or str(user_payload.get("filename") or "artifact.txt")
     target_chars = int(user_payload.get("target_chars") or 0)
 
     llm = get_llm(purpose)

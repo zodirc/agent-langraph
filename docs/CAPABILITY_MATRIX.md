@@ -20,11 +20,12 @@
 | Controlled SRDL / bounded ReAct | **stable** | on | ✅ | `react_loop.enabled=true`；single runtime 受控 think-act-observe |
 | Runtime upgrade recommendation | **beta** | on | ✅ | SRDL 可建议 mission/supervisor/exploration；最终由系统裁决 |
 | Mission / longform | **beta** | opt-in | ✅ | `mission` / planning handoff；`autonomous` 连续多步 |
-| Mission writing phases (LLM decide) | **beta** | on* | ✅ | `mission.writing_llm_decide`；`writing_phase` 写/审/润/摘要 |
+| Mission OMAW (orchestrated multi-agent writing) | **stable** | on | ✅ | `execution_mode=mission_oma`；[`ADR_MISSION_LIFECYCLE_V2.md`](ADR_MISSION_LIFECYCLE_V2.md)；FactBundle + ReviewVerdict + 机械派单 |
+| Mission writing phases (LLM decide) | **deprecated** | off | ✅ | 默认 `writing_llm_decide=false`；仅遗留开启时用 LLM 自选 phase |
 | Agenda / DAG-backed mission work plan | **beta** | on | ✅ | `task_agenda.py`：依赖、阻塞传播、局部重规划 |
 | Confirmation gates (Intent / Outcome) | **stable** | on | ✅ | [`CONFIRMATION_GATES.md`](CONFIRMATION_GATES.md)；`confirmation_gates` 配置化 |
 | Execution grant / mission execution control | **stable** | on | ✅ | [`MISSION_EXECUTION_CONTROL.md`](MISSION_EXECUTION_CONTROL.md) |
-| Supervisor multi-agent | **beta** | opt-in | ✅ | `task_type=supervisor`；integration golden |
+| Supervisor multi-agent | **beta** | opt-in | ✅ | `task_type=supervisor`；**不用于手稿 mission**（无 `manuscript` 绑定） |
 | Exploration graph | **beta** | opt-in | ✅ | `execution_mode=exploration` |
 | Reflection node | **stable** | on | ✅ | 事实复核 + 路由错位 `retry_planning` |
 | RAG (Chroma/Qdrant + RRF) | **stable** | on | ✅ | Rerank: lexical / cross_encoder / cohere |
@@ -52,7 +53,7 @@
 | Controlled file edit tool | **stable** | on | ✅ | whitelist + precise replace + audit |
 | Outline patch via read/edit artifact tools | **beta** | on | ✅ | `outline_steer_patch.py`；`read_text_artifact` → model anchor → `edit_text_artifact` |
 
-\* `writing_llm_decide` 默认 `true`（`config.yaml`）；关闭后回退规则型 `suggest_writing_phase_fallback`。
+\* 长篇写作默认 **OMAW**（`mission_oma` + `writing_llm_decide=false`）；Supervisor 不得用于手稿 mission。
 
 ## Recommended profiles
 

@@ -20,7 +20,7 @@ def _coerce_bool(value: Any) -> bool:
 def explicit_mission_requested(payload: dict[str, Any], execution_mode: str = "") -> bool:
     """User/API/Web already supplied a mission contract or mission execution mode."""
     mode = str(execution_mode or payload.get("execution_mode", "")).lower()
-    if mode in ("mission", "autonomous", "longform"):
+    if mode in ("mission", "mission_oma", "autonomous", "longform"):
         return True
     block = payload.get("mission")
     if isinstance(block, dict) and block:
@@ -218,7 +218,11 @@ def apply_planning_mission_decision(
 
     payload["mission"] = block
     if not str(payload.get("execution_mode") or "").strip():
-        payload["execution_mode"] = "mission"
+        from app.config.settings import settings
+
+        payload["execution_mode"] = str(
+            getattr(settings, "MISSION_EXECUTION_MODE", "mission_oma")
+        )
     wi = payload.get("writing_intent")
     if isinstance(wi, dict):
         payload["writing_intent"] = {**wi, "enabled": False}

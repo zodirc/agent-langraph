@@ -133,6 +133,7 @@ def generate_artifact_content(
     novel_name = str(payload.get("novel_filename") or "novel.txt")
     outline_excerpt = _read_artifact_snippet(task_id, outline_name, state=state)
     intent = payload.get("writing_intent") or {}
+    action = str(intent.get("action") or "")
     chapter_hint = intent.get("chapter_index")
     writing_ctx = build_writing_context(
         task_id=task_id,
@@ -141,7 +142,10 @@ def generate_artifact_content(
         outline_filename=outline_name,
         chapter_index=int(chapter_hint) if chapter_hint is not None else None,
     )
-    chapter_n = writing_ctx["chapter_index"]
+    is_outline_step = action in ("write_outline", "rewrite_outline") or bool(
+        writing_ctx.get("writing_mode") == "outline"
+    )
+    chapter_n = writing_ctx.get("chapter_index")
 
     mission = state.get("mission") or {}
     sp = mission.get("step_policy") or {}
@@ -207,6 +211,8 @@ def generate_artifact_content(
         "target_chars": chars,
         "chunk_index": chunk_index,
         "chapter_index": chapter_n,
+        "writing_mode": "outline" if is_outline_step else "body",
+        "writing_action": action or None,
         "conversation_history": history[-12:],
         "existing_outline": outline_excerpt or None,
         "writing_context": writing_ctx,

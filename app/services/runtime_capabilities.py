@@ -18,6 +18,7 @@ def build_runtime_capabilities(
     risk_level: str = "LOW",
     tool_top_k: Optional[int] = None,
     pack_tools: Optional[list[str]] = None,
+    state: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Describe what the agent can do this run (tools, paths, limits)."""
     registry = get_tool_registry()
@@ -58,7 +59,7 @@ def build_runtime_capabilities(
             )
         tool_selection_meta = {"mode": "full_registry", "shown": len(tools)}
 
-    return {
+    caps: dict[str, Any] = {
         "execution_paths": [
             {
                 "id": "single_turn",
@@ -94,6 +95,11 @@ def build_runtime_capabilities(
                     "chapter_summary",
                     "arc_checkpoint",
                 ],
+                "batch_unit_quality": (
+                    "Steer-driven multi-chapter quality pass: work_plan_patch with "
+                    "review_chapter (+ polish_chapter depends_on) per written chapter; "
+                    "forbid append_body until batch queue completes."
+                ),
                 "graph": "planning ends → mission loop (decide → act → observe → eval) → output",
             },
         ],
@@ -126,6 +132,13 @@ def build_runtime_capabilities(
             "If mission is set, the runtime switches to the mission graph after planning in the same turn.",
         ],
     }
+    if state is not None:
+        from app.services.mission.batch_unit_capability import batch_unit_context_for_planning
+
+        batch_ctx = batch_unit_context_for_planning(state)  # type: ignore[arg-type]
+        if batch_ctx:
+            caps["batch_unit_context"] = batch_ctx
+    return caps
 
 
 def reasoning_instructions_for_state(state: dict[str, Any]) -> str:

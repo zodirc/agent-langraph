@@ -56,9 +56,14 @@ flowchart TB
 {
   "issued_at": "2026-05-28T12:00:00+00:00",
   "source": "resume_api",
+  "scope": "mechanical_resume",
   "consume_once": true
 }
 ```
+
+**与 steer 优先级**（`app/services/intent_composer.py`）：存在 `require_planning_after_steer` / 未完成的 steer 快照时，不得签发或消费 `mechanical_resume` grant；`planning_fallback` 的 `execution_grant_forward` 同样受此约束。材料级 steer 可触发 `batch_unit_quality` agenda 投影（`app/services/mission/batch_unit_work_plan.py`）：`review_chapter` + `polish_chapter`（`depends_on`），`work_item_satisfied` 与 `validate_turn_contract_execution` 校验 `review_chapter` 已执行。大批量 agenda 插入走 `confirmation_gates.plan_gate_min_prepend_items`（intent 确认门）。契约指标：`contract_unfulfilled` / `contract_fulfilled`。
+
+**TurnKind 与 planning→executor**（[`ADR_TURN_KIND.md`](ADR_TURN_KIND.md)）：`input_payload.turn_kind` 区分 `steer_replan` / `steer_execute` / `mission_step_execute` 等；`session_turn` 与 `graph_runner` 统一经 `apply_steer_message` 挂规划闸门。`run_pipeline_request` 在规划后若 `pipeline_phase_after_planning == execute` 则 bootstrap agenda 头并禁止以 reasoning 代替执行；trace/UI 计划行以 `plan_steps_for_display`（contract + agenda）为准。`primary_op=pause` 且 agenda 仍有可执行项时，`contract_requires_side_effects(..., state=)` 为 true。
 
 | 签发来源 `source` | 时机 |
 |-----------------|------|

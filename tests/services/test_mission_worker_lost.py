@@ -51,3 +51,17 @@ def test_reconcile_pauses_with_worker_lost(isolated_stores):
     loaded = get_state_store().load(state["task_id"])
     assert loaded is not None
     assert loaded["status"] == TaskStatus.MISSION_PAUSED.value
+
+
+def test_graph_runner_finalize_turn_reconciles_orphan():
+    from app.services.graph_runner import GraphRunner
+
+    state = merge_state(
+        create_initial_state(),
+        status=TaskStatus.MISSION_RUNNING.value,
+        mission={"kind": "writing", "phase": "executing"},
+        current_node="mission_decide",
+    )
+    finalized = GraphRunner()._finalize_turn(state)
+    assert finalized["status"] == TaskStatus.MISSION_PAUSED.value
+    assert finalized["mission_control"]["pause_reason"] == PAUSE_WORKER_LOST

@@ -225,9 +225,28 @@ mission:
   max_wall_sec: 3600
   max_failures: 3
   writing_max_steps: 500      # legacy alias; writing uses estimate or planner budget
-  writing_llm_decide: true    # model picks write/review/polish/summary per mission step
+  execution_mode: mission_oma
+  writing_llm_decide: false   # OMAW mechanical dispatch (ADR-001)
+  review_max_parallel: 3
+  unit_loop: chapter_unit
+  oma_default_for_writing: true
+  worker_retrieval:
+    enabled: true
+    domains: [writing, common]
+    top_k: 8
+    require_fact_bundle: true
+  worker_react:
+    enabled: true
+    default_max_steps: 3
+    reviewer_allowed_actions: [retrieve_knowledge, retrieve_memory, reason, finish]
+    writer_allowed_actions: [retrieve_knowledge, call_tool, reason, finish]
+    editor_allowed_actions: [retrieve_knowledge, reason, finish]
+    planner_allowed_actions: [retrieve_knowledge, retrieve_memory, replan, reason, finish]
+    max_failures: 2
+    max_replan: 1
   outline_max_chars: 12000
   writing_review_every_chapters: 5   # 0 = disabled; rule fallback may pause every N chapters
+  batch_unit_max_per_plan: 12
   orchestration_min_chars: 8000      # auto decompose long writing missions into work items
   llm_decide: ${MISSION_LLM_DECIDE:false}
 
@@ -236,12 +255,14 @@ confirmation_gates:
   enabled: true
   excerpt_max_chars: 4500
   delta_max_chars: 2000
+  plan_gate_min_prepend_items: 3
   material_intervention_actions:
     - rewrite_outline
     - reset_body
     - edit_plot
     - review_outline
     - enqueue_work
+    - batch_unit_quality
   outcome_work_item_kinds:
     - write_outline
     - edit_plot
@@ -276,6 +297,7 @@ confirmation_gates:
     reset_body: [append_chapter, append_body, write_body]
     rewrite_outline: [append_chapter, append_body, write_outline]
     edit_plot: [write_outline]
+    batch_unit_quality: [append_chapter, append_body, write_body]
 
 # Post-planning route alignment (see docs/ROUTE_AUDIT.md): kinds + conflicts, not per-user-string hacks
 route_audit:
@@ -387,6 +409,11 @@ manuscript:
   head_excerpt_chars: 1200
   append_dedup_ratio: 0.82
   quality_gate_threshold: 0.65
+  # Chapter rubric: true = LLM judges continuity/alignment (heuristic only on fallback)
+  quality_score_use_llm: true
+  quality_score_llm_min_chars: 80
+  # Optional narrative outcome extraction (summary/events) after each append
+  chapter_outcome_use_llm: true
   l2_token_budget: 1500
   l3_token_budget: 1200
   alignment_recent_window: 2
@@ -486,6 +513,9 @@ context_compress:
   min_ratio: 0.5   # CI gate: mean compression ratio must be >= this for long histories
 
 rag:
+  chunk_enabled: true
+  domains: [project_rules, story_bible, outline, chapter_facts, external_reference]
+  writing_require_citations: true
   rerank_enabled: true
   rerank_backend: lexical          # lexical | cross_encoder | cohere
   rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2

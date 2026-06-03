@@ -35,6 +35,25 @@ def test_validate_rejects_placeholder():
     assert "待续写" in reason or "placeholder" in reason
 
 
+def test_validate_write_outline_rejects_chapter_prose():
+    line = "马赛港的清晨带着咸腥的海风，渔船陆续归港，桅杆在薄雾中若隐若现。" * 4
+    paragraphs = [line] * 8
+    prose = "### 第1章 沉船\n\n" + "\n\n".join(paragraphs)
+    ok, reason = validate_manuscript_content(prose, action="write_outline")
+    assert not ok
+    assert reason
+
+
+def test_validate_write_outline_accepts_plot_beats():
+    outline = (
+        "# 基督山新传\n\n## 人物\n- 埃德蒙\n\n"
+        "### 第一章 沉船\n- 法老号进港\n- 船长病死\n- 杜福尔隐瞒\n\n"
+        "### 第二章 婚礼\n- 订婚宴\n"
+    )
+    ok, reason = validate_manuscript_content(outline, action="write_outline", min_chars=40)
+    assert ok, reason
+
+
 def test_resolve_manuscript_picks_largest_body(tmp_path, test_settings, monkeypatch):
     import app.services.artifact_tools as art
 

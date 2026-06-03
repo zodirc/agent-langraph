@@ -66,34 +66,39 @@ def apply_steer_planning_gate(payload: dict[str, Any]) -> dict[str, Any]:
         REASON_STEER,
         invalidate_turn_contract_payload,
     )
+    from app.services.turn_kind import stamp_turn_kind
 
     out = invalidate_turn_contract_payload(dict(payload), REASON_STEER)
     out["require_planning_after_steer"] = True
     out["steer_planning_done"] = False
     out.pop("skip_planning_llm", None)
-    return out
+    if not out.get("steer_applied_at"):
+        out["steer_applied_at"] = _now_iso()
+    return stamp_turn_kind(out, "steer_replan")
 
 
 def complete_steer_planning(payload: dict[str, Any]) -> dict[str, Any]:
     from app.services.turn_contract_lifecycle import clear_contract_replan_requirement
+    from app.services.turn_kind import stamp_turn_kind
 
     out = clear_contract_replan_requirement(dict(payload))
     out["steer_planning_done"] = True
     out["require_planning_after_steer"] = False
-    return out
+    from app.services.mission_oma.intent_spec import intent_spec_from_payload, normalize_intent_spec
+
+    out["intent_spec"] = normalize_intent_spec(intent_spec_from_payload(out)).to_dict()
+    return stamp_turn_kind(out, "steer_execute")
 
 
 def mission_must_run_planning(state: AgentState) -> bool:
     """在 planning 重新解释 steer 前，阻塞 subgraph:writing。
 
     Block writing subgraph until planning re-interprets steer.
+    Only ``steer_requires_planning`` (gate + steer_planning_done) — do not key on
+    ``steer_applied_at`` alone or every post-steer turn replans forever.
     """
     payload = state.get("input_payload") or {}
-    if steer_requires_planning(payload):
-        return True
-    if payload.get("steer_applied_at") and not intervention_from_payload(payload):
-        return True
-    return False
+    return steer_requires_planning(payload)
 
 
 def goal_requests_outline_read(goal: str) -> bool:
@@ -276,11 +281,15 @@ def apply_steer_message(
     source: str = "user",
     confirm: bool = False,
     replace_goal: bool = False,
+    skip_history_append: bool = False,
+    persist: bool = True,
 ) -> AgentState:
     """
     合并 steer 到 state（立即生效路径）；force intervention 可绕过 planning。
 
     Merge steer into state; message-only steers set planning gate for next turn.
+    ``skip_history_append``: caller already appended user lines (e.g. session_turn).
+    ``persist=False``: do not write state store (prepare_session_turn builds fresh turn).
     """
     payload = dict(state.get("input_payload") or {})
     history = list(state.get("conversation_history") or payload.get("conversation_history") or [])
@@ -298,7 +307,8 @@ def apply_steer_message(
             norm = _normalize_intervention(existing)
 
     for text in texts:
-        history.append({"role": "user", "content": text, "steer": True, "at": _now_iso()})
+        if not skip_history_append:
+            history.append({"role": "user", "content": text, "steer": True, "at": _now_iso()})
         payload = _append_steer_goal(payload, text, replace_goal=replace_goal)
 
     if norm:
@@ -309,9 +319,23 @@ def apply_steer_message(
 
     combined = "\n".join(texts)
 
+    from app.services.mission_steer_confirm import steer_confirmation_pending
+    from app.services.steer_confirmation_actions import (
+        is_proceed_confirm_message,
+        try_apply_structured_confirm,
+    )
+
+    if texts and steer_confirmation_pending(dict(payload)):
+        last = texts[-1]
+        if is_proceed_confirm_message(last):
+            confirmed = try_apply_structured_confirm(state, confirm=True)
+            if confirmed is not None:
+                if persist:
+                    get_state_store().save(confirmed)
+                return confirmed
+
     from app.services.mission_steer_confirm import clear_steer_confirmation_flags
     from app.services.mission_steer_outcome_confirm import clear_steer_outcome_flags
-    from app.services.steer_confirmation_actions import try_apply_structured_confirm
 
     if confirm:
         confirmed = try_apply_structured_confirm(state, confirm=True)
@@ -326,10 +350,20 @@ def apply_steer_message(
 
     from app.services.mission_execution import has_execution_grant
 
-    if steer_needs_planning_llm(message=combined, intervention=norm) and not (
-        has_execution_grant(payload) and not norm
-    ):
+    if steer_needs_planning_llm(message=combined, intervention=norm):
+        if has_execution_grant(payload):
+            from app.services.intent_composer import record_grant_steer_conflict
+
+            payload = record_grant_steer_conflict(
+                payload, reason="steer_overrides_mechanical_grant"
+            )
         payload = apply_steer_planning_gate(payload)
+        payload["writing_intent"] = {
+            "enabled": False,
+            "source": "await_steer_planning",
+        }
+        payload.pop("current_work_item", None)
+        payload["skip_planning_llm"] = False
 
     payload.pop("steer_intent_confirmed", None)
     payload.pop("steer_intent_confirmed_at", None)
@@ -391,7 +425,8 @@ def apply_steer_message(
             },
         )
 
-    get_state_store().save(updated)
+    if persist:
+        get_state_store().save(updated)
     return updated
 
 
