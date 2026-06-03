@@ -57,6 +57,24 @@ class AuditStore:
                 )
             conn.commit()
 
+    def delete_events_for_task(self, task_id: str) -> int:
+        """Remove all audit rows for a task/session."""
+        if uses_postgres():
+            with postgres_connection() as conn:
+                cur = conn.execute(
+                    "DELETE FROM audit_events WHERE task_id = %s",
+                    (task_id,),
+                )
+                return int(getattr(cur, "rowcount", 0) or 0)
+
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM audit_events WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.commit()
+            return int(cur.rowcount or 0)
+
     def get_chain(self, task_id: str) -> list[dict[str, Any]]:
         if uses_postgres():
             with postgres_connection() as conn:

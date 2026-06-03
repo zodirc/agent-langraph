@@ -176,9 +176,18 @@ def delete_task(
     task_id: str,
     _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> TaskDeleteResponse:
+    stored = get_state_store().load(task_id, read_only=True)
+    if not stored:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    session_turn_hint = int(stored.get("session_turn") or 1)
+
     deleted = get_state_store().delete_task(task_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+
+    from app.services.task_cleanup import purge_task_remains
+
+    purge_task_remains(task_id, session_turn_hint=session_turn_hint)
     return TaskDeleteResponse(task_id=task_id, deleted=True)
 
 

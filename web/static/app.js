@@ -61,8 +61,12 @@ let writingPanelEl = null;
 let writingStreamEl = null;
 let writingStreamText = "";
 let writingStreamFilename = "";
-/** @type {{ headerEl: HTMLElement, panelEl: HTMLElement, bodyEl: HTMLElement, filename: string } | null} */
+/** @type {{ toggleEl: HTMLElement, panelEl: HTMLElement, bodyEl: HTMLElement, filename: string, status: string, collapsed: boolean } | null} */
 let activeWritingBlock = null;
+/** @type {Map<string, { toggleEl: HTMLElement, panelEl: HTMLElement, bodyEl: HTMLElement, filename: string, status: string, collapsed: boolean }>} */
+const writingFileBlocks = new Map();
+let writingWorkspaceEl = null;
+let writingWorkspaceHeaderEl = null;
 let contentBlockSeq = 0;
 /** Dedupe steer confirm panels within one stream or /confirm turn */
 const shownConfirmationKeys = new Set();
@@ -79,6 +83,8 @@ let outputAutoFollow = true;
 let writingPendingText = "";
 let writingFlushScheduled = false;
 let writingTraceHintShown = false;
+/** 当前任务 SSE 的 AbortController（Stop 时立即断开）。 */
+let activeSseAbortController = null;
 let thinkingPendingText = "";
 let thinkingFlushScheduled = false;
 let flowAutoRefreshTimer = null;
@@ -1366,7 +1372,159 @@ function resetWritingStream() {
   writingFlushScheduled = false;
   writingTraceHintShown = false;
   activeWritingBlock = null;
+  writingFileBlocks.clear();
+  writingWorkspaceEl = null;
+  writingWorkspaceHeaderEl = null;
   writingStreamCharsThisTurn = 0;
+}
+
+function writingFileStatusLabel(status) {
+  if (status === "stopped") return "已停止";
+  if (status === "preview") return "待确认节选";
+  if (status === "done") return "已追加";
+  if (status === "writing") return "正在追加";
+  return "等待";
+}
+
+function bindActiveSseAbort(controller) {
+  if (activeSseAbortController) {
+    try {
+      activeSseAbortController.abort("superseded");
+    } catch {
+      /* ignore */
+    }
+  }
+  activeSseAbortController = controller;
+}
+
+function abortActiveSseStream(reason = "user_stop") {
+  if (!activeSseAbortController) return false;
+  try {
+    activeSseAbortController.abort(reason);
+  } catch {
+    /* ignore */
+  }
+  activeSseAbortController = null;
+  return true;
+}
+
+function markActiveWritingStreamStopped() {
+  if (activeWritingBlock) {
+    activeWritingBlock.status = "stopped";
+    syncWritingFileToggleLabel(activeWritingBlock);
+  }
+}
+
+function isSseAbortError(err) {
+  if (!err) return false;
+  if (err.name === "AbortError") return true;
+  const msg = String(err.message || err);
+  return msg.includes("aborted") || msg.includes("Abort");
+}
+
+/** 从标题里提取文件名（工具/确认面板可能只给标题不给 filename）。 */
+function extractFilenameFromTitle(title) {
+  const raw = String(title || "");
+  const m = raw.match(/([^\s/─·]+?\.(?:txt|md|json|yaml|yml|csv|py|js|ts|html|xml))/i);
+  return m ? m[1] : "";
+}
+
+function syncWritingFileToggleLabel(block) {
+  if (!block?.toggleEl) return;
+  const status = writingFileStatusLabel(block.status);
+  const active = block === activeWritingBlock ? " · 当前" : "";
+  const chevron = block.collapsed ? "▸" : "▾";
+  block.toggleEl.textContent = `${chevron} ${block.filename} — ${status}${active}`;
+  block.toggleEl.setAttribute("aria-expanded", block.collapsed ? "false" : "true");
+}
+
+function setWritingFileCollapsed(block, collapsed) {
+  if (!block) return;
+  block.collapsed = Boolean(collapsed);
+  block.panelEl.classList.toggle("collapsed", block.collapsed);
+  syncWritingFileToggleLabel(block);
+}
+
+function focusWritingFileBlock(block) {
+  if (!block) return;
+  if (activeWritingBlock && activeWritingBlock !== block) {
+    setWritingFileCollapsed(activeWritingBlock, true);
+    activeWritingBlock.panelEl.classList.remove("is-active");
+  }
+  activeWritingBlock = block;
+  writingHeaderEl = block.toggleEl;
+  writingPanelEl = block.panelEl;
+  writingStreamEl = block.bodyEl;
+  writingStreamFilename = block.filename;
+  block.panelEl.classList.add("is-active");
+  setWritingFileCollapsed(block, false);
+  syncWritingFileToggleLabel(block);
+  for (const [, other] of writingFileBlocks) {
+    syncWritingFileToggleLabel(other);
+  }
+}
+
+function ensureWritingWorkspace() {
+  if (writingWorkspaceEl) return writingWorkspaceEl;
+  writingWorkspaceHeaderEl = document.createElement("p");
+  writingWorkspaceHeaderEl.className = "line trace-header file-workspace-header";
+  writingWorkspaceHeaderEl.textContent = "── 文件（流式追加）──";
+  writingWorkspaceEl = document.createElement("div");
+  writingWorkspaceEl.className = "file-workspace";
+  writingWorkspaceEl.id = "file-workspace";
+  outputEl.appendChild(writingWorkspaceHeaderEl);
+  outputEl.appendChild(writingWorkspaceEl);
+  return writingWorkspaceEl;
+}
+
+function getOrCreateWritingFileBlock(filename, { reset = false, phase = "" } = {}) {
+  const fname = (filename || "").trim() || "artifact";
+  ensureWritingWorkspace();
+  let block = writingFileBlocks.get(fname);
+  if (!block) {
+    const sectionEl = document.createElement("section");
+    sectionEl.className = "file-stream-block";
+    sectionEl.dataset.filename = fname;
+    const toggleEl = document.createElement("button");
+    toggleEl.type = "button";
+    toggleEl.className = "file-stream-toggle";
+    toggleEl.addEventListener("click", () => {
+      const entry = writingFileBlocks.get(fname);
+      if (!entry) return;
+      setWritingFileCollapsed(entry, !entry.collapsed);
+    });
+    const panelEl = document.createElement("div");
+    panelEl.className = "file-stream-body trace-panel content-panel";
+    const bodyEl = document.createElement("pre");
+    bodyEl.className = "line content-body file-stream-content";
+    panelEl.appendChild(bodyEl);
+    sectionEl.appendChild(toggleEl);
+    sectionEl.appendChild(panelEl);
+    writingWorkspaceEl.appendChild(sectionEl);
+    block = {
+      toggleEl,
+      panelEl,
+      bodyEl,
+      filename: fname,
+      status: "pending",
+      collapsed: true,
+    };
+    writingFileBlocks.set(fname, block);
+    syncWritingFileToggleLabel(block);
+  }
+  if (reset || phase === "start") {
+    block.status = "writing";
+    block.bodyEl.replaceChildren();
+  } else if (phase === "done") {
+    block.status = "done";
+  } else if (phase === "preview") {
+    block.status = "preview";
+  } else if (block.status === "pending") {
+    block.status = "writing";
+  }
+  focusWritingFileBlock(block);
+  syncWritingFileToggleLabel(block);
+  return block;
 }
 
 /**
@@ -1388,35 +1546,67 @@ function createContentBlock({ title, panelClass, bodyClass, placeholder = "" }) 
   return { headerEl, panelEl, bodyEl };
 }
 
-function openWritingContentBlock(filename = "") {
-  const fname = (filename || "").trim();
-  const title = fname
-    ? `── 手稿 · ${fname} ──`
-    : `── 手稿生成（流式）──`;
-  const block = createContentBlock({
-    title,
-    panelClass: "writing-panel",
-    bodyClass: "trace-writing",
-    placeholder: "",
-  });
-  activeWritingBlock = { ...block, filename: fname };
-  writingHeaderEl = block.headerEl;
-  writingPanelEl = block.panelEl;
-  writingStreamEl = block.bodyEl;
-  writingStreamFilename = fname;
+function openWritingContentBlock(filename = "", options = {}) {
+  const block = getOrCreateWritingFileBlock(filename, options);
   writingStreamText = "";
   writingPendingText = "";
-  writingStreamEl.replaceChildren();
+  if (options.reset) {
+    block.bodyEl.replaceChildren();
+  }
   return block.panelEl;
 }
 
-function appendFileContentBlock(title, text, { panelClass = "file-panel", bodyClass = "file-content" } = {}) {
+/**
+ * 向统一文件区追加/覆盖内容（流式 writing_delta、确认节选、工具读文件等共用）。
+ */
+function appendToFileWorkspace(filename, text, { replace = false, phase = "", focus = true } = {}) {
   const body = (text || "").trim();
-  if (!body) return;
+  if (!body) return null;
+  const block = getOrCreateWritingFileBlock(filename, {
+    reset: replace,
+    phase: replace ? "start" : phase,
+  });
+  if (replace) {
+    block.bodyEl.replaceChildren();
+    block.bodyEl.appendChild(document.createTextNode(body));
+    if (block === activeWritingBlock) {
+      writingStreamText = body.length;
+    }
+  } else {
+    const sep = block.bodyEl.textContent ? "\n\n" : "";
+    block.bodyEl.appendChild(document.createTextNode(sep + body));
+    if (block === activeWritingBlock) {
+      writingStreamText += sep.length + body.length;
+    }
+  }
+  if (phase === "preview") {
+    block.status = "preview";
+    syncWritingFileToggleLabel(block);
+  }
+  if (focus) {
+    focusWritingFileBlock(block);
+  }
+  scrollToBottomIfPinned(block.panelEl);
+  scrollOutputIfPinned();
+  return block;
+}
+
+/** 有文件名则进入文件区；否则退化为独立内容块（无「手稿/大纲」等类型样式）。 */
+function appendFileContentBlock(title, text, opts = {}) {
+  const body = (text || "").trim();
+  if (!body) return null;
+  const fname = String(opts.filename || extractFilenameFromTitle(title) || "").trim();
+  if (fname) {
+    return appendToFileWorkspace(fname, body, {
+      replace: Boolean(opts.replace),
+      phase: opts.phase || (opts.preview ? "preview" : ""),
+      focus: opts.focus !== false,
+    });
+  }
   const block = createContentBlock({
-    title,
-    panelClass,
-    bodyClass,
+    title: title || "── 内容 ──",
+    panelClass: "content-fallback-panel",
+    bodyClass: "file-stream-content",
     placeholder: body,
   });
   return block;
@@ -1474,9 +1664,9 @@ function appendThinkingDelta(text) {
 }
 
 /**
- * 每次运行或文件名新建手稿流面板（滚动栈，不复用）。
+ * 按文件名打开/切换文件流区块（同一文件区，不区分大纲/正文类型）。
  *
- * New manuscript stream panel per run or filename.
+ * Open or switch the per-filename stream block in the unified file workspace.
  */
 function ensureWritingPanel(filename = "") {
   const fname = (filename || "").trim();
@@ -1486,7 +1676,7 @@ function ensureWritingPanel(filename = "") {
   ) {
     writingStreamEl = activeWritingBlock.bodyEl;
     writingPanelEl = activeWritingBlock.panelEl;
-    writingHeaderEl = activeWritingBlock.headerEl;
+    writingHeaderEl = activeWritingBlock.toggleEl;
     return writingPanelEl;
   }
   return openWritingContentBlock(fname);
@@ -1517,14 +1707,23 @@ function scheduleWritingFlush() {
 function appendWritingDelta(text, payload = {}) {
   if (!text) return;
   const fname = (payload.filename || "").trim();
+  const phase = String(payload.phase || "");
   if (
     payload.reset ||
+    phase === "start" ||
     !activeWritingBlock ||
     (fname && fname !== activeWritingBlock.filename)
   ) {
-    openWritingContentBlock(fname);
+    openWritingContentBlock(fname, { reset: Boolean(payload.reset || phase === "start"), phase });
   } else {
     ensureWritingPanel(fname);
+    if (phase === "done") {
+      const block = writingFileBlocks.get(fname || activeWritingBlock.filename);
+      if (block) {
+        block.status = "done";
+        syncWritingFileToggleLabel(block);
+      }
+    }
   }
   if (payload.reset) {
     writingStreamText = "";
@@ -1800,6 +1999,13 @@ async function steerActiveMission(message, opts = {}) {
 }
 
 async function stopActiveMission() {
+  const hadClientStream = Boolean(activeSseAbortController) || running;
+  if (abortActiveSseStream("user_stop")) {
+    markActiveWritingStreamStopped();
+    if (running) {
+      setRunning(false);
+    }
+  }
   const taskId = activeTaskId || getSessionId();
   const res = await fetch(`/tasks/${taskId}/stop`, {
     method: "POST",
@@ -1813,8 +2019,15 @@ async function stopActiveMission() {
   const display = data.client_display || {};
   appendSystemLines(display.system_lines);
   if (!display.system_lines?.length) {
-    appendLine("stop requested, waiting current step to yield…", "system");
+    appendLine(
+      hadClientStream
+        ? "已停止接收流式输出；服务端将在当前步骤结束后收尾…"
+        : "stop requested, waiting current step to yield…",
+      "system"
+    );
   }
+  sessionHasInFlightMission = false;
+  updateStopButtonState();
   return true;
 }
 
@@ -1901,13 +2114,11 @@ function renderConfirmationSection(section) {
       return { kind: "pre", text: String(section.content || "") };
     case "artifact": {
       const fname = section.filename || "artifact";
-      const mode = section.preview_mode ? ` · ${section.preview_mode}` : "";
-      const trunc = section.truncated ? "（节选）" : "";
       return {
         kind: "file",
-        title: `── ${fname}${mode}${trunc} ──`,
+        filename: fname,
         text: String(section.content || ""),
-        panelClass: "steer-outcome-panel file-panel",
+        preview: true,
       };
     }
     case "queue": {
@@ -1997,9 +2208,10 @@ function appendConfirmationBlock(confirmation, confirmationActions, panelClass) 
     const rendered = renderConfirmationSection(section);
     if (!rendered) continue;
     if (rendered.kind === "file" && rendered.text) {
-      appendFileContentBlock(rendered.title, rendered.text, {
-        panelClass: rendered.panelClass || "file-panel",
-        bodyClass: "file-content",
+      appendFileContentBlock("", rendered.text, {
+        filename: rendered.filename,
+        preview: Boolean(rendered.preview),
+        focus: false,
       });
     } else if (rendered.kind === "pre" && rendered.text) {
       const prePanel = document.createElement("div");
@@ -2012,10 +2224,11 @@ function appendConfirmationBlock(confirmation, confirmationActions, panelClass) 
   }
 
   if (!sections.length && excerpt && !skipArtifactPreview) {
-    const fname = String(confirmation.artifact_filename || "outline.txt");
-    appendFileContentBlock(`── 执行结果 · ${fname}（待批准节选）──`, excerpt, {
-      panelClass: "steer-outcome-panel file-panel",
-      bodyClass: "file-content",
+    const fname = String(confirmation.artifact_filename || "artifact.txt");
+    appendFileContentBlock("", excerpt, {
+      filename: fname,
+      preview: true,
+      focus: false,
     });
   }
 
@@ -2074,23 +2287,31 @@ async function runResumeStream(taskId, { confirm = false, fromPendingQueue = fal
   writingStreamCharsThisTurn = 0;
   appendLine(`> /resume${confirm ? " confirm" : ""}`, "user");
   const taskIdRef = { id: taskId };
+  const sseAbort = new AbortController();
+  bindActiveSseAbort(sseAbort);
   try {
     const res = await fetch(`/tasks/${taskId}/resume/stream`, {
       method: "POST",
       headers: getAuthHeaders(),
       body: JSON.stringify({ confirm: Boolean(confirm) }),
+      signal: sseAbort.signal,
     });
     if (!res.ok || !res.body) {
       appendLine(`resume stream failed: ${res.status} ${await res.text()}`, "error");
       return null;
     }
     activeTaskId = taskId;
-    await consumeSseStream(res, taskIdRef);
+    await consumeSseStream(res, taskIdRef, { signal: sseAbort.signal });
     return { task_id: taskIdRef.id || taskId };
   } catch (err) {
-    appendLine(`resume stream error: ${err}`, "error");
+    if (!isSseAbortError(err)) {
+      appendLine(`resume stream error: ${err}`, "error");
+    }
     return null;
   } finally {
+    if (activeSseAbortController === sseAbort) {
+      activeSseAbortController = null;
+    }
     setRunning(false);
     await flushPendingAutonomousResume();
     await refreshFlowPanel(taskIdRef?.id || taskId || activeTaskId);
@@ -2198,12 +2419,15 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
   } else if (eventType === "thinking_delta") {
     appendThinkingDelta(payload.text || "");
   } else if (eventType === "writing_delta") {
+    if (activeSseAbortController?.signal?.aborted) {
+      return;
+    }
     if (payload.reset || payload.phase === "start") {
       ensureTracePanel();
       if (!writingTraceHintShown) {
         writingTraceHintShown = true;
         appendTraceLine(
-          "手稿正文流式可能滞后；请关注本栏 writing/status 进度（模型缓冲与正文 content 解析）",
+          "文件正文流式可能滞后；请关注本栏 writing/status 进度（模型缓冲与 content 解析）",
           { node: "writing", phase: "hint", level: "status" }
         );
       }
@@ -2288,10 +2512,10 @@ function formatNodeEvent(payload) {
   }
   if (node === "writing" && status === "WRITTEN") {
     const bytes = payload.body_bytes ? `（${payload.body_bytes} B）` : "";
-    appendLine(`  … 手稿已写入 ${payload.body_path || "novel.txt"}${bytes}`, "system");
+    appendLine(`  … 已写入文件 ${payload.body_path || "novel.txt"}${bytes}`, "system");
   }
   if (node === "writing" && status === "WRITING_FAILED") {
-    appendLine("  … 写作失败，请查看 trace 或 /audit；手稿可能未生成", "error");
+    appendLine("  … 写入失败，请查看 trace 或 /audit；目标文件可能未生成", "error");
   }
   if (isError) {
     if (payload.last_error) {
@@ -2327,12 +2551,21 @@ function refreshCommandSuggestions(value) {
  *
  * Read ReadableStream and parse SSE event/data lines.
  */
-async function consumeSseStream(res, taskIdRef) {
+async function consumeSseStream(res, taskIdRef, { signal } = {}) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
 
+  try {
   while (true) {
+    if (signal?.aborted) {
+      try {
+        await reader.cancel();
+      } catch {
+        /* ignore */
+      }
+      break;
+    }
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
@@ -2353,6 +2586,13 @@ async function consumeSseStream(res, taskIdRef) {
       } catch {
         /* skip malformed chunk */
       }
+    }
+  }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* ignore */
     }
   }
 }
@@ -2707,12 +2947,15 @@ async function runTaskStream(goal, riskLevel = "LOW", endpoint = "/tasks/stream"
   appendLine(`> ${goal}`, "user");
   const requestBody = body || buildTaskRequestBody(goal, riskLevel);
   const taskIdRef = { id: null };
+  const sseAbort = new AbortController();
+  bindActiveSseAbort(sseAbort);
 
   try {
     const res = await fetch(endpoint, {
       method: "POST",
       headers: getAuthHeaders(),
       body: JSON.stringify(requestBody),
+      signal: sseAbort.signal,
     });
 
     if (!res.ok || !res.body) {
@@ -2720,10 +2963,15 @@ async function runTaskStream(goal, riskLevel = "LOW", endpoint = "/tasks/stream"
       return;
     }
 
-    await consumeSseStream(res, taskIdRef);
+    await consumeSseStream(res, taskIdRef, { signal: sseAbort.signal });
   } catch (err) {
-    appendLine(`stream error: ${err}`, "error");
+    if (!isSseAbortError(err)) {
+      appendLine(`stream error: ${err}`, "error");
+    }
   } finally {
+    if (activeSseAbortController === sseAbort) {
+      activeSseAbortController = null;
+    }
     setRunning(false);
     await flushPendingAutonomousResume();
     await refreshFlowPanel(taskIdRef?.id || activeTaskId);
@@ -2890,10 +3138,23 @@ async function handleCommand(raw) {
   sessionHasInFlightMission = false;
 }
 
+function resetCommandInputHeight() {
+  if (!inputEl || inputEl.tagName !== "TEXTAREA") return;
+  inputEl.style.height = "auto";
+}
+
+function autoResizeCommandInput() {
+  if (!inputEl || inputEl.tagName !== "TEXTAREA") return;
+  inputEl.style.height = "auto";
+  const maxPx = 160;
+  inputEl.style.height = `${Math.min(inputEl.scrollHeight, maxPx)}px`;
+}
+
 formEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const value = inputEl.value.trim();
   inputEl.value = "";
+  resetCommandInputHeight();
   if (!value) return;
   if (running) {
     // Keep slash commands operational while stream is running (e.g. /stop, /stop-all).
@@ -2914,11 +3175,19 @@ formEl.addEventListener("submit", async (event) => {
 
 if (inputEl) {
   inputEl.addEventListener("input", () => {
+    autoResizeCommandInput();
     refreshCommandSuggestions(inputEl.value);
   });
   inputEl.addEventListener("focus", () => {
     refreshCommandSuggestions(inputEl.value);
   });
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      formEl.requestSubmit();
+    }
+  });
+  autoResizeCommandInput();
 }
 
 if (stopBtnEl) {
@@ -2926,8 +3195,7 @@ if (stopBtnEl) {
     if (!(running || sessionHasInFlightMission)) return;
     stopBtnEl.disabled = true;
     try {
-      const ok = await stopActiveMission();
-      if (ok) sessionHasInFlightMission = false;
+      await stopActiveMission();
     } finally {
       updateStopButtonState();
     }

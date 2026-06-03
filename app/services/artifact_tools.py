@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import ast
 import difflib
+import logging
 import operator
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from app.config.settings import settings
 from app.services.audit_store import get_audit_store
@@ -29,12 +33,44 @@ def artifacts_root() -> Path:
 
 
 def task_artifact_dir(task_id: str) -> Path:
-    safe_id = re.sub(r"[^a-zA-Z0-9\-_]", "", task_id)
-    if not safe_id:
+    path = _task_artifact_path(task_id)
+    if path is None:
         raise ValueError("Invalid task_id for artifact path")
-    path = artifacts_root() / safe_id
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _task_artifact_path(task_id: str) -> Path | None:
+    safe_id = re.sub(r"[^a-zA-Z0-9\-_]", "", task_id)
+    if not safe_id:
+        return None
+    return artifacts_root() / safe_id
+
+
+def delete_task_artifact_dir(task_id: str) -> bool:
+    """
+    Remove on-disk session/task workspace (outline.txt, novel.txt, etc.).
+    Best-effort; returns True if absent or successfully removed.
+    """
+    path = _task_artifact_path(task_id)
+    if path is None:
+        return False
+    if not path.exists():
+        return True
+    if not path.is_dir():
+        logger.warning("artifact path is not a directory: %s", path)
+        return False
+    root = artifacts_root().resolve()
+    resolved = path.resolve()
+    if resolved != root and root not in resolved.parents:
+        logger.warning("refusing to delete artifact path outside root: %s", resolved)
+        return False
+    try:
+        shutil.rmtree(resolved)
+        return True
+    except OSError as exc:
+        logger.warning("failed to delete artifact dir %s: %s", resolved, exc)
+        return False
 
 
 def _safe_filename(filename: str) -> str:

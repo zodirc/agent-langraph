@@ -870,8 +870,10 @@ body.theme-light .line.user {
 }
 
 body.theme-light .user-bubble {
-  background: #e5edf8;
-  color: #111111;
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #1d4ed8;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.25);
 }
 
 body.theme-light .line.node {
@@ -909,12 +911,27 @@ body.theme-light .writing-panel {
   background: #ecfdf5;
 }
 
+body.theme-light .file-workspace-header,
+body.theme-light .file-stream-toggle {
+  color: #1d4ed8;
+}
+
+body.theme-light .file-stream-toggle {
+  background: #eff6ff;
+}
+
+body.theme-light .file-stream-block {
+  border-color: #bfdbfe;
+  background: #f8fafc;
+}
+
 body.theme-light .file-panel {
   border-left-color: #3b82f6;
   background: #eff6ff;
 }
 
 body.theme-light .line.trace-writing,
+body.theme-light .line.file-stream-content,
 body.theme-light .line.content-body,
 body.theme-light .line.file-content {
   color: #0f172a;
@@ -1165,14 +1182,19 @@ body.theme-light .flow-node-box.error {
 }
 
 .user-bubble {
+  box-sizing: border-box;
   max-width: min(78%, 860px);
-  background: #e5edf8;
-  color: #111111;
-  border-radius: 999px;
-  padding: 10px 20px;
+  background: var(--accent);
+  color: #f8fafc;
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, #1e3a8a);
+  border-radius: 14px 18px 4px 18px;
+  padding: 10px 14px;
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
+  overflow-x: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 .user-bubble-actions {
@@ -1238,20 +1260,81 @@ body.theme-light .flow-node-box.error {
   margin-top: 10px;
 }
 
-.writing-panel,
-.file-panel {
+
+/* 流式/节选/工具读文件：同一文件区样式（不按大纲/手稿分色） */
+.file-workspace-header {
+  color: #93c5fd;
+  margin-top: 10px;
+}
+
+.file-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding-left: 4px;
+}
+
+.file-stream-block {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+}
+
+.file-stream-block .file-stream-body.is-active {
+  border-left: 3px solid #60a5fa;
+}
+
+.file-stream-toggle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: #93c5fd;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s var(--ease);
+}
+
+.file-stream-toggle:hover {
+  background: color-mix(in srgb, #60a5fa 12%, var(--bg-elevated));
+}
+
+.file-stream-body {
   max-height: 360px;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
+  margin: 0;
+  border-left: none;
+  border-radius: 0;
+  background: rgba(96, 165, 250, 0.06);
 }
 
-.writing-panel {
-  border-left-color: #34d399;
-  background: rgba(52, 211, 153, 0.08);
+.file-stream-body.collapsed {
+  display: none;
 }
 
-.file-panel {
+.file-stream-body .file-stream-content {
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.writing-panel,
+.file-panel,
+.content-fallback-panel {
+  max-height: 360px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   border-left-color: #60a5fa;
   background: rgba(96, 165, 250, 0.08);
 }
@@ -1262,25 +1345,15 @@ body.theme-light .flow-node-box.error {
 }
 
 .line.content-body,
-.line.file-content {
+.line.file-content,
+.line.file-stream-content,
+.line.trace-writing {
   color: #dbeafe;
   font-size: 13px;
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
-}
-
-.line.trace-writing {
-  color: #a7f3d0;
-  font-size: 13px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-
-.line.writing-header {
-  color: #6ee7b7;
-  margin-top: 10px;
 }
 
 .steer-confirm-panel {
@@ -1349,7 +1422,7 @@ body.theme-light .flow-node-box.error {
 
 .terminal-input-row {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 8px;
   padding: 12px 14px;
   border-top: 1px solid var(--border);
@@ -1359,15 +1432,29 @@ body.theme-light .flow-node-box.error {
 .prompt {
   color: var(--green);
   font-weight: 700;
+  flex-shrink: 0;
+  line-height: 1.45;
+  padding-bottom: 2px;
 }
 
 #command-input {
   flex: 1;
+  min-width: 0;
+  min-height: 1.45em;
+  max-height: 160px;
   border: none;
   outline: none;
   background: transparent;
   color: var(--text);
   font: inherit;
+  line-height: 1.45;
+  resize: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  field-sizing: content;
 }
 
 #command-input:disabled {

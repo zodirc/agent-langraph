@@ -713,7 +713,7 @@ class GraphRunner:
                 if now - last_event_at >= 8.0 and worker.is_alive():
                     yield _format_progress_event(
                         task_id,
-                        "仍在处理中（长任务如万字续写可能需数分钟）…",
+                        "仍在处理中…",
                         started_at=started_at,
                         phase="heartbeat",
                     )

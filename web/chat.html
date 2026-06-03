@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>对话 — Agent Runtime</title>
-  <link rel="stylesheet" href="/static/terminal.css?v=ui-14" />
+  <link rel="stylesheet" href="/static/terminal.css?v=ui-20" />
   <link rel="stylesheet" href="/static/platform.css?v=ui-14" />
 </head>
 <body class="platform-shell chat-page-shell" data-active-page="chat">
@@ -95,13 +95,12 @@
         </div>
         <form id="command-form" class="terminal-input-row" autocomplete="off">
           <label for="command-input" class="prompt">&gt;</label>
-          <input
+          <textarea
             id="command-input"
-            type="text"
-            list="command-suggestions"
-            placeholder="输入任务目标，或 /help 查看命令"
+            rows="1"
+            placeholder="输入任务目标，或 /help 查看命令（Shift+Enter 换行）"
             autofocus
-          />
+          ></textarea>
           <button id="stop-btn" type="button" class="stop-btn" disabled>Stop</button>
         </form>
         <datalist id="command-suggestions"></datalist>
@@ -140,6 +139,6 @@
   <script src="/static/platform-nav.js?v=6"></script>
   <script src="/static/platform-auth.js?v=6"></script>
   <script src="/static/skill_form.js?v=1"></script>
-  <script src="/static/app.js?v=ui-15"></script>
+  <script src="/static/app.js?v=ui-19"></script>
 </body>
 </html>

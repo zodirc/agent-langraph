@@ -119,6 +119,33 @@ class MemoryStore:
             conn.commit()
         return record
 
+    def delete_for_session(self, session_id: str) -> int:
+        """Delete episode memories scoped to this session (and matching task_id)."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return 0
+        if uses_postgres():
+            with postgres_connection() as conn:
+                cur = conn.execute(
+                    """
+                    DELETE FROM memories
+                    WHERE session_id = %s OR task_id = %s
+                    """,
+                    (sid, sid),
+                )
+                return int(getattr(cur, "rowcount", 0) or 0)
+
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                DELETE FROM memories
+                WHERE session_id = ? OR task_id = ?
+                """,
+                (sid, sid),
+            )
+            conn.commit()
+            return int(cur.rowcount or 0)
+
     def search(
         self,
         query: str,
