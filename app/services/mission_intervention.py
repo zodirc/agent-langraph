@@ -1,9 +1,8 @@
-"""
-Explicit mission intervention — no NLP / regex inference.
+"""Explicit mission intervention — no NLP
 
+regex inference.
 Users, clients, or the planning LLM set `mission_intervention` on the payload.
-When `force=true`, the control loop must honor the action before normal step_policy.
-"""
+When `force=true`, the control loop must honor the action before normal step_policy."""
 
 from __future__ import annotations
 

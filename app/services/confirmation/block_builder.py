@@ -1,4 +1,6 @@
-"""Unified ConfirmationBlock builder for intent / outcome gates."""
+"""Unified ConfirmationBlock builder for intent
+
+outcome gates."""
 
 from __future__ import annotations
 

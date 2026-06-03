@@ -1,4 +1,9 @@
-"""When to run retrieval / session memory for multi-turn QA."""
+"""检索策略
+route_after_planning 与 skip_retrieval
+
+When to run knowledge RAG vs session memory (multi-turn QA).
+needs_session_memory_retrieval 协作。
+Works with route_after_planning and planning's skip_retrieval flag."""
 
 from __future__ import annotations
 

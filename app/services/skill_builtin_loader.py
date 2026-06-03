@@ -1,4 +1,18 @@
-"""Load declarative skill definitions from config/skills/*.yaml."""
+"""内置 Skill YAML 加载
+启动链 Startup (get_skill_registry 单例初始化)
+    → parse_skill_yaml  # overlays, allowed_tools, presentation.input_form_schema
+    → validate_skill_definition(known_tools=registry.list_tools())
+  → SkillRegistry.register
+运行时解析 Runtime resolve (skill_registry.load_definition)
+  内存命中 → 返回 SkillDefinition
+  未命中 → skill_store.load(tenant) 租户 YAML
+  仍无 → KeyError → skill_resolver.SkillNotFoundError
+与 attach_skill_to_payload 关系: definition → build_runtime_policy → _skill_policy
+
+Builtin skill YAML loader.
+  load_skills_from_directory(config/skills)
+  load_all_package_definitions()  # skill_package_loader
+_builtin_ids"""
 
 from __future__ import annotations
 
@@ -32,6 +46,7 @@ def _coerce_enum(value: Any, enum_cls: type, default: Any) -> Any:
 
 
 def parse_skill_yaml(data: dict[str, Any]) -> SkillDefinition:
+    """单文件 YAML → SkillDefinition；overlay/allowed_tools 供 runtime policy 使用。"""
     pres_raw = data.get("presentation") or {}
     if not isinstance(pres_raw, dict):
         pres_raw = {}
@@ -90,6 +105,10 @@ def load_skills_from_directory(
     known_tools: list[str] | None = None,
     strict: bool = False,
 ) -> tuple[list[SkillDefinition], list[str]]:
+    """扫描目录下 *.yaml；strict=True 时跳过校验失败文件。
+
+    Scan *.yaml skill definitions; strict mode skips invalid files.
+    """
     root = Path(directory)
     if not root.is_dir():
         return [], []

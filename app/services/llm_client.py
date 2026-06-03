@@ -1,3 +1,8 @@
+"""LLM 客户端
+llm_gateway 与各 node 调用；MODEL_PROVIDER 决定厂商；circuit_breaker 可选熔断。
+
+LangChain model factory, invoke/stream structured JSON, retry + cache."""
+
 from __future__ import annotations
 
 import json

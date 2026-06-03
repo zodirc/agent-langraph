@@ -1,3 +1,10 @@
+"""主图条件路由：根据 status、plan、工具、writing_intent 选择下一节点。
+
+route_after_planning 主要分支：失败、mission 交接、ReAct、写作、检索、工具、reasoning。
+
+Main graph conditional edges; route_after_planning is the primary fork after planning.
+"""
+
 from __future__ import annotations
 
 from app.config.settings import settings
@@ -87,6 +94,7 @@ def route_after_writing(state: AgentState) -> str:
 
 
 def route_after_planning(state: AgentState) -> str:
+    """planning 完成后的主分叉；与 retrieval/tool/writing/reasoning 形成 DAG。"""
     status = str(state.get("status", ""))
     if status == TaskStatus.FAILED.value:
         return _failed_route(state, "planning")

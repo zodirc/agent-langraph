@@ -1,3 +1,14 @@
+"""规划节点：图入口，决定路由与工具集。
+
+调用方：app.runtime.graph、mission_act 内联流水线、reflection 重规划。
+主流程：早退（TOOL_FAILED）→ 重规划输入 → mission 机械 skip_planning_llm
+→ LLM 规划（skill planning_overlay、tool_selection）→ mission/writing 后处理
+→ validate_plan、work_plan、route_audit → PLANNED。
+写出：plan、selected_tools、writing_intent、skip_retrieval 等。
+
+Planning node: graph entry; LLM or skip path; writes plan and tools for routers.
+"""
+
 from __future__ import annotations
 
 import json
@@ -63,10 +74,9 @@ def _outline_status_for_planning(state: AgentState, payload: dict[str, Any]) -> 
 
 def planning_node(state: AgentState) -> AgentState:
     """
-    Understand task goal and produce execution plan via LLM.
+    理解目标并产出结构化计划；写出 plan、selected_tools、writing_intent 等。
 
-    Reads: input_payload, task_type
-    Writes: plan, selected_tools, writing_intent, manuscript, status, current_node, audit_log
+    Produce structured plan for the turn; next route_after_planning.
     """
     try:
         # If we're re-invoked from a snapshot where tool execution already exhausted retries,

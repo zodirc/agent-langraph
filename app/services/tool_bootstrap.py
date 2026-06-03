@@ -1,3 +1,8 @@
+"""工具启动注册
+顺序 Order: builtin (in ToolRegistry.__init__) → HTTP tools → MCP tools → skill_* tools.
+
+Tool bootstrap at app lifespan (once per process)."""
+
 from __future__ import annotations
 
 import logging

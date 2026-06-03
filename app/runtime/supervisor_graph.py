@@ -1,3 +1,11 @@
+"""Supervisor 多域分解图。
+
+supervisor_decompose → supervisor_worker → supervisor_merge → policy → output。
+graph_runner mode=supervisor；API POST /supervisor/tasks/stream。
+
+Multi-domain supervisor StateGraph with worker subtasks and shared output tail.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Iterator, Optional, cast

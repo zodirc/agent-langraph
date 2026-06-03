@@ -1,3 +1,9 @@
+"""任务状态持久化
+graph_runner 每轮 save；API GET /tasks/{id}/status 读取；合并时保留 steer 等易失字段。
+
+Persist AgentState snapshots (SQLite or PostgreSQL per tenant).
+Volatile keys (_VOLATILE_*) preserved across partial LangGraph node snapshots."""
+
 from __future__ import annotations
 
 import json

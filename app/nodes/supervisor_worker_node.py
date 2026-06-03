@@ -1,3 +1,12 @@
+"""Supervisor Worker 节点
+    → create_initial_state → run_worker_graph (retrieval→tool→reasoning)
+  聚合 worker_results + tool_results → status REASONED
+
+supervisor_worker — parallel domain workers.
+run_workers_parallel (worker_executor.py):
+  per subtask → execute_domain_worker_with_retry
+Next: supervisor_merge_node"""
+
 from __future__ import annotations
 
 from typing import Any

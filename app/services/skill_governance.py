@@ -1,4 +1,7 @@
-"""Skill catalog governance — global disable and per-tenant blocks."""
+"""Skill 治理
+resolve_skill_for_task 首行检查 is_skill_blocked_for_tenant；admin API 写入 _governance JSON。
+
+Catalog governance: global disabled list + per-tenant blocks."""
 
 from __future__ import annotations
 

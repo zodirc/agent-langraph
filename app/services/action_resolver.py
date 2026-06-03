@@ -1,8 +1,7 @@
-"""
-Candidate action resolver — replaces hard-coded if/else step routing.
+"""候选动作解析
 
-Flow: build_task_snapshot → domain pack candidates → score → select.
-"""
+Candidate action resolver for mission/writing steps.
+Flow: build_task_snapshot → domain pack candidates → score → select (replaces ad-hoc if/else)."""
 
 from __future__ import annotations
 

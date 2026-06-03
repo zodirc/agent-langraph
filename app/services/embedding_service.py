@@ -1,3 +1,8 @@
+"""向量嵌入
+knowledge upsert/search 调用 embed_texts；模型由 EMBEDDING_MODEL 配置。
+
+Text embeddings for knowledge_store (Voyage, local MiniLM, or hash fallback)."""
+
 from __future__ import annotations
 
 import hashlib

@@ -1,4 +1,8 @@
-"""Semantic context compression for long conversation histories."""
+"""上下文压缩
+session_turn
+
+Semantic (or char-truncate) compression for long conversation_history.
+conversation_context 在续聊轮次调用；默认 semantic_enabled=false。"""
 
 from __future__ import annotations
 

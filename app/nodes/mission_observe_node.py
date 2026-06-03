@@ -1,3 +1,10 @@
+"""Mission 观察节点
+reconcile_work_plan; orchestration 时可能 complete_current_work_item
+
+mission_observe — snapshot after act.
+attach_observation → artifact_delta → update_progress_from_observation
+Fixed edge: mission_act → observe → eval"""
+
 from __future__ import annotations
 
 from app.runtime.state import AgentState, append_audit, merge_state

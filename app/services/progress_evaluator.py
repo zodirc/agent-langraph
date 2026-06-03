@@ -1,6 +1,12 @@
-"""
-Progress evaluation — machine-checkable mission termination (domain-agnostic core + packs).
-"""
+"""Mission 进度评估
+evaluate_mission_control(state) — mission_eval + mission_decide 使用
+  检查 Checks: success_criteria, budget max_steps, failures, steer pause,
+              stepwise_pause, orchestration work_plan 完成度
+  返回 EvalResult: done, action (continue|finish|pause|escalate), reason
+Domain pack 可覆盖 evaluate_success
+
+Progress evaluation — machine-checkable termination.
+suggest_pause（writing 等）。"""
 
 from __future__ import annotations
 

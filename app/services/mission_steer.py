@@ -1,7 +1,12 @@
 """
-Mission steer — queue or apply user input without NLP inference.
+Mission steer：长任务中途纠偏。
 
-Optional structured `intervention` = forced override; plain `message` = next planning turn only.
+入口：task_api.steer_task → graph_runner.steer_mission → queue_steer_message；
+续聊 session_turn；边界 mission_decide/mission_act 前 consume_pending_steer。
+queue_steer_message：PAUSED/REASONED 立即 apply；RUNNING 写入 pending_user_message。
+apply_steer_message：合并文本与 intervention，可选 confirm 与 planning_gate。
+
+Mid-mission steer via API queue or immediate apply; integrates with planning and confirmation gates.
 """
 
 from __future__ import annotations
@@ -79,7 +84,10 @@ def complete_steer_planning(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def mission_must_run_planning(state: AgentState) -> bool:
-    """Block subgraph:writing until planning re-interprets steer / new goal."""
+    """在 planning 重新解释 steer 前，阻塞 subgraph:writing。
+
+    Block writing subgraph until planning re-interprets steer.
+    """
     payload = state.get("input_payload") or {}
     if steer_requires_planning(payload):
         return True
@@ -269,8 +277,9 @@ def apply_steer_message(
     replace_goal: bool = False,
 ) -> AgentState:
     """
-    Merge steer input. Structured intervention with force=true overrides the loop;
-    message-only steer defers to planning LLM + artifact tools on the next turn.
+    合并 steer 到 state（立即生效路径）；force intervention 可绕过 planning。
+
+    Merge steer into state; message-only steers set planning gate for next turn.
     """
     payload = dict(state.get("input_payload") or {})
     history = list(state.get("conversation_history") or payload.get("conversation_history") or [])
@@ -392,6 +401,10 @@ def has_pending_steer(task_id: str) -> bool:
 
 
 def consume_pending_steer(state: AgentState) -> AgentState:
+    """在 Mission 步边界消费 pending_user_message。
+
+    Drain pending_user_message at step boundary into apply_steer_message.
+    """
     pending = state.get("pending_user_message")
     if not pending_steer_is_set(pending):
         stored = get_state_store().load(state["task_id"])
@@ -432,6 +445,11 @@ def queue_steer_message(
     preempt: bool = False,
     replace_goal: bool = False,
 ) -> AgentState:
+    """
+    Steer API：按任务状态排队或立即 apply_steer_message。
+
+    Queue when MISSION_RUNNING; immediate apply when paused.
+    """
     if not (message or "").strip() and not intervention and not confirm:
         raise ValueError("steer requires message, intervention, and/or confirm=true")
 

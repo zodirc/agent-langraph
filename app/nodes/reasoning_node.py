@@ -1,3 +1,10 @@
+"""推理节点
+Route: reflection (low confidence
+
+Reasoning: structured answer from context; fast_reasoning shortcut optional.
+route_audit) | policy | dead_letter.
+Skill: reasoning_overlay in system prompt."""
+
 from __future__ import annotations
 
 import json

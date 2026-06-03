@@ -1,5 +1,10 @@
 """
-Mission act executor — runs pipeline or subgraph steps inside the control loop.
+Mission act 执行器：由 mission_act_node 调用（非 LangGraph 节点）。
+
+execute_mission_step 按 step_decision 与 work_item 分发；
+run_pipeline_request 内联 planning→retrieval→tool→writing→reasoning（不进 policy）。
+
+Executors for mission_act_node; execute_mission_step and run_pipeline_request drive inline subgraph.
 """
 
 from __future__ import annotations
@@ -45,8 +50,9 @@ def _forced_stop_requested(state: AgentState) -> bool:
 
 def run_pipeline_request(state: AgentState) -> AgentState:
     """
-    One mission step: planning → retrieval? → tools? → writing? → reasoning.
-    Stops before policy/output (mission control handles termination).
+    单步内联主图节点与 router，不经 LangGraph compile。
+
+    One mission step via main-graph nodes in a Python while loop.
     """
     state = prepare_state_for_mission_act(state)
     if _forced_stop_requested(state):
@@ -248,7 +254,11 @@ def run_subgraph_writing(state: AgentState) -> AgentState:
 
 
 def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
-    """Dispatch act phase by next_executor from control."""
+    """
+    mission_act 调度入口，按 step_decision 与 current_work_item 分发。
+
+    Dispatch act phase; may return MISSION_RUNNING, REASONED, MISSION_PAUSED, etc.
+    """
     from app.runtime.state import AgentState, TaskStatus, merge_state
     from app.services.manuscript_service import resolve_manuscript
 

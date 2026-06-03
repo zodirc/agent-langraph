@@ -1,3 +1,12 @@
+"""Mission 长任务图（独立 StateGraph）。
+
+循环：mission_init → mission_decide → mission_act → mission_observe → mission_eval。
+入口：graph_runner execution_mode=mission；或主图 planning 后 handoff。
+收尾：mission_finalize → policy → output → memory_writeback。
+
+Long-horizon mission graph: decide-act-observe-eval loop with shared output tail.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Iterator, Optional, cast
@@ -32,8 +41,9 @@ from app.services.session_turn import graph_thread_id
 
 
 def build_mission_graph() -> StateGraph:
-    """
-    Mission runtime: ReAct control loop (decide → act → observe → eval) then deliver.
+    """注册 Mission 节点与边；路由见 mission_router 与共享收尾段。
+
+    Register mission nodes, edges, and mission_router conditionals.
     """
     workflow = StateGraph(AgentState)
 

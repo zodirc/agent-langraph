@@ -1,4 +1,7 @@
-"""Run audit after planning and optionally after reflection replan."""
+"""路由审计管线
+planning_node 结束后调用；misroute 可触发 reflection 或 planning 修订。
+
+Post-planning route audit: compare plan vs signals → corrections or replan flag."""
 
 from __future__ import annotations
 

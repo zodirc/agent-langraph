@@ -1,4 +1,8 @@
-"""LangGraph checkpointer factory (SQLite dev / PostgreSQL production)."""
+"""LangGraph Checkpointer
+
+SQLite or PostgreSQL per CHECKPOINT_BACKEND.
+thread_id from graph_thread_id; resume_graph after human_review interrupt.
+checkpoint_recovery may reset thread on invoke failure and retry."""
 
 from __future__ import annotations
 

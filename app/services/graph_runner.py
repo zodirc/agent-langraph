@@ -1,3 +1,51 @@
+"""任务编排层：HTTP/CLI 与 LangGraph 之间的唯一执行桥梁。
+
+同步入口 start_task（POST /tasks）：
+  task_api.create_task
+    → prepare_session_turn（session_turn.py：新会话或续聊）
+    → _prepare_mission_for_turn（mission 初始化或 steer 续轮）
+    → apply_skill_from_payload（skill_task_attach.py）
+    → init_trace_context → state_store.save
+    → 租户配额（可选）→ _run_with_slot(_invoke_graph_safe)
+    → _maybe_pause_for_review（policy REVIEW → human_review_node）
+    → _finalize_turn → 持久化与 skill_metrics
+
+流式入口 stream_task（POST /tasks/stream）：
+  task_api.stream_task → _stream_single 或 _stream_supervisor
+  主线程 drain progress/trace/answer/thinking/writing 队列并输出 SSE
+  工作线程 _run_graph 执行 stream_graph 或 stream_mission_graph（含 handoff）
+
+图选择 _invoke_graph_safe(execution_mode)：
+  supervisor → run_supervisor_graph；exploration → run_exploration_graph
+  mission → run_mission_graph
+  single 且 enable_planning_mission_handoff：先 stream_graph 至 planning，再切 mission_graph
+  默认 single → run_graph（app.runtime.graph）
+  失败时 handle_invoke_failure 可 checkpoint_reset 后按同 mode 重试
+
+Mission steer（POST /tasks/{id}/steer）：
+  steer_mission → mission_steer.queue_steer_message
+  MISSION_PAUSED/REASONED 立即 apply_steer_message；RUNNING 写入 pending_user_message
+
+Task orchestration: sole bridge from HTTP/CLI to LangGraph.
+
+Sync start_task (POST /tasks):
+  task_api.create_task → prepare_session_turn → _prepare_mission_for_turn
+  → apply_skill_from_payload → init_trace_context → state_store.save
+  → tenant quota → _run_with_slot(_invoke_graph_safe) → _maybe_pause_for_review
+  → _finalize_turn → persist and skill_metrics
+
+Streaming stream_task (POST /tasks/stream):
+  task_api.stream_task → _stream_single or _stream_supervisor; main thread drains
+  side queues to SSE; worker thread runs stream_graph or stream_mission_graph.
+
+Graph selection _invoke_graph_safe(execution_mode):
+  supervisor/exploration/mission modes; optional planning→mission handoff on single;
+  default run_graph; handle_invoke_failure may reset checkpoint and retry.
+
+Mission steer: steer_mission → queue_steer_message; paused applies immediately,
+running queues pending_user_message for consume_pending_steer at step boundary.
+"""
+
 from __future__ import annotations
 
 import json
@@ -55,7 +103,17 @@ def _prepare_mission_for_turn(
     *,
     created: bool,
 ) -> AgentState:
-    """Init mission on first turn; on later turns apply steer and keep progress."""
+    """
+    Mission 轮次准备：图 invoke 前处理 mission 状态。
+
+    首轮 created=True：init_mission_state(payload)，绑定 domain pack。
+    续轮有 goal：apply_steer_message；有 execution_grant 则机械 apply_mission_step_to_payload，
+    否则清除 skip_planning_llm 等待 planning 解释 steer。
+    编排未完成且 COMPLETED 无 grant 时保持 MISSION_PAUSED。
+
+    Prepare mission state before graph invoke.
+    First turn: init_mission_state; continuation with goal uses steer and optional grant.
+    """
     from app.services.mission_orchestrator import orchestration_enabled, work_plan_completed
     from app.services.mission_steer import apply_steer_message
 
@@ -331,6 +389,15 @@ def _emit_worker_events(state: AgentState) -> Iterator[str]:
 
 
 class GraphRunner:
+    """
+    图执行门面，封装 LangGraph 编译图的选择与同步/流式执行。
+
+    对外 API：start_task、stream_task、steer_mission、prepare_resume_mission、resume_task。
+
+    Facade over compiled LangGraph graphs: start_task, stream_task, steer_mission,
+    prepare_resume_mission, resume_task (human review resume via resume_graph).
+    """
+
     def _run_with_slot(self, runner_fn):
         pool = get_graph_execution_pool()
         with pool.acquire():
@@ -343,6 +410,11 @@ class GraphRunner:
         thread: str,
         mode: str,
     ) -> AgentState:
+        """
+        按 execution_mode 选择 run_*_graph；handoff 时先 stream 主图 planning 再切 mission_graph。
+
+        Select graph by execution_mode; optional stream main graph until planning then mission_graph.
+        """
         try:
             if mode == "supervisor":
                 return run_supervisor_graph(state)
@@ -391,6 +463,11 @@ class GraphRunner:
         session_id: Optional[str] = None,
         new_session: bool = False,
     ) -> AgentState:
+        """
+        同步执行至图结束，返回终态 AgentState（含 COMPLETED、WAITING_REVIEW 等）。
+
+        Run graph synchronously; return final AgentState.
+        """
         payload = dict(input_payload or {})
         mode = execution_mode or payload.get("execution_mode", "single")
         session_key = session_id or payload.pop("session_id", None)
@@ -415,11 +492,12 @@ class GraphRunner:
                 mode = "single"
                 state = merge_state(state, execution_mode="single", mission=None)
         state = merge_state(state, execution_mode=mode)
+        # Promote _skill_* to state.skill_runtime_policy for planning/tool nodes
         if payload.get("skill_id") or payload.get("_skill_policy"):
             from app.services.skill_task_attach import apply_skill_from_payload
 
             state = apply_skill_from_payload(state, payload)
-        thread = graph_thread_id(state)
+        thread = graph_thread_id(state)  # LangGraph checkpointer thread_id
         from app.services.engineering_trace import init_trace_context
 
         state = init_trace_context(state, thread_id=thread, tenant_id=get_tenant_id())
@@ -513,6 +591,14 @@ class GraphRunner:
         yield from self._stream_single(state, created=created)
 
     def _stream_single(self, state: AgentState, *, created: bool = True) -> Iterator[str]:
+        """
+        单任务 SSE：主线程轮询 node_q 与侧信道队列，工作线程跑 stream_*_graph。
+
+        侧信道：progress_q、trace_q、answer_q、thinking_q、writing_q。
+        planning 后可 handoff 到 stream_mission_graph。
+
+        SSE pump: caller thread drains queues; worker runs stream_*_graph; optional mission handoff.
+        """
         yield _format_stream_event(
             "task_created",
             {
@@ -758,6 +844,11 @@ class GraphRunner:
         input_payload: dict[str, Any],
         task_id: Optional[str],
     ) -> Iterator[str]:
+        """
+        Supervisor 流式：无 session_turn，在调用线程同步 stream_supervisor_graph。
+
+        Supervisor SSE without session_turn; sync stream_supervisor_graph on caller thread.
+        """
         state = create_initial_state(
             task_id=task_id,
             user_id=user_id,
@@ -907,6 +998,11 @@ class GraphRunner:
         preempt: bool = False,
         replace_goal: bool = False,
     ) -> AgentState:
+        """
+        委托 mission_steer.queue_steer_message，由 API 层写 audit。
+
+        Delegates to mission_steer.queue_steer_message.
+        """
         from app.services.mission_steer import queue_steer_message
 
         updated = queue_steer_message(
@@ -922,7 +1018,13 @@ class GraphRunner:
         return updated
 
     def prepare_resume_mission(self, task_id: str, *, confirm: bool = False) -> AgentState:
-        """Apply steer gate confirmations and set MISSION_RUNNING (no graph invoke)."""
+        """
+        恢复 Mission：处理 steer 确认门、发放 execution_grant，不直接 invoke 图。
+
+        保留非 force-pause 的 pending_user_message；Web /confirm、task_api /resume 调用。
+
+        Prepare resume: confirm steer gates, issue_execution_grant, MISSION_RUNNING, no graph invoke.
+        """
         stored = get_state_store().load(task_id)
         if not stored:
             raise KeyError(f"Task not found: {task_id}")

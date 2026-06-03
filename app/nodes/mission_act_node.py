@@ -1,3 +1,11 @@
+"""Mission 执行节点 mission_act：执行控制环单步。
+
+调用链：mission_decide → mission_act → mission_observe → mission_eval。
+经 execute_mission_step 分发 pipeline、writing 子图或工具；finish/pause/escalate 时跳过执行。
+
+mission_act node runs one loop step via execute_mission_step (mission_executor).
+"""
+
 from __future__ import annotations
 
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
@@ -7,7 +15,10 @@ from app.services.state_store import get_state_store
 
 
 def mission_act_node(state: AgentState) -> AgentState:
-    """Execute one mission step (pipeline or subgraph)."""
+    """执行单步，由 execute_mission_step 调度。
+
+    Execute one mission step via execute_mission_step.
+    """
     decision = state.get("step_decision") or {}
     action = str(decision.get("action", "continue"))
 

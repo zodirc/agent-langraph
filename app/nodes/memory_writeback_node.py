@@ -1,3 +1,8 @@
+"""记忆写回
+主图固定边 Fixed edge: output → memory_writeback → END.
+
+Persist turn episode + session summary to long-term memory (graph terminal)."""
+
 from __future__ import annotations
 
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state

@@ -1,4 +1,8 @@
-"""Skill definition registry — catalog, disclosure, legacy invoke."""
+"""Skill 注册表
+
+Skill registry: builtin YAML + packages + tenant drafts at startup.
+load_definition: _definitions → skill_store (tenant) → KeyError
+list_definitions: merge builtin + tenant; filter by status/domain/role."""
 
 from __future__ import annotations
 

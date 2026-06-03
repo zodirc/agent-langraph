@@ -1,3 +1,15 @@
+"""主 Agent 图（LangGraph StateGraph）。
+
+build_agent_graph → cached_graph_compiler，interrupt_before human_review。
+典型路径：planning → retrieval|tool|writing|reasoning|react → reflection →
+policy → output_guard → output → memory_writeback → END。
+路由：app.runtime.router、react_router。
+对外：run_graph、stream_graph、resume_graph（graph_runner 调用）。
+
+Main single-turn LangGraph graph with planning-through-output pipeline.
+Routers in router and react_router; invoked via run_graph, stream_graph, resume_graph.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Iterator, Optional, cast
@@ -44,9 +56,13 @@ from app.services.session_turn import graph_thread_id
 
 
 def build_agent_graph() -> StateGraph:
-    """Build Agent execution graph per architecture §6.3."""
+    """注册主图节点与条件边；路由见 router 与 react_router。
+
+    Register agent graph nodes and conditional edges.
+    """
     workflow = StateGraph(AgentState)
 
+    # --- Cognition & execution ---
     workflow.add_node("planning", planning_node)
     workflow.add_node("retrieval", retrieval_node)
     workflow.add_node("tool_execution", tool_execution_node)
@@ -65,7 +81,7 @@ def build_agent_graph() -> StateGraph:
     workflow.add_node("react_observe", react_observe_node)
     workflow.add_node("react_finalize", react_finalize_node)
 
-    workflow.set_entry_point("planning")
+    workflow.set_entry_point("planning")  # Entry for all single-turn runs
 
     workflow.add_conditional_edges(
         "planning",
@@ -164,6 +180,7 @@ def build_agent_graph() -> StateGraph:
         },
     )
 
+    # --- Finish: policy → guard/review → output → memory ---
     workflow.add_conditional_edges(
         "policy",
         route_after_policy_to_guard,

@@ -1,6 +1,9 @@
-"""
-Mission lifecycle — init, progress update, pack resolution.
-"""
+"""Mission 生命周期
+init_mission_state: resolve_mission_pack → mission dict + progress → graph_runner
+
+Mission lifecycle — init, progress, domain pack resolution.
+mission_graph entry.
+should_run_mission_runtime: gate before switching execution_mode to mission."""
 
 from __future__ import annotations
 

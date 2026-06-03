@@ -1,4 +1,8 @@
-"""MCP server health, eviction, and protocol extensions (resources/prompts)."""
+"""MCP 运维
+周期 probe_all → 更新 _health/_evicted；被驱逐的服务器工具不再 register 到 tool_registry。
+
+MCP ops: probe health, evict failing servers, restore when healthy.
+Periodic probe_all updates health; evicted servers' tools are withheld from registry."""
 
 from __future__ import annotations
 

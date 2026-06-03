@@ -1,4 +1,7 @@
-"""Multi-tenant context (schema isolation hook for Phase 8)."""
+"""租户上下文
+影响 storage routing、知识库 metadata 过滤、skill_store 路径、PG search_path。
+
+Request-scoped tenant_id (ContextVar) from X-Tenant-Id header."""
 
 from __future__ import annotations
 

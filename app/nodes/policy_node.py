@@ -1,3 +1,8 @@
+"""策略节点
+
+Policy: score reasoning → CONTINUE | REVIEW | ESCALATE | REJECT.
+Route: route_after_policy_to_guard → output_guard | human_review | rejected."""
+
 from __future__ import annotations
 
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state

@@ -1,13 +1,12 @@
-"""
-Outline steer patch — model picks anchor from read_text_artifact output, then edit tool applies it.
-
-Flow (mission_act / edit_plot on outline):
+"""Flow (mission_act
   1. Tool: read_text_artifact(outline.txt)
-  2. Model: plan old_text / new_text from file content + user correction (structured)
+  2. Model: plan old_text
   3. Tool: edit_text_artifact with those anchors
 
-No keyword matching on user phrasing. Does not rewrite the whole outline.
-"""
+Outline steer patch — model picks anchor from read_text_artifact output, then edit tool applies it.
+edit_plot on outline):
+new_text from file content + user correction (structured)
+No keyword matching on user phrasing. Does not rewrite the whole outline."""
 
 from __future__ import annotations
 

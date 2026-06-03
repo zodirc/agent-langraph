@@ -1,3 +1,11 @@
+/**
+ * Skills 目录页：列表、详情、跳转 /chat 携带 skill_id。
+ *
+ * fetchCategories → fetchSkills → selectSkill → useSkillInCli。
+ *
+ * Skills catalog: list, detail, open chat with skill_id query params.
+ */
+
 function getAuthHeaders() {
   if (window.PlatformAuth) return window.PlatformAuth.getAuthHeaders();
   const headers = { "Content-Type": "application/json", Accept: "application/json" };
@@ -46,6 +54,7 @@ function sourceBadge(sourceType) {
   return `<span class="skill-origin-badge ${cls}">${text}</span>`;
 }
 
+/** GET /skills?status=published&scope&domain&category&q */
 async function fetchSkills() {
   const q = document.getElementById("skill-q")?.value?.trim() || "";
   const domain = document.getElementById("skill-domain")?.value || "";
@@ -136,6 +145,7 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+/** GET /skills/{id} 渲染详情与「在对话页使用」按钮 */
 async function selectSkill(skillId) {
   selectedSkillId = skillId;
   renderSkillList();

@@ -1,3 +1,12 @@
+"""AgentState：LangGraph 图内共享状态（TypedDict）。
+
+关键字段：input_payload、plan、selected_tools、tool_results、retrieved_knowledge、
+reasoning_result、policy_result、final_answer、node_history、skill_runtime_policy。
+merge_state 对嵌套 dict 浅合并，避免流式快照丢键。
+
+Shared LangGraph state (TypedDict) with merge_state for nested dict fields.
+"""
+
 from __future__ import annotations
 
 import uuid

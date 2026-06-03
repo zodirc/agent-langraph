@@ -1,4 +1,6 @@
-"""Tenant-scoped storage paths and provisioning (SQLite file / PG schema)."""
+"""Tenant-scoped storage paths and provisioning (SQLite file
+
+PG schema)."""
 
 from __future__ import annotations
 

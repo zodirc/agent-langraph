@@ -1,4 +1,9 @@
-"""Attach resolved skill policy to AgentState at task start."""
+"""图执行前将 skill 策略挂到 AgentState（graph_runner 调用 apply_skill_from_payload）。
+
+剥离 _skill_*，运行 pre_task hook，写入 skill_runtime_policy。
+
+Attach resolved skill policy to AgentState at task start.
+"""
 
 from __future__ import annotations
 
@@ -35,7 +40,10 @@ def apply_skill_from_payload(
     state: AgentState,
     payload: dict[str, Any],
 ) -> AgentState:
-    """Promote skill fields from input_payload onto state; strip internal keys."""
+    """从 input_payload 提升 skill 字段到 state，并剥离内部键。
+
+    Promote skill fields from input_payload onto state; strip internal keys.
+    """
     policy_raw = payload.pop("_skill_policy", None)
     snapshot = payload.pop("_skill_snapshot", None)
     skill_id = payload.get("skill_id")

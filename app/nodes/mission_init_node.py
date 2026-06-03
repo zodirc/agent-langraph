@@ -1,3 +1,10 @@
+"""Mission 初始化节点
+
+mission_init — first node in mission_graph.
+init_mission_state (domain pack) if state.mission missing
+reconcile_turn_contract_execution → audit → save
+Next: mission_decide (fixed edge)."""
+
 from __future__ import annotations
 
 from app.runtime.state import AgentState, append_audit, merge_state

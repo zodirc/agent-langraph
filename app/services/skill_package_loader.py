@@ -1,4 +1,8 @@
-"""Load enterprise/system skill packages from config/skill_packages/."""
+"""企业 Skill 包
+
+Enterprise skill packages: config/skill_packages/<pkg>/.
+load_all_package_definitions: scan dirs → load_package_skills → SYSTEM_PACKAGE tag.
+Invoked from skill_registry startup alongside config/skills builtins."""
 
 from __future__ import annotations
 

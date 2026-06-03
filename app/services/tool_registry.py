@@ -1,3 +1,9 @@
+"""工具注册表
+invoke 检查角色与 input_schema；planning 通过 tool_selection 缩小候选集。
+
+Tool registry: builtin + HTTP + MCP + optional skill_* wrappers.
+invoke checks role + schema; planning narrows candidates via tool_selection."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

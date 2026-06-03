@@ -1,8 +1,7 @@
-"""
-Deprecated — use app.services.mission_intervention for explicit forced intervention.
+"""Kept for import compatibility only; no NLP
 
-Kept for import compatibility only; no NLP / regex routing.
-"""
+Deprecated — use app.services.mission_intervention for explicit forced intervention.
+regex routing."""
 
 from __future__ import annotations
 

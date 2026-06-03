@@ -1,3 +1,8 @@
+"""Supervisor 任务 API
+复用 task_api._prepare_task_request（含 skill_id）；execution_mode 固定 supervisor。
+
+Multi-domain supervisor tasks → supervisor_graph via graph_runner."""
+
 from __future__ import annotations
 
 from typing import Any, Optional

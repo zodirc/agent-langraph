@@ -1,6 +1,6 @@
-"""
-Mission orchestration tools — LLM / client callable (no regex routing).
-"""
+"""Mission orchestration tools — LLM
+
+client callable (no regex routing)."""
 
 from __future__ import annotations
 

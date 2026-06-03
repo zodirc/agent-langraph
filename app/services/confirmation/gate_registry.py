@@ -1,8 +1,8 @@
-"""
-Declarative confirmation gate evaluation.
+"""确认门
+intent_gate_required: steer 后规划有实质变更时需用户确认再 mission_act。
 
-Rules live in config (confirmation_gates); this module evaluates context only.
-"""
+Declarative confirmation gates (config confirmation_gates).
+Rules in config; this module evaluates GateContext only (no side effects)."""
 
 from __future__ import annotations
 

@@ -1,9 +1,8 @@
-"""
-LLM Gateway — protocol-level response adaptation (block types, tool/schema).
+"""LLM Gateway — 协议层适配
+节点 Nodes call gateway instead of raw LangChain for metrics, retry, structured modes.
 
-Structured writing uses submit_artifact tool when the model is enabled; falls back to
-JSON-in-text only when configured or tool call absent.
-"""
+Protocol-level LLM response adaptation (blocks, tools, schema).
+Writing may use submit_artifact tool; falls back to JSON-in-text when disabled."""
 
 from __future__ import annotations
 

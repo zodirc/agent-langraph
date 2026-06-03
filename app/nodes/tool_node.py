@@ -1,3 +1,13 @@
+"""工具节点 tool_execution_node：按 tool_dag 执行 selected_tools。
+
+parse_tool_stages → execute_tool_stages；单工具经 tool_intent_guard 与 registry.invoke。
+失败处理：全失败 TOOL_FAILED；全非 retryable 时 router 转 reasoning。
+Skill 白名单在 planning 阶段已收窄工具列表。
+
+tool_execution_node runs tools via parse_tool_stages and execute_tool_stages.
+Uses tool_registry.invoke; route_after_tool selects next node.
+"""
+
 from __future__ import annotations
 
 import json
@@ -46,6 +56,7 @@ def tool_execution_node(state: AgentState) -> AgentState:
         blocked_results: list[dict[str, Any]] = []
         pending_events: list[tuple[str, str, dict[str, Any]]] = []
 
+        # Per-tool invoke closure passed to execute_tool_stages (may run in thread pool)
         def _invoke(tool_name: str, st: AgentState) -> dict[str, Any]:
             report_status_trace("tool_execution", f"调用工具: {tool_name}")
             params = _build_tool_params(tool_name, st)

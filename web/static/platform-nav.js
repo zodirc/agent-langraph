@@ -1,5 +1,7 @@
 /**
- * Unified top navigation: 平台 / 对话 / Skills + theme + auth.
+ * 统一顶栏：平台、对话、Skills，以及主题与鉴权。
+ *
+ * Unified top navigation with theme and auth.
  * Requires platform-auth.js. Set <body data-active-page="home|chat|skills|manage|test|dashboard">.
  */
 (function initPlatformNav() {

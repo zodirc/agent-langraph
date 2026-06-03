@@ -1,4 +1,7 @@
-"""Skill catalog API (Phase 1)."""
+"""Skill 目录 API
+
+Skill catalog API: list, detail, dry-run for Web /skills.
+Execution policy is NOT resolved here; task_api uses skill_resolver.attach at create time."""
 
 from __future__ import annotations
 

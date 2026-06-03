@@ -1,3 +1,10 @@
+"""Worker 子图：无 planning，从 retrieval 起，复用主图 tool 路由。
+
+由 worker_executor 调用；reasoning 在 supervisor_merge 汇总。
+
+Per-subtask worker graph: retrieval → tool → reasoning without planning.
+"""
+
 from __future__ import annotations
 
 from typing import Any

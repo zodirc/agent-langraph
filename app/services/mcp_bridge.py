@@ -1,3 +1,10 @@
+"""MCP 桥接：将外部 MCP 服务注册为 tool_registry 上的 ToolSpec。
+
+register_mcp_tools 在 tool_bootstrap 调用；stdio 或 HTTP 传输；不健康 server 被驱逐。
+
+MCP bridge registers external servers as prefixed tools on tool_registry.
+"""
+
 from __future__ import annotations
 
 import json
@@ -119,6 +126,10 @@ def _active_mcp_servers() -> list[dict[str, Any]]:
 
 
 def register_mcp_tools(registry: ToolRegistry) -> int:
+    """遍历 MCP_SERVERS 注册工具，返回注册数量。
+
+    Register all active MCP tools; return count.
+    """
     if not settings.MCP_ENABLED:
         return 0
     total = 0

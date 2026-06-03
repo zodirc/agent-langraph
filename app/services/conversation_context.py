@@ -1,4 +1,9 @@
-"""Canonical conversation history and turn-surface persistence for multi-turn sessions."""
+"""多轮会话上下文：追加、压缩、finalize_turn_history、memory_writeback。
+
+过滤不应进入下轮 LLM 的系统拒答等 surface 消息。
+
+Conversation history and turn finalize for multi-turn sessions.
+"""
 
 from __future__ import annotations
 

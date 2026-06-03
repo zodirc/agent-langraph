@@ -1,3 +1,9 @@
+"""人机审核
+有 review_feedback → 合并后走 output_guard；无反馈 → 暂停图执行。
+
+Human review: interrupt before this node; WAITING_REVIEW until feedback.
+With feedback → continue to output_guard; without → graph interrupt (resume_graph)."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone

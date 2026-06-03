@@ -1,3 +1,14 @@
+"""任务 HTTP API。
+
+创建与执行：POST /tasks、POST /tasks/stream → _prepare_task_request → GraphRunner。
+_prepare_task_request：sanitize_input_payload，可选 attach_skill_to_payload（仅 payload）。
+Mission 控制：POST /tasks/{id}/steer、resume、stop。
+查询：GET /tasks/{id}/status、result、audit 与任务列表。
+
+Task HTTP API for create, stream, mission steer/resume/stop, and status queries.
+_prepare_task_request sanitizes input and attaches skill policy to payload only.
+"""
+
 from __future__ import annotations
 
 import json
@@ -86,6 +97,11 @@ def _prepare_task_request(
     request: CreateTaskRequest,
     principal: AuthPrincipal,
 ) -> tuple[str, str, dict[str, Any]]:
+    """
+    归一化 payload；有 skill_id 时在图执行前解析策略。
+
+    Normalize payload and attach skill policy before graph runs.
+    """
     try:
         payload = sanitize_input_payload(request.input_payload)
     except ValueError as exc:
@@ -305,10 +321,9 @@ def steer_task(
     _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> SteerTaskResponse:
     """
-    Inject user guidance during or between orchestrated mission steps.
+    Mission 纠偏 API；RUNNING 排队，PAUSED 立即生效；confirm 走确认门。
 
-    While MISSION_RUNNING, the message is queued for the next step boundary.
-    While MISSION_PAUSED, it is applied immediately.
+    Inject steer during or between mission steps; see mission_steer module doc.
     """
     if not request.message.strip() and not request.intervention and not request.confirm:
         raise HTTPException(

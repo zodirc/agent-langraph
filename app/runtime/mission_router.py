@@ -1,3 +1,16 @@
+"""Mission 图条件路由
+  finish|pause|escalate → finalize (escalate 在 graph 中映射 finalize→policy)
+
+Conditional edges for mission_graph only.
+route_after_mission_decide:
+  continue → mission_act
+route_after_mission_eval:
+  mission_control.done → finalize
+  step >= MISSION_MAX_STEPS → finalize
+  FAILED → dead_letter
+  else → mission_decide (loop)
+route_mission_finalize: reasoning_result? → policy : mission_decide"""
+
 from __future__ import annotations
 
 from app.config.settings import settings

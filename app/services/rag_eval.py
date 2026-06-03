@@ -1,4 +1,9 @@
-"""RAG faithfulness and citation validation."""
+"""RAG 评估：引用与忠实度；output_guard 按配置合并结果。
+
+从 final_answer 与 retrieved_knowledge 计算 citation、faithfulness。
+
+RAG eval for citations and faithfulness; merged in output_guard when enabled.
+"""
 
 from __future__ import annotations
 

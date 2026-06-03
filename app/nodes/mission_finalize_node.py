@@ -1,3 +1,12 @@
+"""Mission 收尾节点
+无 reasoning_result 时:
+  否则 reasoning_node (full LLM)
+route_mission_finalize: 无 reasoning 时回 mission_decide。
+
+mission_finalize — exit loop → user-facing reasoning.
+  should_skip_llm_reasoning_on_finalize → build_mission_checkpoint_summary
+Then: policy → output_guard → output (shared with main graph tail)."""
+
 from __future__ import annotations
 
 from app.nodes.reasoning_node import reasoning_node

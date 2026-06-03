@@ -1,3 +1,8 @@
+"""策略引擎
+policy_node 写入 policy_result；route_after_policy_to_guard 决定 guard/review/reject。
+
+Policy engine: risk + review flags → CONTINUE | REVIEW | ESCALATE | REJECT."""
+
 from __future__ import annotations
 
 from typing import Any, Optional

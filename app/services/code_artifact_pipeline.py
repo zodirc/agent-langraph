@@ -1,10 +1,9 @@
-"""
-Code artifact pipeline: compile verification + deterministic / LLM repair with graded fallback.
+"""Code artifact pipeline: compile verification + deterministic
 
+LLM repair with graded fallback.
 Deterministic repairs run first for common token corruption; compiler stderr then drives
 LLM repair. Low-risk code tasks degrade gracefully instead of forcing human review.
-Configurable via config.yaml → code_artifact.
-"""
+Configurable via config.yaml → code_artifact."""
 
 from __future__ import annotations
 

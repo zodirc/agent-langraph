@@ -1,3 +1,11 @@
+"""Mission 决策节点 mission_decide：产出 step_decision。
+
+每轮 consume_pending_steer → reconcile_work_plan → evaluate_mission_control
+→ LLM 或规则 → route_after_mission_decide。
+
+mission_decide proposes StepDecision after steer consume and mission control eval.
+"""
+
 from __future__ import annotations
 
 import json
@@ -75,9 +83,9 @@ def _llm_step_decision(
 
 
 def mission_decide_node(state: AgentState) -> AgentState:
-    """
-    Control: propose next step (pack rules + eval hint).
-    When MISSION_LLM_DECIDE=true, LLM proposes StepDecision with rules as fallback.
+    """控制环决策：pack 规则与 eval 提示，可选 MISSION_LLM_DECIDE。
+
+    Propose StepDecision; LLM when enabled with rules as fallback.
     """
     from app.services.mission_steer import consume_pending_steer
 

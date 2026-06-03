@@ -1,3 +1,10 @@
+"""Supervisor 分解
+
+supervisor_decompose — goal → subtasks[].
+domain.worker_executor.decompose_task(goal, domains)
+Writes: subtasks, plan, execution_mode
+Graph: decompose → supervisor_worker → supervisor_merge → policy → …"""
+
 from __future__ import annotations
 
 import json

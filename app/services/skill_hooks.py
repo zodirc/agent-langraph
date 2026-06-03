@@ -1,4 +1,8 @@
-"""Trusted skill plugin hooks — declarative patches only (§14)."""
+"""受信任 Skill 插件钩子
+阶段 Stages: pre_task → planning_overlay → tool_filter → candidate_score
+  → output_validate → presentation_hint (apply_hook_stage).
+
+Trusted skill hooks — declarative patches only (§14)."""
 
 from __future__ import annotations
 

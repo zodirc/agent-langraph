@@ -1,3 +1,14 @@
+/**
+ * Web CLI（/chat）：消费 graph_runner 的 SSE。
+ *
+ * 请求链：handleCommand → runTaskStream → fetch /tasks/stream → consumeSseStream → handleStreamEvent。
+ * 事件：task_created、progress、trace、node、plan、writing_delta、answer_delta、done 等。
+ * Steer：/append、/confirm、/resume、/stop；Skill 经 buildTaskRequestBody 与 URL 参数注入。
+ *
+ * Web CLI SSE client for graph_runner.stream_task.
+ * Parses event-stream and updates terminal plus flow-graph sidebar.
+ */
+
 const outputEl = document.getElementById("output");
 const formEl = document.getElementById("command-form");
 const inputEl = document.getElementById("command-input");
@@ -1452,7 +1463,11 @@ function appendThinkingDelta(text) {
   scheduleThinkingFlush();
 }
 
-/** New manuscript stream panel per run / per filename (scroll stack, no reuse). */
+/**
+ * 每次运行或文件名新建手稿流面板（滚动栈，不复用）。
+ *
+ * New manuscript stream panel per run or filename.
+ */
 function ensureWritingPanel(filename = "") {
   const fname = (filename || "").trim();
   if (
@@ -2097,6 +2112,11 @@ function formatOrchestration(summary, detail) {
   return summary ? String(summary) : "";
 }
 
+/**
+ * 单条 SSE 事件分发到终端与 flow 面板。
+ *
+ * Dispatch one SSE event; binds taskIdRef.id on first task_id payload.
+ */
 function handleStreamEvent(eventType, payload, taskIdRef) {
   if (payload.task_id) {
     taskIdRef.id = payload.task_id;
@@ -2296,6 +2316,11 @@ function refreshCommandSuggestions(value) {
     .join("");
 }
 
+/**
+ * 解析 SSE 流（按空行分块，解析 event 与 data 行）。
+ *
+ * Read ReadableStream and parse SSE event/data lines.
+ */
 async function consumeSseStream(res, taskIdRef) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -2664,6 +2689,11 @@ function initSkillFromUrl() {
   }
 }
 
+/**
+ * 发起流式任务，结束后刷新 flow 面板。
+ *
+ * Start streamed task via POST /tasks/stream; refresh flow panel in finally.
+ */
 async function runTaskStream(goal, riskLevel = "LOW", endpoint = "/tasks/stream", body = null) {
   setRunning(true);
   shownConfirmationKeys.clear();

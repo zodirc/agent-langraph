@@ -1,4 +1,7 @@
-"""Initialize storage backends at application startup."""
+"""存储初始化
+
+Storage init at lifespan: SQLite|Postgres business DB + checkpointer + vector dirs.
+shutdown_storage: close PG pool, reset checkpointer, clear graph compile cache."""
 
 from __future__ import annotations
 

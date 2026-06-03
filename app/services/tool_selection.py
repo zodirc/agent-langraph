@@ -1,8 +1,7 @@
-"""
-Two-stage tool selection — retrieval then validation.
+"""两阶段工具选择
+阶段 Stages: relevance score by goal/domain → risk/role filter → skill allowlist intersect.
 
-Planning prompt receives top-k relevant tools instead of the full registry.
-"""
+Two-stage tool selection for planning prompt (top-k, not full registry)."""
 
 from __future__ import annotations
 

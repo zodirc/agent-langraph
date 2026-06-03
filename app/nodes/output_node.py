@@ -1,3 +1,8 @@
+"""输出节点
+
+Output: compose final_answer + artifacts from reasoning/tools/RAG.
+Then: output → memory_writeback → END; mission may stay MISSION_PAUSED."""
+
 from __future__ import annotations
 
 from typing import Any

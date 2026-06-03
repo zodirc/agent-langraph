@@ -1,4 +1,7 @@
-"""Secrets provider abstraction (env / k8s / vault)."""
+"""密钥提供者抽象：环境变量、k8s、vault 等后端。
+
+Secrets provider abstraction with env, k8s, and vault backends.
+"""
 
 from __future__ import annotations
 

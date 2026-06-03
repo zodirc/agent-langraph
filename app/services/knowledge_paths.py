@@ -1,4 +1,6 @@
-"""Filesystem paths for builtin / seed knowledge markdown (RAG source files)."""
+"""Filesystem paths for builtin
+
+seed knowledge markdown (RAG source files)."""
 
 from __future__ import annotations
 

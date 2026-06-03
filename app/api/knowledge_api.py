@@ -1,3 +1,8 @@
+"""知识库 HTTP API
+
+Knowledge API: upsert documents, hybrid search (feeds retrieval_node).
+POST /knowledge/documents → knowledge_store.upsert; GET search → hybrid_search."""
+
 from __future__ import annotations
 
 from typing import Any, Optional

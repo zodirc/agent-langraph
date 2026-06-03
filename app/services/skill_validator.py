@@ -1,4 +1,7 @@
-"""Static validation for skill definitions before load/publish."""
+"""Skill 静态校验
+load_skills_from_directory 与 skill_store.publish 调用；返回 issues 列表。
+
+Validate definitions before load/publish (overlay size, tools, required fields)."""
 
 from __future__ import annotations
 

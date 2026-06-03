@@ -1,3 +1,11 @@
+"""Mission 评估节点
+  → mark_mission_phase → status MISSION_RUNNING | MISSION_PAUSED | REASONED
+  → route_after_mission_eval → mission_decide | finalize | dead_letter
+steer 触发的 pause 可能在此 consume_pending_steer。
+
+mission_eval — program predicates, no LLM.
+evaluate_mission_control → mission_control {done, action, reason}"""
+
 from __future__ import annotations
 
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state

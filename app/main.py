@@ -1,3 +1,14 @@
+"""FastAPI 入口：挂载 API 路由与 Web 静态页。
+
+启动流程 lifespan：logging → 安全校验 → LangSmith → 存储初始化 → 知识库种子
+→ 工具与 MCP 注册 → 定时调度与审核超时 → 可选 A2A 自注册。
+运行时：/tasks → graph_runner；/tasks/stream → SSE；/skills → 技能目录。
+
+FastAPI entry: API routers and static web.
+lifespan initializes logging, storage, knowledge, tools, scheduler, optional A2A.
+Runtime routes tasks to graph_runner and skills catalog API.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -59,13 +70,14 @@ class DevStaticFiles(StaticFiles):
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # One-time process init; shutdown after yield / 进程级一次性初始化
     setup_logging()
     validate_runtime_security()
     configure_langsmith()
-    init_storage()
+    init_storage()  # state/audit/checkpoint 等后端
     seeded = seed_default_knowledge()
     ensure_builtin_knowledge()
-    tool_counts = bootstrap_tools()
+    tool_counts = bootstrap_tools()  # 内置 + HTTP + MCP → tool_registry
     get_scheduler_service().start()
     get_review_timeout_service().start()
     if settings_module.settings.A2A_SELF_URL:

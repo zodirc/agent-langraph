@@ -1,4 +1,8 @@
-"""Bounded concurrency for graph execution (API backpressure)."""
+"""图执行背压
+graph_runner._run_with_slot wraps start_task
+
+Bounded graph concurrency: acquire slot or GraphExecutionRejected (HTTP 429).
+stream worker invoke."""
 
 from __future__ import annotations
 

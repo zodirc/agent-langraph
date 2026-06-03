@@ -1,3 +1,8 @@
+"""内置工具
+含 artifact 读写、calculator、session FS、manuscript 分析等；planning 通过 tool_selection 候选。
+
+Builtin tool handlers registered at ToolRegistry init."""
+
 from __future__ import annotations
 
 from typing import Any

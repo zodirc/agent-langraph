@@ -1,10 +1,8 @@
-"""
-Entry gate for Self-Routed Deliberation Loop (SRDL).
+"""SRDL 入口：在固定主图、有界 ReAct、mission、supervisor 之间分流。
 
-Classifies requests into:
-  1. Fixed flow — continue existing explicit graph routing
-  2. Bounded ReAct — enter SRDL sub-loop
-  3. Higher runtime — mission / supervisor / exploration (unchanged)
+依据 turn_contract 与 should_use_mission_runtime 选择执行路径。
+
+Entry gate for Self-Routed Deliberation Loop routing (fixed graph, ReAct, mission).
 """
 
 from __future__ import annotations

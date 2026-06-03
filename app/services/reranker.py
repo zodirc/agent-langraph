@@ -1,4 +1,8 @@
-"""Reranking: lexical (default), optional cross-encoder, or Cohere API."""
+"""RAG 精排
+由 retrieval_node 或 knowledge 管线在 rag.rerank_enabled 时调用。
+
+Rerank retrieved docs: lexical (default), cross_encoder, or Cohere API.
+Invoked when rag.rerank_enabled after hybrid_search."""
 
 from __future__ import annotations
 

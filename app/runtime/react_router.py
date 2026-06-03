@@ -1,4 +1,7 @@
-"""Routing functions for Self-Routed Deliberation Loop (SRDL) subgraph."""
+"""ReAct 子图路由
+主图 planning 在 should_enter_react_loop 时进入 react_deliberate。
+
+SRDL subgraph routing (react_deliberate → execute → observe → finalize)."""
 
 from __future__ import annotations
 

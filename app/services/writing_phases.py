@@ -1,9 +1,8 @@
-"""
-Writing mission phases — model-chosen micro-cycle (write / review / polish / …).
+"""Writing mission phases — model-chosen micro-cycle (write
 
+review / polish / …).
 The mission_decide LLM picks `params.writing_phase` each step; mission_act maps it to
-writing_intent. Phases are optional and on-demand, not a fixed pipeline.
-"""
+writing_intent. Phases are optional and on-demand, not a fixed pipeline."""
 
 from __future__ import annotations
 

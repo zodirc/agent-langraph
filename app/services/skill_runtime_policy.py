@@ -1,4 +1,8 @@
-"""Build SkillRuntimePolicy from SkillDefinition and task context."""
+"""运行时 Skill 策略
+
+Runtime policy from SkillDefinition (overlays, tool allowlist, weights).
+build_runtime_policy → consumed by planning, tool_selection, output_guard;
+overlays rendered via skill_overlay_template + skill_params."""
 
 from __future__ import annotations
 

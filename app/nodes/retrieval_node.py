@@ -1,3 +1,10 @@
+"""检索节点 retrieval_node：hybrid_search 与会话记忆写入 state。
+
+路由 route_after_retrieval → tool、writing 或 reasoning。
+
+Retrieval node: hybrid_search and session memory; route_after_retrieval next hop.
+"""
+
 from __future__ import annotations
 
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state

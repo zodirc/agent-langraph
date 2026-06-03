@@ -1,3 +1,14 @@
+"""领域 Worker 执行
+  → {subtask_id, domain, status, summary, tool_results, node_history}
+调用方 Callers: supervisor_decompose_node, supervisor_worker_node, supervisor_merge retry
+
+Domain worker execution for supervisor subgraph.
+execute_domain_worker:
+  get_domain_pack(domain) → create_initial_state(task_id=parent:subtask)
+  merge plan/selected_tools from pack → run_worker_graph (worker_graph.py)
+run_workers_parallel: ThreadPoolExecutor over subtasks; merge errors/tool_results
+decompose_task: LLM/heuristic split supervisor goal into subtask list"""
+
 from __future__ import annotations
 
 import json

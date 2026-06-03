@@ -61,7 +61,10 @@ def _clean_optional_str(value: Any) -> str:
 
 
 class Settings:
-    """Unified configuration loaded from config/config.yaml."""
+    """统一配置：config.yaml 与环境变量 ${ENV} 替换。
+
+    Unified config from config.yaml with env substitution (CONFIG_PATH override).
+    """
 
     def __init__(self, config_path: str | None = None) -> None:
         root = Path(__file__).resolve().parents[2]

@@ -1,3 +1,8 @@
+"""输出护栏
+
+Output guard: skill validate + PII/optional LLM; fail → rejected.
+After human_review resume: fixed edge human_review → output_guard."""
+
 from __future__ import annotations
 
 from app.config.settings import settings

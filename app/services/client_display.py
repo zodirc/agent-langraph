@@ -1,9 +1,8 @@
-"""
-Server-composed UI hints for Web/API clients.
+"""Clients should render `system_lines` and structured `display`
 
-Clients should render `system_lines` and structured `display` / `autonomous_ui`
-instead of branching on intervention action names in the browser.
-"""
+Server-composed UI hints for Web/API clients.
+`autonomous_ui`
+instead of branching on intervention action names in the browser."""
 
 from __future__ import annotations
 

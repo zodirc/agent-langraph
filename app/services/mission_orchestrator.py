@@ -1,8 +1,10 @@
 """
-Long-horizon mission orchestration — short work items, stepwise execution.
+Mission 编排：progress.work_plan 与 agenda 项逐步执行。
 
-Work plans are supplied explicitly (API / planning tools) or grown lazily from
-step_policy (one item per pause), not pre-computed with hard-coded chapter counts.
+ensure_work_plan、ensure_next_work_item、get_current_work_item、
+mark_work_item_done；与 mission_decide、mission_act、mission_eval 协作。
+
+Long-horizon work_plan orchestration via task_agenda and mission graph nodes.
 """
 
 from __future__ import annotations
@@ -115,6 +117,10 @@ def build_next_lazy_work_item(state: AgentState, mission: dict[str, Any]) -> Opt
 
 
 def ensure_work_plan(state: AgentState) -> AgentState:
+    """首次启用编排时创建 progress.work_plan。
+
+    Bootstrap work_plan when orchestration is enabled.
+    """
     mission = state.get("mission") or {}
     if not orchestration_enabled(mission):
         return state
@@ -166,6 +172,10 @@ def _has_pending_items(plan: dict[str, Any]) -> bool:
 
 
 def get_current_work_item(state: AgentState) -> Optional[dict[str, Any]]:
+    """解析当前应执行的 agenda 项。
+
+    Resolve active or next runnable work item.
+    """
     from app.services.task_agenda import ensure_agenda_fields, select_next_runnable_item
 
     plan = ensure_agenda_fields(_plan(state))

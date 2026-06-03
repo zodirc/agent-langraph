@@ -1,8 +1,7 @@
-"""
-Plan validation — semantic checks after planning, before routing.
+"""Complements normalize_planning_plan
 
-Complements normalize_planning_plan / normalize_selected_tools (format only).
-"""
+Plan validation — semantic checks after planning, before routing.
+normalize_selected_tools (format only)."""
 
 from __future__ import annotations
 

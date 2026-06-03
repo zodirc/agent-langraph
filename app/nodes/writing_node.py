@@ -1,3 +1,9 @@
+"""写作节点
+流式 writing_delta via writing_stream；steer 可 preempt 长写作步。
+
+Writing: artifact/manuscript generation when writing_intent.enabled.
+Route: route_after_writing → reasoning | retry writing | dead_letter."""
+
 from __future__ import annotations
 
 import shutil

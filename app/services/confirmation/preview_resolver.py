@@ -1,8 +1,7 @@
-"""
-Preview strategy resolver — maps work_item / intervention to artifact excerpts.
+"""Preview strategy resolver — maps work_item
 
-Modes: full, head, tail, range, diff, delta, none (from config defaults).
-"""
+intervention to artifact excerpts.
+Modes: full, head, tail, range, diff, delta, none (from config defaults)."""
 
 from __future__ import annotations
 

@@ -1,11 +1,15 @@
-"""
-Tool execution DAG — parallel stages with dependency order.
+"""工具 DAG 执行
+规划输入 Planning sets (planning_node → input_payload)
+  tool_stages: [["calc","read"], ["write"]]  — 显式阶段，同阶段并行
+  tool_dag: { nodes:[{id,tool,params}], edges:[{from,to}] } — 拓扑分层 → stages
+  优先 tool_stages → 否则 _stages_from_dag → 否则每工具单阶段 [[t],...]
+  顺序执行各 stage；stage 内 ThreadPoolExecutor 并行 (TOOL_EXEC_MAX_WORKERS)
+  invoke_fn 由 tool_execution_node._invoke 提供（含 intent_guard、registry.invoke）
+调用方 Caller: tool_execution_node only.
 
-Planning may set:
-  tool_stages: [["calculator", "get_runtime_info"], ["echo"]]
-or
-  tool_dag: { "nodes": [{"id":"calc","tool":"calculator","params":{}}], ...], "edges": [] }
-"""
+Tool execution DAG — ordered stages, parallel within stage.
+parse_tool_stages(payload, selected_tools)
+execute_tool_stages(stages, invoke_fn)"""
 
 from __future__ import annotations
 

@@ -1,3 +1,8 @@
+"""反思节点
+路由 route_after_reflection → planning | reasoning | policy (verdict-driven).
+
+Reflection: critique reasoning before policy; may replan or retry reasoning."""
+
 from __future__ import annotations
 
 import json

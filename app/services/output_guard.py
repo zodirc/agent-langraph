@@ -1,6 +1,7 @@
-"""
-Output guardrails — segment-aware PII detection and optional LLM review (Ch18).
-"""
+"""输出护栏实现
+由 output_guard_node 调用 evaluate_output；与 skill_output_validator 结果合并。
+
+Output guardrails — PII scan + optional LLM review (Ch18)."""
 
 from __future__ import annotations
 

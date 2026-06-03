@@ -1,4 +1,7 @@
-"""Checkpoint corruption detection and thread reset."""
+"""Checkpoint 恢复
+
+Detect corrupt checkpoint (missing keys, node loop) and reset thread.
+graph_runner._invoke_graph_safe calls handle_invoke_failure on invoke errors."""
 
 from __future__ import annotations
 

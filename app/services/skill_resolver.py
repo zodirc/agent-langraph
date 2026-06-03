@@ -1,4 +1,9 @@
-"""Resolve skill_id to SkillRuntimePolicy with visibility and permission checks."""
+"""Skill 解析：API 阶段 attach_skill_to_payload，图阶段 apply_skill_from_payload。
+
+resolve_skill_for_task 产出 definition、runtime policy、snapshot。
+
+Resolve skill_id to SkillRuntimePolicy with visibility and permission checks.
+"""
 
 from __future__ import annotations
 
@@ -40,6 +45,10 @@ def resolve_skill_for_task(
     skill_params: Optional[dict[str, Any]] = None,
     domain_override: Optional[str] = None,
 ) -> tuple[SkillDefinition, SkillRuntimePolicy, dict[str, Any]]:
+    """完整解析链：definition、runtime policy、payload 快照。
+
+    Full resolve: definition, runtime policy, and snapshot for payload.
+    """
     from app.services.skill_governance import is_skill_blocked_for_tenant
 
     if is_skill_blocked_for_tenant(skill_id, tenant_id):
@@ -79,7 +88,10 @@ def attach_skill_to_payload(
     user_role: str = "user",
     tenant_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Merge skill resolution into task input_payload (structured only)."""
+    """API 层将 skill 解析结果写入 input_payload（图执行前）。
+
+    Merge skill resolution into task input_payload (structured only).
+    """
     definition, policy, snapshot = resolve_skill_for_task(
         skill_id,
         user_role=user_role,

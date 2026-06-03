@@ -1,4 +1,6 @@
-"""Structured outline diff for replan / alignment pipeline."""
+"""Structured outline diff for replan
+
+alignment pipeline."""
 
 from __future__ import annotations
 

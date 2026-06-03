@@ -1,9 +1,8 @@
-"""
-Manuscript continuation context — tail + outline slice + chapter cursor.
+"""for full prose; episodic memory stores summaries
 
+Manuscript continuation context — tail + outline slice + chapter cursor.
 Keeps long-form writing coherent (not fragmented) without relying on vector memory
-for full prose; episodic memory stores summaries / story-bible tags separately.
-"""
+story-bible tags separately."""
 
 from __future__ import annotations
 

@@ -1,4 +1,9 @@
-"""Persistent store for tenant/user custom skills (YAML + version snapshots)."""
+"""租户自定义 Skill 存储：draft、publish、版本快照与回滚。
+
+skill_registry 未命中内存缓存时从此加载 YAML 定义。
+
+Tenant custom skills on disk with version snapshots and rollback.
+"""
 
 from __future__ import annotations
 

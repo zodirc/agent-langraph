@@ -1,3 +1,10 @@
+"""知识库：SQLite 或 Postgres 目录 + Chroma 或 Qdrant 向量。
+
+upsert_document 分块嵌入入库；hybrid_search 供 retrieval_node 做 RRF 混合检索。
+
+Hybrid knowledge store with upsert_document and hybrid_search for retrieval_node.
+"""
+
 from __future__ import annotations
 
 import json
@@ -255,7 +262,10 @@ class _QdrantVectorIndex:
 
 
 class KnowledgeStore:
-    """Hybrid knowledge store: SQLite registry + ChromaDB vectors."""
+    """混合知识库门面：SQL 目录 + 向量索引，按租户路由。
+
+    Hybrid store facade: SQLite or Postgres catalog plus Chroma or Qdrant vectors.
+    """
 
     def __init__(self, db_path: Optional[str] = None, vector_path: Optional[str] = None) -> None:
         self.db_path = db_path or settings.SQLITE_PATH
@@ -797,6 +807,10 @@ class KnowledgeStore:
         *,
         domains: Optional[set[str]] = None,
     ) -> list[dict[str, Any]]:
+        """混合检索：向量 + 关键词 RRF，可选 rerank。
+
+        Main retrieval entry: vector and keyword merge with optional rerank.
+        """
         limit = top_k or settings.RETRIEVAL_TOP_K
         multiplier = max(1, int(getattr(settings, "RAG_FETCH_K_MULTIPLIER", 4)))
         fetch_k = limit * multiplier

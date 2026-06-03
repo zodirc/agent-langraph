@@ -1,8 +1,8 @@
-"""
-Unified turn facts — single source of truth for what executed this session turn.
+"""回合事实层
+reasoning_node 必须以 turn_facts 为已发生动作的真值
 
-Reasoning MUST treat `turn_facts` as ground truth for actions already taken.
-"""
+turn_facts: canonical record of tools/RAG/writing executed this turn.
+Reasoning must not contradict turn_facts."""
 
 from __future__ import annotations
 

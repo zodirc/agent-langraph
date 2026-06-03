@@ -1,3 +1,10 @@
+"""多轮会话：session_id 映射 task_id，每轮独立 checkpoint 线程。
+
+prepare_session_turn 解析续聊、steer、mission 恢复；graph_thread_id 隔离 LangGraph 状态。
+
+Multi-turn session turn resolution and per-turn checkpoint thread ids.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -85,11 +92,9 @@ def prepare_session_turn(
     payload: dict[str, Any],
     new_session: bool = False,
 ) -> tuple[AgentState, bool]:
-    """
-    Resolve state for this user message.
+    """为本轮用户消息解析 AgentState；返回 (state, created)。
 
-    When session mode is on and session_id is set, one session maps to one task_id
-    (task_id == session_id). Returns (state, created_new_task).
+    One session maps to one task_id when SESSION_ENABLED; created=True for new task.
     """
     goal = str(
         payload.get("goal") or payload.get("query") or payload.get("question") or ""

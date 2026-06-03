@@ -1,3 +1,10 @@
+"""FastAPI 依赖：鉴权、租户头、任务访问与限流。
+
+get_current_principal → bind tenant → require_task_access；本地可关 AUTH。
+
+Auth, tenant binding, rate limits, and task access for protected routes.
+"""
+
 from __future__ import annotations
 
 from typing import Optional

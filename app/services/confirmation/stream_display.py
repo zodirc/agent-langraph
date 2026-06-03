@@ -1,4 +1,6 @@
-"""SSE / API display helpers — avoid duplicating gate content in final_answer."""
+"""SSE
+
+API display helpers — avoid duplicating gate content in final_answer."""
 
 from __future__ import annotations
 
