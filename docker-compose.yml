@@ -4,7 +4,7 @@
 #       宿主机通过 .env 注入环境变量，映射到 config.docker.yaml 的 ${VAR:default}
 #
 # 本地默认（HTTPS + 热更新）：make init && make up
-#   访问 https://localhost:${HOST_PORT:-8080}/
+#   平台 https://localhost:${HOST_PORT:-8080}/  对话 /chat
 #
 # 生产模式（HTTPS，无热更新，代码在镜像内）：
 #   make prod

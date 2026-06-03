@@ -177,11 +177,20 @@ def planning_node(state: AgentState) -> AgentState:
             task_type=str(state.get("task_type") or ""),
             payload=payload,
         )
+        from app.services.skill_task_attach import (
+            merge_domain_pack_tools_with_skill,
+            skill_tool_allowlist_from_state,
+        )
+
+        pack_tools = merge_domain_pack_tools_with_skill(
+            list(planning_pack.tools or []) or None,
+            skill_tool_allowlist_from_state(state),
+        )
         runtime_caps = build_runtime_capabilities(
             goal=goal_for_planning,
             domain=str(planning_pack.name or ""),
             risk_level=str(payload.get("risk_level") or "LOW"),
-            pack_tools=list(planning_pack.tools or []) or None,
+            pack_tools=pack_tools,
         )
         user_content = json.dumps(
             {

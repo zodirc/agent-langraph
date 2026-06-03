@@ -1,0 +1,33 @@
+skill_id: outline_patch
+name: Outline Patch
+version: "1.0.0"
+description: Patch fiction outline with plot edits while preserving continuity.
+summary: Targeted outline edits via read/edit artifacts.
+source_type: builtin
+status: published
+visibility: system_public
+base_domain: writing
+category: writing
+preferred_execution_mode: single
+required_role: user
+risk_level: LOW
+enabled: true
+tags: [writing, general]
+allowed_tools: [read_text_artifact, edit_text_artifact]
+planning_overlay: |
+  Skill: outline_patch. Change request: {{goal}}. Read outline.txt; use edit_plot style interventions; avoid full rewrite unless asked.
+reasoning_overlay: |
+  Summarize what changed in the outline; cite file paths from turn_facts.
+output_contract:
+  require_summary: true
+presentation:
+  display_order: 43
+  input_form_schema:
+    type: object
+    properties:
+      goal: { type: string, title: "Outline change" }
+    required: [goal]
+  example_prompts: ["Change protagonist age in outline"]
+examples:
+  - input: "Move climax to chapter 10"
+    output: "Patched outline summary"

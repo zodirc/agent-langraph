@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Skills — Agent Runtime</title>
+  <link rel="stylesheet" href="/static/terminal.css?v=theme-5" />
+  <link rel="stylesheet" href="/static/platform.css?v=6" />
+  <link rel="stylesheet" href="/static/skills.css?v=4" />
+</head>
+<body class="platform-shell" data-active-page="skills" data-nav-extra="manage">
+  <div id="platform-nav"></div>
+  <div class="skills-page">
+    <header class="skills-header">
+      <span class="skills-sub" style="margin-left:0">包: <code id="pkg-count">…</code></span>
+      <h1>Skills Catalog</h1>
+      <p class="skills-sub">浏览平台技能，一键带入对话页发起任务（提交 skill_id + 参数，非 Prompt 拼接）</p>
+    </header>
+    <div class="skills-layout">
+      <aside class="skills-filters">
+        <label>搜索<input type="search" id="skill-q" placeholder="名称或描述" /></label>
+        <label title="平台预置的官方 Skill vs 本租户在「管理」页创建的 Skill">来源
+          <select id="skill-source">
+            <option value="">全部</option>
+            <option value="system">平台内置</option>
+            <option value="tenant">自定义</option>
+          </select>
+        </label>
+        <label title="产品场景分组（代码 / 文档 / 写作等），便于浏览目录">场景
+          <select id="skill-category">
+            <option value="">全部</option>
+          </select>
+        </label>
+        <label title="运行时执行域：影响工具包、Domain Pack 与图路由（可与场景不同）">运行域
+          <select id="skill-domain">
+            <option value="">全部</option>
+          </select>
+        </label>
+        <p class="skills-filter-hint">
+          <strong>来源</strong>：谁提供的技能。<strong>场景</strong>：目录上的业务分类。<strong>运行域</strong>：执行时走的 Runtime 域（如 code、writing）。
+        </p>
+        <button type="button" id="skill-refresh" class="flow-btn">刷新</button>
+      </aside>
+      <main class="skills-list" id="skills-list">
+        <p class="flow-empty">加载中…</p>
+      </main>
+      <aside class="skills-detail" id="skills-detail">
+        <p class="flow-empty">选择一项技能查看详情</p>
+      </aside>
+    </div>
+  </div>
+  <script src="/static/platform-nav.js?v=6"></script>
+  <script src="/static/platform-auth.js?v=6"></script>
+  <script src="/static/skills.js?v=5"></script>
+</body>
+</html>

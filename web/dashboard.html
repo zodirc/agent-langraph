@@ -3,35 +3,64 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Agent Monitor</title>
-  <link rel="stylesheet" href="/static/dashboard.css" />
+  <title>监控 — Agent Runtime</title>
+  <link rel="stylesheet" href="/static/terminal.css?v=theme-5" />
+  <link rel="stylesheet" href="/static/platform.css?v=6" />
+  <link rel="stylesheet" href="/static/dashboard.css?v=3" />
 </head>
-<body>
-  <header>
-    <h1>Agent 任务监控面板</h1>
-    <nav>
-      <a href="/">Web CLI</a>
-      <a href="/dashboard">监控面板</a>
-      <a href="/metrics" target="_blank">Prometheus</a>
-    </nav>
-  </header>
-  <main>
-    <section id="metrics-cards" class="cards"></section>
-    <section>
-      <h2>最近任务</h2>
-      <table id="tasks-table">
-        <thead><tr><th>ID</th><th>状态</th><th>节点</th><th>目标</th><th>更新</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </section>
-    <section>
-      <h2>死信队列 (DLQ)</h2>
-      <table id="dlq-table">
-        <thead><tr><th>ID</th><th>重试</th><th>错误</th><th>入队时间</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </section>
-  </main>
-  <script src="/static/dashboard.js"></script>
+<body class="platform-shell" data-active-page="dashboard">
+  <div id="platform-nav"></div>
+  <div class="dashboard-page">
+    <header class="dashboard-header">
+      <div class="dashboard-header-text">
+        <h1>Agent 任务监控</h1>
+        <p class="dashboard-sub">任务状态、死信队列与运行时指标概览（每 10 秒自动刷新）</p>
+      </div>
+      <div class="dashboard-toolbar" aria-label="运维链接">
+        <a
+          id="dashboard-metrics-link"
+          class="dashboard-toolbar-btn"
+          href="/metrics"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Prometheus 文本格式抓取端点，供 Prometheus / Grafana 采集"
+        >
+          <span class="dashboard-toolbar-title">Prometheus 抓取</span>
+          <code class="dashboard-toolbar-path">/metrics</code>
+        </a>
+        <a
+          class="dashboard-toolbar-btn dashboard-toolbar-btn-secondary"
+          href="/health"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="运行时健康检查 JSON"
+        >
+          <span class="dashboard-toolbar-title">健康检查</span>
+          <code class="dashboard-toolbar-path">/health</code>
+        </a>
+      </div>
+    </header>
+    <main class="dashboard-main">
+      <section id="metrics-cards" class="cards" aria-label="指标卡片"></section>
+      <section class="dashboard-section">
+        <h2>最近任务</h2>
+        <table id="tasks-table">
+          <thead><tr><th>ID</th><th>状态</th><th>节点</th><th>目标</th><th>更新</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+      <section class="dashboard-section">
+        <h2>死信队列 (DLQ)</h2>
+        <table id="dlq-table">
+          <thead><tr><th>ID</th><th>重试</th><th>错误</th><th>入队时间</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+      <p id="dashboard-status" class="dashboard-status" role="status" hidden></p>
+    </main>
+  </div>
+  <script src="/static/platform-nav.js?v=6"></script>
+  <script src="/static/platform-auth.js?v=6"></script>
+  <script src="/static/dashboard.js?v=3"></script>
 </body>
 </html>

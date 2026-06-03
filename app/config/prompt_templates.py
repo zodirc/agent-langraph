@@ -223,6 +223,11 @@ DOMAIN_PLANNING_OVERLAYS: dict[str, str] = {
         "- Use calculator only for numeric checks, not for code generation."
     ),
     "document": (
+        "Domain: documents and specifications.\n"
+        "- Prefer read_text_artifact for source material.\n"
+        "- Summaries must stay faithful to retrieved or read content."
+    ),
+    "document": (
         "Domain: document processing.\n"
         "- Focus on extraction, structure, and evidence from artifacts.\n"
         "- Use retrieval when domain knowledge may apply."
@@ -301,7 +306,31 @@ def resolve_role_instructions(
         if overlay:
             base = f"{base}\n\n{overlay}"
 
+    skill_overlay = _skill_overlay_for_purpose(state, purpose_key)
+    if skill_overlay:
+        base = f"{base}\n\n[Skill overlay]\n{skill_overlay}"
+
     return base
+
+
+def _skill_overlay_for_purpose(
+    state: Optional[dict[str, Any]],
+    purpose_key: str,
+) -> str:
+    if not state:
+        return ""
+    policy = state.get("skill_runtime_policy") or {}
+    if not isinstance(policy, dict):
+        return ""
+    key_map = {
+        "planning": "resolved_planning_overlay",
+        "reasoning": "resolved_reasoning_overlay",
+        "reflection": "resolved_reflection_overlay",
+    }
+    field = key_map.get(purpose_key)
+    if not field:
+        return ""
+    return str(policy.get(field) or "").strip()
 
 
 def resolve_system_prompt(

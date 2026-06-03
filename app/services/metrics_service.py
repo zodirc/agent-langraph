@@ -36,7 +36,11 @@ class MetricsService:
             "react_loop_entered": 0,
             "react_loop_finished": 0,
             "react_loop_aborted": 0,
+            "skill_invocations": 0,
+            "skill_validation_failed": 0,
+            "skill_reviews": 0,
         }
+        self._skill_stats: dict[str, dict[str, float]] = {}
         self._prometheus = None
         self._histograms: dict[str, Any] = {}
         if settings.METRICS_ENABLED:
@@ -353,6 +357,160 @@ class MetricsService:
         self._inc("contract_events")
         self._inc(f"contract_{kind_key}")
 
+    def _skill_stat_key(self, skill_id: str, version: str) -> str:
+        return f"{skill_id[:48]}@{version[:16]}"
+
+    def _bump_skill(self, skill_id: str, version: str, field: str, amount: float = 1.0) -> None:
+        key = self._skill_stat_key(skill_id, version)
+        with self._lock:
+            bucket = self._skill_stats.setdefault(key, {"skill_id": skill_id, "version": version})
+            bucket[field] = bucket.get(field, 0) + amount
+
+    def inc_skill_invocation(
+        self,
+        skill_id: str,
+        *,
+        version: str = "unknown",
+        source_type: str = "unknown",
+    ) -> None:
+        self._inc("skill_invocations")
+        self._bump_skill(skill_id, version, "invocations")
+        if self._prometheus:
+            self._ensure_skill_prometheus()
+            if "skill_invocations" in self._prometheus:
+                self._prometheus["skill_invocations"].labels(
+                    skill_id=skill_id[:48],
+                    version=version[:16],
+                    source_type=source_type[:24],
+                ).inc()
+
+    def inc_skill_outcome(
+        self,
+        skill_id: str,
+        *,
+        version: str = "unknown",
+        source_type: str = "unknown",
+        outcome: str = "unknown",
+    ) -> None:
+        self._bump_skill(skill_id, version, f"outcome_{outcome[:20]}")
+        if self._prometheus:
+            self._ensure_skill_prometheus()
+            if "skill_outcomes" in self._prometheus:
+                self._prometheus["skill_outcomes"].labels(
+                    skill_id=skill_id[:48],
+                    version=version[:16],
+                    source_type=source_type[:24],
+                    outcome=outcome[:20],
+                ).inc()
+
+    def inc_skill_validation_failed(
+        self,
+        skill_id: str,
+        *,
+        version: str = "unknown",
+        count: int = 1,
+    ) -> None:
+        self._inc("skill_validation_failed", count)
+        self._bump_skill(skill_id, version, "validation_failed", count)
+        if self._prometheus:
+            self._ensure_skill_prometheus()
+            if "skill_validation_failed" in self._prometheus:
+                self._prometheus["skill_validation_failed"].labels(
+                    skill_id=skill_id[:48],
+                    version=version[:16],
+                ).inc(count)
+
+    def inc_skill_review(self, skill_id: str, *, version: str = "unknown") -> None:
+        self._inc("skill_reviews")
+        self._bump_skill(skill_id, version, "reviews")
+        if self._prometheus:
+            self._ensure_skill_prometheus()
+            if "skill_reviews" in self._prometheus:
+                self._prometheus["skill_reviews"].labels(
+                    skill_id=skill_id[:48],
+                    version=version[:16],
+                ).inc()
+
+    def _ensure_skill_prometheus(self) -> None:
+        if not self._prometheus:
+            return
+        if "skill_invocations" in self._prometheus:
+            return
+        try:
+            from prometheus_client import Counter
+
+            prom_kwargs: dict[str, Any] = {}
+            if self._registry is not None:
+                prom_kwargs["registry"] = self._registry
+            self._prometheus["skill_invocations"] = Counter(
+                "agent_skill_invocations_total",
+                "Tasks started with a skill",
+                ["skill_id", "version", "source_type"],
+                **prom_kwargs,
+            )
+            self._prometheus["skill_outcomes"] = Counter(
+                "agent_skill_task_outcomes_total",
+                "Task outcomes for skill-driven runs",
+                ["skill_id", "version", "source_type", "outcome"],
+                **prom_kwargs,
+            )
+            self._prometheus["skill_validation_failed"] = Counter(
+                "agent_skill_output_validation_failed_total",
+                "Skill output contract validation failures",
+                ["skill_id", "version"],
+                **prom_kwargs,
+            )
+            self._prometheus["skill_reviews"] = Counter(
+                "agent_skill_review_total",
+                "Human reviews on skill-driven tasks",
+                ["skill_id", "version"],
+                **prom_kwargs,
+            )
+            self._prometheus["skill_tool_usage"] = Counter(
+                "agent_skill_tool_usage_total",
+                "Tool invocations on skill-driven tasks",
+                ["skill_id", "version", "tool"],
+                **prom_kwargs,
+            )
+        except ImportError:
+            pass
+
+    def inc_skill_tool_usage(
+        self,
+        skill_id: str,
+        *,
+        tool_name: str,
+        version: str = "unknown",
+        count: int = 1,
+    ) -> None:
+        key = f"tool_{skill_id[:32]}_{tool_name[:24]}"
+        self._inc(key, count)
+        self._bump_skill(skill_id, version, f"tool_{tool_name[:24]}", count)
+        if self._prometheus:
+            self._ensure_skill_prometheus()
+            if "skill_tool_usage" in self._prometheus:
+                self._prometheus["skill_tool_usage"].labels(
+                    skill_id=skill_id[:48],
+                    version=version[:16],
+                    tool=tool_name[:40],
+                ).inc(count)
+
+    def skill_metrics_summary(self) -> dict[str, Any]:
+        with self._lock:
+            by_skill = [dict(v) for v in self._skill_stats.values()]
+            tool_usage = {
+                k: v
+                for k, v in self._counters.items()
+                if k.startswith("tool_") and "/" not in k
+            }
+        return {
+            "skill_invocations": self._counters.get("skill_invocations", 0),
+            "skill_validation_failed": self._counters.get("skill_validation_failed", 0),
+            "skill_reviews": self._counters.get("skill_reviews", 0),
+            "tool_usage_counters": tool_usage,
+            "by_skill": sorted(by_skill, key=lambda x: str(x.get("skill_id", ""))),
+        }
+
     def set_llm_circuit_state(self, name: str, state: str) -> None:
         if self._prometheus and "llm_circuit_state" in self._prometheus:
             for s in ("closed", "open", "half_open"):
@@ -601,6 +759,7 @@ class MetricsService:
             }
         if tenant_id is not None:
             payload["tenant"] = self.tenant_metrics_snapshot(tenant_id)
+        payload["skills"] = self.skill_metrics_summary()
         return payload
 
     def prometheus_text(self) -> str:

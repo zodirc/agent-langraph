@@ -1,0 +1,80 @@
+.manage-page .manage-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.manage-list-panel .compact {
+  max-height: 65vh;
+}
+
+.manage-list-head {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+#manage-status-filter {
+  width: 100%;
+  margin-bottom: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.skill-form fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--panel);
+}
+
+.skill-form label {
+  display: block;
+  margin: 0.35rem 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.skill-form input,
+.skill-form textarea,
+.skill-form select {
+  width: 100%;
+  margin-top: 0.2rem;
+  padding: 0.4rem 0.5rem;
+  font-family: inherit;
+}
+
+.manage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.versions-panel {
+  border-top: 1px solid var(--border, #30363d);
+  padding-top: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.versions-panel ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.versions-panel li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border, #30363d);
+}
+
+@media (max-width: 800px) {
+  .manage-page .manage-layout {
+    grid-template-columns: 1fr;
+  }
+}

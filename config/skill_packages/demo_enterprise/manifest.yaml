@@ -1,0 +1,6 @@
+package_id: demo_enterprise
+name: Demo Enterprise Skill Pack
+version: "1.0.0"
+publisher: system
+description: Sample system_package skills with trusted plugin hooks (Phase 4).
+skills_dir: skills

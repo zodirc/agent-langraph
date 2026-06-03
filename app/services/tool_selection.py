@@ -48,11 +48,15 @@ def retrieve_relevant_tools(
     *,
     top_k: int = 10,
     pack_tools: Optional[list[str]] = None,
+    skill_blocklist: Optional[list[str]] = None,
 ) -> list[ToolSpec]:
     """Return top-k tools by goal/domain relevance and risk compatibility."""
     allowed = set(pack_tools or []) or None
+    blocked = set(skill_blocklist or [])
     scored: list[tuple[float, ToolSpec]] = []
     for name in registry.list_tools():
+        if name in blocked:
+            continue
         if allowed is not None and name not in allowed:
             continue
         spec = registry.get(name)

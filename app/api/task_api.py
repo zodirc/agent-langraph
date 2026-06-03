@@ -27,6 +27,8 @@ class CreateTaskRequest(BaseModel):
     user_id: Optional[str] = None
     session_id: Optional[str] = None
     new_session: bool = False
+    skill_id: Optional[str] = None
+    skill_params: dict[str, Any] = Field(default_factory=dict)
     input_payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -90,6 +92,40 @@ def _prepare_task_request(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     user_id = request.user_id or principal.user_id
     payload.setdefault("user_role", principal.role)
+    if request.skill_id:
+        from app.config.settings import settings
+        from app.services.skill_resolver import (
+            SkillNotAvailableError,
+            SkillNotFoundError,
+            SkillPermissionError,
+            SkillResolveError,
+            attach_skill_to_payload,
+        )
+        from app.services.tenant_context import get_tenant_id
+
+        if not settings.SKILL_RUNTIME_POLICY_ENABLED:
+            raise HTTPException(status_code=400, detail="Skill runtime policy is disabled")
+        try:
+            params = dict(request.skill_params or {})
+            if params.get("goal") and "goal" not in payload:
+                payload["goal"] = params["goal"]
+            if params.get("query") and "query" not in payload:
+                payload["query"] = params["query"]
+            payload = attach_skill_to_payload(
+                payload,
+                skill_id=request.skill_id.strip(),
+                skill_params=params,
+                user_role=principal.role,
+                tenant_id=get_tenant_id(),
+            )
+        except SkillNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except SkillPermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except SkillNotAvailableError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except SkillResolveError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     return user_id, request.task_type, payload
 
 

@@ -92,6 +92,13 @@ class AgentState(TypedDict):
     # Self-Routed Deliberation Loop (SRDL) — bounded ReAct in single runtime
     react_loop: Optional[dict[str, Any]]
 
+    # Skill platform (policy layer)
+    skill_id: Optional[str]
+    skill_version: Optional[str]
+    skill_snapshot: Optional[dict[str, Any]]
+    skill_source_type: Optional[str]
+    skill_runtime_policy: Optional[dict[str, Any]]
+
 
 def create_initial_state(
     *,

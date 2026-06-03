@@ -114,4 +114,7 @@ def select_action(
             reason="fallback: no candidates registered",
         )
     scored = score_candidates(candidates, snapshot)
+    from app.services.skill_action_policy import apply_skill_action_weights
+
+    scored = apply_skill_action_weights(scored, state=state)
     return scored[0]

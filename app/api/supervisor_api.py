@@ -21,6 +21,8 @@ class SupervisorTaskRequest(BaseModel):
     domains: Optional[list[str]] = None
     task_type: str = "supervisor"
     user_id: Optional[str] = None
+    skill_id: Optional[str] = None
+    skill_params: dict[str, Any] = Field(default_factory=dict)
     extra_payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -35,6 +37,8 @@ def create_supervisor_task(
     task_request = CreateTaskRequest(
         task_type=request.task_type,
         user_id=request.user_id,
+        skill_id=request.skill_id,
+        skill_params=request.skill_params,
         input_payload=payload,
     )
     user_id, task_type, prepared = _prepare_task_request(task_request, principal)
@@ -65,6 +69,8 @@ def stream_supervisor_task(
     task_request = CreateTaskRequest(
         task_type=request.task_type,
         user_id=request.user_id,
+        skill_id=request.skill_id,
+        skill_params=request.skill_params,
         input_payload=payload,
     )
     user_id, task_type, prepared = _prepare_task_request(task_request, principal)

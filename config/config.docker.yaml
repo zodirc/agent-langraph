@@ -368,3 +368,12 @@ tenant:
   # 单副本 compose 用 memory；多副本叠加 docker-compose.redis.yml 并设 quota_backend=redis
   quota_backend: ${TENANT_QUOTA_BACKEND:memory}
   quota_use_redis: ${TENANT_QUOTA_REDIS:false}
+
+# Skills 平台（Docker 默认开启；与 config.yaml 对齐）
+skill:
+  enabled: true
+  runtime_policy_enabled: true
+  config_dir: config/skills
+  data_dir: data/skills
+  packages_dir: config/skill_packages
+  packages_enabled: true

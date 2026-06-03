@@ -3,21 +3,26 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Agent Runtime CLI</title>
-  <link rel="stylesheet" href="/static/terminal.css?v=state-debug-2" />
+  <title>对话 — Agent Runtime</title>
+  <link rel="stylesheet" href="/static/terminal.css?v=theme-5" />
+  <link rel="stylesheet" href="/static/platform.css?v=6" />
 </head>
-<body>
+<body class="platform-shell" data-active-page="chat">
+  <div id="platform-nav"></div>
   <div class="terminal">
     <header class="terminal-header">
-      <select id="theme-select" class="theme-select" title="主题">
+      <select id="theme-select" class="theme-select" title="主题" hidden aria-hidden="true">
         <option value="dark">深色</option>
         <option value="light">淡色</option>
       </select>
       <span class="dot red"></span>
       <span class="dot yellow"></span>
       <span class="dot green"></span>
-      <span class="title">agent-langraph — runtime cli</span>
+      <span class="title">agent-langraph — 对话</span>
       <div class="header-actions">
+        <select id="skill-select" class="theme-select" title="任务 Skill">
+          <option value="">Skill: 无</option>
+        </select>
         <button id="state-debug-btn" type="button" class="flow-btn" title="查看当前会话 AgentState">State</button>
         <button id="flow-open-btn" type="button" class="flow-btn">Flow</button>
       </div>
@@ -68,6 +73,7 @@
         </div>
       </aside>
     </div>
+    <div id="skill-params-panel" class="skill-params-panel" hidden></div>
     <form id="command-form" class="terminal-input-row" autocomplete="off">
       <label for="command-input" class="prompt">&gt;</label>
       <input
@@ -110,6 +116,9 @@
       </div>
     </div>
   </dialog>
-  <script src="/static/app.js?v=state-debug-2"></script>
+  <script src="/static/platform-nav.js?v=6"></script>
+  <script src="/static/platform-auth.js?v=6"></script>
+  <script src="/static/skill_form.js?v=1"></script>
+  <script src="/static/app.js?v=theme-5"></script>
 </body>
 </html>

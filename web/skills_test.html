@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Skill 测试台</title>
+  <link rel="stylesheet" href="/static/terminal.css?v=theme-5" />
+  <link rel="stylesheet" href="/static/platform.css?v=6" />
+  <link rel="stylesheet" href="/static/skills.css?v=3" />
+  <link rel="stylesheet" href="/static/skills_manage.css?v=1" />
+</head>
+<body class="platform-shell" data-active-page="test" data-nav-extra="manage test">
+  <div id="platform-nav"></div>
+  <div class="skills-page manage-page">
+    <header class="skills-header">
+      <h1>Skill 预览（Dry-run）</h1>
+      <p class="skills-sub">
+        只解析 Skill 配置并输出 JSON 预览，<strong>不创建任务、不调用 LLM、不执行工具</strong>。
+        用于在发布或改 Skill 后，确认运行时策略、可见工具列表与 planning 系统提示词是否符合预期。
+        若要真正跑 Agent，请用 <a href="/chat">对话页</a> 或 Skills 目录的「使用」。
+      </p>
+    </header>
+    <div class="manage-editor" style="max-width:900px">
+      <label>Skill ID <input id="test-skill-id" placeholder="code_review" /></label>
+      <label>示例目标（仅影响工具检索与 prompt 预览）<textarea id="test-goal" rows="3" placeholder="审查 auth 模块的安全性"></textarea></label>
+      <button type="button" id="btn-dry-run" class="flow-btn">生成预览</button>
+      <pre id="test-output" class="state-debug-json" style="margin-top:1rem;min-height:200px">{}</pre>
+    </div>
+  </div>
+  <script src="/static/platform-nav.js?v=6"></script>
+  <script src="/static/platform-auth.js?v=6"></script>
+  <script src="/static/skills_test.js?v=2"></script>
+</body>
+</html>

@@ -66,6 +66,11 @@ class AgentStateModel(BaseModel):
     subtasks: Optional[list[dict[str, Any]]] = None
     worker_results: Optional[dict[str, Any]] = None
     react_loop: Optional[dict[str, Any]] = None
+    skill_id: Optional[str] = None
+    skill_version: Optional[str] = None
+    skill_snapshot: Optional[dict[str, Any]] = None
+    skill_source_type: Optional[str] = None
+    skill_runtime_policy: Optional[dict[str, Any]] = None
 
 
 def state_to_model(state: AgentState | dict[str, Any]) -> AgentStateModel:

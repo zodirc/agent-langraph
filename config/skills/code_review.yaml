@@ -1,0 +1,44 @@
+skill_id: code_review
+slug: code-review
+name: Code Review
+version: "1.0.0"
+description: Structured code review focusing on correctness, security, and maintainability.
+summary: Review code changes with actionable findings ranked by severity.
+source_type: builtin
+status: published
+visibility: system_public
+base_domain: code
+category: code
+preferred_execution_mode: single
+required_role: user
+risk_level: LOW
+enabled: true
+tags:
+  - code
+  - general
+allowed_tools:
+  - read_text_artifact
+  - get_runtime_info
+planning_overlay: |
+  Skill: code_review. Prioritize security issues, logic bugs, and API contract breaks.
+  Prefer read_text_artifact before conclusions. Output a concise review with severity-tagged findings.
+reasoning_overlay: |
+  Structure the answer as: Summary, Critical issues, Suggestions, Optional improvements.
+  Do not invent file contents — cite only what was read via tools.
+output_contract:
+  require_summary: true
+  prefer_structured: true
+presentation:
+  icon: code
+  display_order: 10
+  input_form_schema:
+    type: object
+    properties:
+      goal: { type: string, title: "Review target", format: textarea }
+    required: [goal]
+  example_prompts:
+    - "Review this module for security and edge cases"
+    - "Perform a PR-style review of the attached snippet"
+examples:
+  - input: "Review auth.py for SQL injection risks"
+    output: "Summary + ranked findings with severity"

@@ -53,6 +53,39 @@ function renderDlq(data) {
     .join("");
 }
 
+function setDashboardStatus(text) {
+  const el = document.getElementById("dashboard-status");
+  if (!el) return;
+  if (text) {
+    el.textContent = text;
+    el.hidden = false;
+  } else {
+    el.textContent = "";
+    el.hidden = true;
+  }
+}
+
+async function syncMetricsLink() {
+  const link = document.getElementById("dashboard-metrics-link");
+  if (!link) return;
+  try {
+    const res = await fetch("/health");
+    if (!res.ok) return;
+    const data = await res.json();
+    const enabled = data.metrics_enabled !== false;
+    link.classList.toggle("is-disabled", !enabled);
+    link.setAttribute(
+      "aria-disabled",
+      enabled ? "false" : "true"
+    );
+    if (!enabled) {
+      link.title = "observability.metrics_enabled=false，/metrics 不可用";
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 async function refresh() {
   try {
     const [metrics, tasks, dlq] = await Promise.all([
@@ -63,10 +96,13 @@ async function refresh() {
     renderMetrics(metrics);
     renderTasks(tasks);
     renderDlq(dlq);
+    setDashboardStatus("");
   } catch (err) {
     console.error(err);
+    setDashboardStatus(`数据加载失败：${err.message || err}`);
   }
 }
 
+syncMetricsLink();
 refresh();
 setInterval(refresh, 10000);

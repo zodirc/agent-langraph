@@ -1,0 +1,32 @@
+skill_id: security_hardened_review
+name: Security Hardened Review
+version: "1.0.0"
+description: Enterprise code review with trusted security hook overlays.
+summary: Code review plus OWASP-oriented hook patches from the trusted registry.
+source_type: system_package
+status: published
+visibility: system_public
+base_domain: code
+category: code
+preferred_execution_mode: single
+required_role: user
+risk_level: MEDIUM
+enabled: true
+plugin_ref: builtin.skill_hooks.code_review_security_v1
+allowed_tools:
+  - read_text_artifact
+  - get_runtime_info
+planning_overlay: |
+  Skill: security_hardened_review. Treat this as a security-focused code review engagement.
+reasoning_overlay: |
+  Report findings with severity labels and remediation hints.
+output_contract:
+  require_summary: true
+  prefer_structured: true
+presentation:
+  icon: shield
+  badges:
+    - enterprise
+    - security
+  example_prompts:
+    - "Security review this authentication module"

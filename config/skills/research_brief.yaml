@@ -1,0 +1,43 @@
+skill_id: research_brief
+slug: research-brief
+name: Research Brief
+version: "1.0.0"
+description: Produce analysis briefs with hypotheses, evidence, and recommended next steps.
+summary: Structured research brief for technical or product decisions.
+source_type: builtin
+status: published
+visibility: system_public
+base_domain: analysis
+category: analysis
+preferred_execution_mode: single
+required_role: user
+risk_level: LOW
+enabled: true
+tags:
+  - analysis
+  - general
+allowed_tools:
+  - get_runtime_info
+  - read_text_artifact
+planning_overlay: |
+  Skill: research_brief. Enable retrieval (skip_retrieval false) when external knowledge helps.
+  Plan sections: context, findings, risks, recommendations, open questions.
+reasoning_overlay: |
+  Be explicit about uncertainty. Separate evidence from inference. End with clear recommendations.
+output_contract:
+  require_summary: true
+  prefer_structured: true
+presentation:
+  icon: analysis
+  display_order: 30
+  input_form_schema:
+    type: object
+    properties:
+      goal: { type: string, title: "Research question" }
+    required: [goal]
+  example_prompts:
+    - "Write a research brief on vector DB options for our stack"
+    - "Analyze root cause hypotheses for the outage"
+examples:
+  - input: "Brief on adopting LangGraph for agent orchestration"
+    output: "Structured brief with recommendations"

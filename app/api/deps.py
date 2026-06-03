@@ -23,10 +23,13 @@ def _authenticate_principal(
 ) -> AuthPrincipal:
     if not settings_module.settings.AUTH_ENABLED:
         header_user = request.headers.get("X-User-Id")
+        header_tenant = request.headers.get("X-Tenant-Id") or request.headers.get("x-tenant-id")
+        tid = str(header_tenant).strip() if header_tenant else None
         return AuthPrincipal(
             user_id=header_user or "anonymous",
             role=request.headers.get("X-User-Role", "user"),
             auth_method="anonymous",
+            tenant_id=tid,
         )
 
     auth = get_auth_service()

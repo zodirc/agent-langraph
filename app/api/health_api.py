@@ -39,6 +39,7 @@ def health_full() -> dict[str, object]:
         "model_base_url": settings.MODEL_BASE_URL,
         "model_api_key_configured": bool(str(settings.MODEL_API_KEY or "").strip()),
         "auth_enabled": settings.AUTH_ENABLED,
+        "metrics_enabled": settings.METRICS_ENABLED,
         "knowledge_docs": store.count(),
         "knowledge_backend": settings.KNOWLEDGE_BACKEND,
         "vector_index_available": vector_ok,

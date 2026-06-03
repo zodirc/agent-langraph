@@ -1,0 +1,33 @@
+skill_id: knowledge_ingest
+name: Knowledge Ingest
+version: "1.0.0"
+description: Prepare documents for knowledge base ingestion with metadata and chunking hints.
+summary: Ingestion plan with titles, tags, and chunk boundaries.
+source_type: builtin
+status: published
+visibility: system_public
+base_domain: document
+category: document
+preferred_execution_mode: single
+required_role: user
+risk_level: LOW
+enabled: true
+tags: [document, general]
+allowed_tools: [read_text_artifact, get_runtime_info]
+planning_overlay: |
+  Skill: knowledge_ingest. Content: {{goal}}. Propose chunking, metadata fields, dedup checks; enable retrieval in plan when useful.
+reasoning_overlay: |
+  Output ingestion checklist and sample metadata JSON per document.
+output_contract:
+  require_summary: true
+presentation:
+  display_order: 23
+  input_form_schema:
+    type: object
+    properties:
+      goal: { type: string, title: "Documents to ingest" }
+    required: [goal]
+  example_prompts: ["Ingest policy docs into KB"]
+examples:
+  - input: "Ingest API guide PDF text"
+    output: "Chunking + metadata plan"

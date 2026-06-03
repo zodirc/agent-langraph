@@ -415,6 +415,10 @@ class GraphRunner:
                 mode = "single"
                 state = merge_state(state, execution_mode="single", mission=None)
         state = merge_state(state, execution_mode=mode)
+        if payload.get("skill_id") or payload.get("_skill_policy"):
+            from app.services.skill_task_attach import apply_skill_from_payload
+
+            state = apply_skill_from_payload(state, payload)
         thread = graph_thread_id(state)
         from app.services.engineering_trace import init_trace_context
 
@@ -447,6 +451,9 @@ class GraphRunner:
         final_state = self._finalize_turn(final_state)
         get_state_store().save(final_state)
         get_audit_store().append_events(final_state["task_id"], final_state.get("audit_log", []))
+        from app.services.skill_metrics import record_skill_task_finished
+
+        record_skill_task_finished(final_state)
         return final_state
 
     def stream_task(
@@ -843,6 +850,9 @@ class GraphRunner:
             TaskStatus.REJECTED.value,
         ):
             get_metrics_service().inc_task_failed()
+        from app.services.skill_metrics import record_skill_task_finished
+
+        record_skill_task_finished(latest)
         if latest.get("status") == TaskStatus.MISSION_PAUSED.value:
             from app.services.client_display import build_mission_paused_payload
             from app.services.mission_orchestrator import mission_is_autonomous

@@ -101,6 +101,10 @@ react_loop:
   max_steps: 4
   replan_enabled: true
   llm_decide: false
+skill:
+  enabled: true
+  runtime_policy_enabled: true
+  config_dir: config/skills
 """
     config_path = tmp_data_dir / "config.yaml"
     config_path.write_text(config_content, encoding="utf-8")
@@ -197,6 +201,9 @@ def _reset_service_singletons() -> None:
     pool_mod.reset_graph_execution_pool()
     cb_mod.reset_circuit_breakers()
     skill_mod.reset_skill_registry()
+    import app.services.skill_store as skill_store_mod
+
+    skill_store_mod.reset_skill_store()
     import app.services.mcp_manager as mcp_mgr_mod
 
     mcp_mgr_mod.reset_mcp_manager()

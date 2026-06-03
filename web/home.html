@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent LangGraph Platform</title>
+  <link rel="stylesheet" href="/static/terminal.css?v=theme-5" />
+  <link rel="stylesheet" href="/static/platform.css?v=6" />
+</head>
+<body class="platform-home platform-shell" data-active-page="home">
+  <div id="platform-nav"></div>
+  <main class="platform-home-main">
+    <section class="platform-hero">
+      <h1>Skill-Driven Agent Platform</h1>
+      <p>
+        在统一 Runtime 上运行多域 Agent：通过 Skills 声明场景策略，在对话页发起任务，
+        在 Skills 目录浏览与配置能力，无需在前端拼接 Prompt。
+      </p>
+    </section>
+    <section class="platform-cards">
+      <a class="platform-card" href="/chat">
+        <h2>对话</h2>
+        <p>Web CLI：流式任务、会话历史、Flow 可视化、State 调试与 Skill 参数表单。</p>
+      </a>
+      <a class="platform-card" href="/skills">
+        <h2>Skills</h2>
+        <p>浏览内置与租户技能目录，查看工具约束与输出契约，一键带入对话页执行。</p>
+      </a>
+      <a class="platform-card" href="/skills/manage">
+        <h2>Skills 管理</h2>
+        <p>创建草稿、编辑 overlay、发布版本、克隆官方模板与归档自定义技能。</p>
+      </a>
+      <a class="platform-card" href="/dashboard">
+        <h2>监控</h2>
+        <p>任务状态、死信队列与运行时指标概览（运维面板）。</p>
+      </a>
+    </section>
+  </main>
+  <script src="/static/platform-nav.js?v=6"></script>
+  <script src="/static/platform-auth.js?v=6"></script>
+</body>
+</html>

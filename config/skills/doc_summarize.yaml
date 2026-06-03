@@ -1,0 +1,43 @@
+skill_id: doc_summarize
+slug: doc-summarize
+name: Document Summarize
+version: "1.0.0"
+description: Summarize long documents into executive briefs with key points and citations.
+summary: Extract structured summaries from documents with faithful citations.
+source_type: builtin
+status: published
+visibility: system_public
+base_domain: document
+category: document
+preferred_execution_mode: single
+required_role: user
+risk_level: LOW
+enabled: true
+tags:
+  - document
+  - general
+allowed_tools:
+  - read_text_artifact
+  - get_runtime_info
+planning_overlay: |
+  Skill: doc_summarize. Use retrieval when knowledge may help; read artifacts when files are referenced.
+  Plan for a short executive summary, bullet key points, and optional citations from sources.
+reasoning_overlay: |
+  Keep summaries faithful to sources. Separate facts from interpretation. Prefer bullet lists.
+output_contract:
+  require_summary: true
+  require_citations: false
+presentation:
+  icon: document
+  display_order: 20
+  input_form_schema:
+    type: object
+    properties:
+      goal: { type: string, title: "Document to summarize" }
+    required: [goal]
+  example_prompts:
+    - "Summarize the meeting notes into action items"
+    - "Produce an executive brief of the spec document"
+examples:
+  - input: "Summarize policy.pdf highlights"
+    output: "Executive summary + bullets"

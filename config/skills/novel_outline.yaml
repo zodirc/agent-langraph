@@ -1,0 +1,34 @@
+skill_id: novel_outline
+name: Novel Outline
+version: "1.0.0"
+description: Create a long-form fiction outline with acts, arcs, and chapter beats.
+summary: Outline suitable for mission-based chapter writing.
+source_type: builtin
+status: published
+visibility: system_public
+base_domain: writing
+category: writing
+preferred_execution_mode: mission
+required_role: user
+risk_level: LOW
+enabled: true
+tags: [writing, general]
+allowed_tools: [read_text_artifact, write_text_artifact, append_text_artifact]
+planning_overlay: |
+  Skill: novel_outline. Premise: {{goal}}. Plan outline via writing/mission; set mission when length exceeds one turn.
+reasoning_overlay: |
+  Status-only summary; prose belongs in writing artifacts, not summary field.
+output_contract:
+  require_summary: true
+presentation:
+  display_order: 41
+  input_form_schema:
+    type: object
+    properties:
+      goal: { type: string, title: "Story premise" }
+      total_target_chars: { type: integer, title: "Target length (chars)" }
+    required: [goal]
+  example_prompts: ["Outline a sci-fi novel about Mars colony"]
+examples:
+  - input: "Three-act outline for mystery novel"
+    output: "Chapter beat outline"

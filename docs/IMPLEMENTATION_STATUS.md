@@ -1,6 +1,6 @@
 # 实现状态追踪（对齐代码库）
 
-> **最后更新**：2026-06-02（补：mission+tools 会话文件工具集、安全收口、mission 工具可见与可选注入、Web 会话文件侧栏与实时预览）  
+> **最后更新**：2026-06-03（Skill 平台全量对齐 `plans/SKILL_DRIVEN_AGENT_PLATFORM.md` §8–§16）  
 > **对照文档**：[`CAPABILITY_MATRIX.md`](CAPABILITY_MATRIX.md)  
 > **图例**：✅ 已实现并有用例覆盖 · 🔶 部分实现 / 默认关 · ❌ 未实现
 
@@ -95,7 +95,12 @@
 
 | 项 | 状态 | 说明 |
 |----|------|------|
-| Skill 运行时 | ✅ | `skill.py`、`skill_registry.py`、`config/skills/`；`test_skill_registry*` |
+| Skill 运行时（legacy invoke） | ✅ | `skill.py`、`skill_registry.py`、`config/skills/`；`test_skill_registry*` |
+| **Skill Platform Phase 1** | ✅ | 目录 API、`skill_id` 任务注入、overlay 模板化；Web 目录 + CLI 动态 `input_form_schema` 表单 |
+| **Skill Platform Phase 2** | ✅ | 租户 YAML 存储、CRUD/发布/停用/归档/克隆/回滚；`GET /skills/catalog/tenant`；管理台 output contract / examples / tags |
+| **Skill Platform Phase 3** | ✅ | 分阶段 hooks（pre_task / tool_filter / candidate_score / output_validate）、dry-run、按 skill 工具指标 |
+| **Skill Platform Phase 4** | ✅ | 受信任 hooks 详情 API、enterprise 包、治理与 marketplace 预览；Supervisor 任务支持 `skill_id` |
+| **§13 预制 Skills（16）** | ✅ | `config/skills/` 全部 16 项 + `input_form_schema`；单测 `test_skill_builtin_catalog.py` |
 | MCP 运维 | ✅ | `mcp_manager.py`；probe/evict；resources/prompts；`test_mcp_manager.py` |
 | MCP HTTP E2E | ✅ | `mcp_stubs/http_server.py`、`test_mcp_http_e2e.py` |
 | Embedding 治理 | ✅ | `embedding_meta.py`、`embedding_reindex.py`；`test_embedding_governance.py` |

@@ -1,0 +1,33 @@
+skill_id: spec_writer
+name: Spec Writer
+version: "1.0.0"
+description: Write technical specifications from requirements.
+summary: Structured spec with scope, requirements, and acceptance criteria.
+source_type: builtin
+status: published
+visibility: system_public
+base_domain: single_turn
+category: document
+preferred_execution_mode: single
+required_role: user
+risk_level: LOW
+enabled: true
+tags: [document, general]
+allowed_tools: [read_text_artifact, get_runtime_info]
+planning_overlay: |
+  Skill: spec_writer. Requirements: {{goal}}. Output outline → detailed sections → acceptance criteria.
+reasoning_overlay: |
+  Use clear headings; separate functional vs non-functional requirements.
+output_contract:
+  require_summary: true
+presentation:
+  display_order: 21
+  input_form_schema:
+    type: object
+    properties:
+      goal: { type: string, title: "Feature to specify" }
+    required: [goal]
+  example_prompts: ["Write spec for multi-tenant skill platform"]
+examples:
+  - input: "Spec for export API"
+    output: "Full technical spec"

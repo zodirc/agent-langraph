@@ -1,0 +1,34 @@
+skill_id: consistency_review
+name: Consistency Review
+version: "1.0.0"
+description: Review manuscript/outline for plot and character consistency.
+summary: Consistency report with contradictions and fix suggestions.
+source_type: builtin
+status: published
+visibility: system_public
+base_domain: writing
+category: writing
+preferred_execution_mode: single
+required_role: user
+risk_level: LOW
+enabled: true
+tags: [writing, general]
+allowed_tools: [read_text_artifact, get_runtime_info]
+planning_overlay: |
+  Skill: consistency_review. Scope: {{goal}}. Read outline and body artifacts; list contradictions by severity.
+reasoning_overlay: |
+  Format: Summary, Contradictions (location, issue), Suggested fixes.
+output_contract:
+  require_summary: true
+  prefer_structured: true
+presentation:
+  display_order: 44
+  input_form_schema:
+    type: object
+    properties:
+      goal: { type: string, title: "Review scope" }
+    required: [goal]
+  example_prompts: ["Check chapters 1-3 for timeline errors"]
+examples:
+  - input: "Consistency pass on outline vs ch1-2"
+    output: "Consistency findings"

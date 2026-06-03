@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Skills 管理 — Agent Runtime</title>
+  <link rel="stylesheet" href="/static/terminal.css?v=theme-5" />
+  <link rel="stylesheet" href="/static/platform.css?v=6" />
+  <link rel="stylesheet" href="/static/skills.css?v=3" />
+  <link rel="stylesheet" href="/static/skills_manage.css?v=1" />
+</head>
+<body class="platform-shell" data-active-page="manage" data-nav-extra="manage test">
+  <div id="platform-nav"></div>
+  <div class="skills-page manage-page">
+    <header class="skills-header">
+      <h1>自定义 Skills</h1>
+      <p class="skills-sub">创建草稿、编辑、发布、克隆与版本回滚</p>
+    </header>
+    <div class="manage-layout">
+      <aside class="manage-list-panel">
+        <div class="manage-list-head">
+          <button type="button" id="btn-new" class="flow-btn">新建</button>
+          <button type="button" id="btn-refresh-list" class="flow-btn">刷新</button>
+        </div>
+        <select id="manage-status-filter">
+          <option value="draft">草稿</option>
+          <option value="published">已发布</option>
+          <option value="disabled">已停用</option>
+          <option value="archived">已归档</option>
+        </select>
+        <div id="manage-skill-list" class="skills-list compact"></div>
+      </aside>
+      <main class="manage-editor">
+        <form id="skill-form" class="skill-form">
+          <fieldset>
+            <legend>基础信息</legend>
+            <label>Skill ID <input name="skill_id" id="f-skill-id" placeholder="my_skill_name" /></label>
+            <label>名称 <input name="name" id="f-name" required /></label>
+            <label>描述 <textarea name="description" id="f-description" rows="2"></textarea></label>
+            <label>分类 <input name="category" id="f-category" value="general" /></label>
+            <label>Domain <input name="base_domain" id="f-domain" value="single_turn" /></label>
+            <label>执行模式
+              <select name="preferred_execution_mode" id="f-exec-mode">
+                <option value="single">single</option>
+                <option value="mission">mission</option>
+              </select>
+            </label>
+          </fieldset>
+          <fieldset>
+            <legend>工具约束</legend>
+            <label>Allowlist（逗号分隔）<input name="allowed_tools" id="f-allowed" placeholder="read_text_artifact,get_runtime_info" /></label>
+            <label>Blocklist <input name="blocked_tools" id="f-blocked" /></label>
+            <label>风险 <select id="f-risk"><option>LOW</option><option>MEDIUM</option><option>HIGH</option></select></label>
+          </fieldset>
+          <fieldset>
+            <legend>Prompt 策略</legend>
+            <label>Planning overlay <textarea name="planning_overlay" id="f-planning" rows="4"></textarea></label>
+            <label>Reasoning overlay <textarea name="reasoning_overlay" id="f-reasoning" rows="3"></textarea></label>
+            <label>Reflection overlay <textarea name="reflection_overlay" id="f-reflection" rows="2"></textarea></label>
+          </fieldset>
+          <fieldset>
+            <legend>输出契约与展示</legend>
+            <label>Tags（逗号分隔）<input id="f-tags" placeholder="custom, code" /></label>
+            <label>Output contract（JSON）<textarea id="f-output-contract" rows="3" placeholder='{"require_summary": true}'></textarea></label>
+            <label>Examples（JSON 数组）<textarea id="f-examples" rows="4" placeholder='[{"input":"...","output":"..."}]'></textarea></label>
+            <label>Input form schema（JSON）<textarea id="f-input-schema" rows="4"></textarea></label>
+          </fieldset>
+          <fieldset>
+            <legend>发布</legend>
+            <label>可见性
+              <select id="f-visibility">
+                <option value="tenant_private">tenant_private</option>
+                <option value="tenant_shared">tenant_shared</option>
+              </select>
+            </label>
+            <label>发布备注 <input id="f-changelog" placeholder="optional" /></label>
+          </fieldset>
+          <div class="manage-actions">
+            <button type="submit" class="flow-btn">保存草稿</button>
+            <button type="button" id="btn-publish" class="flow-btn">发布</button>
+            <button type="button" id="btn-disable" class="flow-btn">停用</button>
+            <button type="button" id="btn-archive" class="flow-btn">归档</button>
+            <button type="button" id="btn-delete" class="flow-btn">删除</button>
+            <button type="button" id="btn-clone-builtin" class="flow-btn">从当前模板克隆</button>
+          </div>
+        </form>
+        <section class="versions-panel">
+          <h3>版本历史</h3>
+          <ul id="version-list"></ul>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script src="/static/platform-nav.js?v=6"></script>
+  <script src="/static/platform-auth.js?v=6"></script>
+  <script src="/static/skills_manage.js?v=2"></script>
+</body>
+</html>

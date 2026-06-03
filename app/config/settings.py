@@ -326,9 +326,22 @@ class Settings:
         if not isinstance(skill_cfg, dict):
             skill_cfg = {}
         self.SKILL_ENABLED = _coerce_bool(skill_cfg.get("enabled", False))
+        self.SKILL_RUNTIME_POLICY_ENABLED = _coerce_bool(
+            skill_cfg.get("runtime_policy_enabled", skill_cfg.get("enabled", False))
+        )
         self.SKILL_CONFIG_DIR = str(
             skill_cfg.get("config_dir", str(Path(__file__).resolve().parents[2] / "config" / "skills"))
         )
+        self.SKILL_DATA_DIR = str(
+            skill_cfg.get("data_dir", str(Path(__file__).resolve().parents[2] / "data" / "skills"))
+        )
+        self.SKILL_PACKAGES_DIR = str(
+            skill_cfg.get(
+                "packages_dir",
+                str(Path(__file__).resolve().parents[2] / "config" / "skill_packages"),
+            )
+        )
+        self.SKILL_PACKAGES_ENABLED = _coerce_bool(skill_cfg.get("packages_enabled", True))
 
         auth = raw.get("auth", {})
         self.AUTH_ENABLED = _coerce_bool(auth.get("enabled", False))

@@ -48,8 +48,22 @@ def test_list_tasks(isolated_stores):
     assert any(t["task_id"] == "list-1" for t in data["tasks"])
 
 
-def test_web_cli_index():
+def test_platform_home():
     client = TestClient(app)
     resp = client.get("/")
     assert resp.status_code == 200
-    assert "Agent Runtime CLI" in resp.text
+    assert "Skill-Driven Agent Platform" in resp.text
+
+
+def test_web_chat_page():
+    client = TestClient(app)
+    resp = client.get("/chat")
+    assert resp.status_code == 200
+    assert "agent-langraph — 对话" in resp.text
+
+
+def test_web_cli_redirect():
+    client = TestClient(app)
+    resp = client.get("/cli", follow_redirects=False)
+    assert resp.status_code == 302
+    assert resp.headers.get("location") == "/chat"

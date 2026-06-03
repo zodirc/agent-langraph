@@ -1,7 +1,13 @@
 skill_id: echo_helper
 name: Echo Helper
 version: "1.0.0"
-description: Wraps the built-in echo tool as a declarative skill.
+description: Wraps the built-in echo tool as a declarative skill (legacy invoke demo).
+summary: Echo demo for skill-as-tool compatibility.
+source_type: builtin
+status: published
+visibility: system_public
+base_domain: single_turn
+category: general
 required_role: user
 risk_level: LOW
 tags:

@@ -702,7 +702,17 @@ function updateSessionBadge(sessionId) {
 }
 
 function applyTheme(theme) {
+  if (window.PlatformAuth) {
+    window.PlatformAuth.applyTheme(theme);
+    syncFlowPopup();
+    for (const [, view] of sessionFileViewerMap) {
+      if (view?.win && !view.win.closed) syncSessionFileViewerTheme(view.win);
+    }
+    return;
+  }
   const t = theme === "light" ? "light" : "dark";
+  document.documentElement.classList.remove("theme-light", "theme-dark");
+  document.documentElement.classList.add(`theme-${t}`);
   document.body.classList.remove("theme-light", "theme-dark");
   document.body.classList.add(`theme-${t}`);
   if (themeSelectEl) themeSelectEl.value = t;
@@ -752,9 +762,14 @@ function clearScreen() {
 }
 
 function getAuthHeaders() {
-  const headers = { "Content-Type": "application/json" };
+  if (window.PlatformAuth) return window.PlatformAuth.getAuthHeaders();
+  const headers = { "Content-Type": "application/json", Accept: "application/json" };
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) headers.Authorization = `Bearer ${token}`;
+  const role = localStorage.getItem("user_role");
+  if (role) headers["X-User-Role"] = role;
+  const tenant = localStorage.getItem("tenant_id");
+  if (tenant) headers["X-Tenant-Id"] = tenant;
   return headers;
 }
 
@@ -1171,18 +1186,27 @@ function startSessionFilesPolling() {
 async function loginCommand(parts) {
   const username = parts[1] || "admin";
   const password = parts[2] || "admin";
-  const res = await fetch("/auth/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
-  });
-  if (!res.ok) {
-    appendLine(await res.text(), "error");
-    return;
+  try {
+    if (window.PlatformAuth) {
+      const data = await window.PlatformAuth.login(username, password);
+      appendLine(`logged in as ${data.user_id} (${data.role})`, "system");
+      return;
+    }
+    const res = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) {
+      appendLine(await res.text(), "error");
+      return;
+    }
+    const data = await res.json();
+    localStorage.setItem(TOKEN_KEY, data.access_token);
+    appendLine(`logged in as ${data.user_id} (${data.role})`, "system");
+  } catch (err) {
+    appendLine(`login failed: ${err.message || err}`, "error");
   }
-  const data = await res.json();
-  localStorage.setItem(TOKEN_KEY, data.access_token);
-  appendLine(`logged in as ${data.user_id} (${data.role})`, "system");
 }
 
 function appendLine(text, className = "system") {
@@ -1566,9 +1590,14 @@ async function fetchHealth() {
     const res = await fetch("/health");
     const data = await res.json();
     healthBadgeBase = `${data.env} | auth:${data.auth_enabled} | kb:${data.knowledge_docs}`;
-    if (!running) envBadge.textContent = healthBadgeBase;
+    if (!running && envBadge) envBadge.textContent = healthBadgeBase;
+    if (window.PlatformAuth) {
+      await window.PlatformAuth.fetchRuntimeMeta();
+      await window.PlatformAuth.renderNavAuth();
+    }
   } catch {
-    envBadge.textContent = "offline";
+    if (envBadge) envBadge.textContent = "offline";
+    if (window.PlatformAuth) await window.PlatformAuth.renderNavAuth();
   }
 }
 
@@ -2290,21 +2319,101 @@ async function consumeSseStream(res, taskIdRef) {
   }
 }
 
+let activeSkillId = null;
+const skillDetailCache = new Map();
+
+async function loadSkillInputForm(skillId) {
+  const panel = document.getElementById("skill-params-panel");
+  if (!panel || !window.SkillForm) return;
+  if (!skillId) {
+    window.SkillForm.clearContainer(panel);
+    return;
+  }
+  try {
+    let detail = skillDetailCache.get(skillId);
+    if (!detail) {
+      const res = await fetch(`/skills/${encodeURIComponent(skillId)}`, { headers: getAuthHeaders() });
+      if (!res.ok) {
+        window.SkillForm.clearContainer(panel);
+        return;
+      }
+      detail = await res.json();
+      skillDetailCache.set(skillId, detail);
+    }
+    const pres = detail.presentation || detail.definition?.presentation || {};
+    const schema =
+      pres.input_form_schema ||
+      detail.definition?.presentation?.input_form_schema ||
+      null;
+    window.SkillForm.renderSkillInputForm(schema, panel);
+  } catch {
+    window.SkillForm.clearContainer(panel);
+  }
+}
+
 function buildDefaultTaskBody(goal, riskLevel = "LOW") {
-  return attachSessionFlags({
+  const body = attachSessionFlags({
     task_type: "qa",
     user_id: "web",
     input_payload: {
       goal,
       risk_level: riskLevel,
-      // Allow planning LLM to auto-enable mission when appropriate (UI toggle still overrides).
       mission_auto: true,
     },
   });
+  const skillId = activeSkillId || document.getElementById("skill-select")?.value || "";
+  if (skillId) {
+    body.skill_id = skillId;
+    const panel = document.getElementById("skill-params-panel");
+    const params = window.SkillForm
+      ? window.SkillForm.collectSkillParams(panel, goal)
+      : { goal: String(goal || "").trim() };
+    body.skill_params = params;
+  }
+  return body;
 }
 
 function buildTaskRequestBody(goal, riskLevel = "LOW") {
   return buildDefaultTaskBody(goal, riskLevel);
+}
+
+async function loadSkillOptions() {
+  const sel = document.getElementById("skill-select");
+  if (!sel) return;
+  try {
+    const res = await fetch("/skills?scope=all&status=published", { headers: getAuthHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    for (const s of data.skills || []) {
+      const opt = document.createElement("option");
+      opt.value = s.skill_id;
+      opt.textContent = s.name || s.skill_id;
+      sel.appendChild(opt);
+    }
+  } catch {
+    /* catalog optional */
+  }
+}
+
+function initSkillFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const sid = params.get("skill_id");
+  const goal = params.get("goal");
+  if (sid) {
+    activeSkillId = sid;
+    const sel = document.getElementById("skill-select");
+    if (sel) sel.value = sid;
+    if (goal && inputEl) inputEl.value = goal;
+    appendLine(`已选择 Skill: ${sid}`, "system");
+    loadSkillInputForm(sid);
+  }
+  const sel = document.getElementById("skill-select");
+  if (sel) {
+    sel.addEventListener("change", () => {
+      activeSkillId = sel.value || null;
+      loadSkillInputForm(activeSkillId);
+    });
+  }
 }
 
 async function runTaskStream(goal, riskLevel = "LOW", endpoint = "/tasks/stream", body = null) {
@@ -2435,7 +2544,8 @@ async function handleCommand(raw) {
     return;
   }
   if (text === "/logout") {
-    localStorage.removeItem(TOKEN_KEY);
+    if (window.PlatformAuth) window.PlatformAuth.logout();
+    else localStorage.removeItem(TOKEN_KEY);
     appendLine("logged out", "system");
     return;
   }
@@ -2727,3 +2837,4 @@ refreshFlowPanel();
 refreshHistorySidebar();
 refreshSessionFilesPane();
 startSessionFilesPolling();
+loadSkillOptions().then(initSkillFromUrl);

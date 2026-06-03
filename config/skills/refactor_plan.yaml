@@ -1,0 +1,34 @@
+skill_id: refactor_plan
+name: Refactor Plan
+version: "1.0.0"
+description: Produce a safe refactoring plan without applying large changes in one step.
+summary: Incremental refactor roadmap with risks and test checkpoints.
+source_type: builtin
+status: published
+visibility: system_public
+base_domain: code
+category: code
+preferred_execution_mode: single
+required_role: user
+risk_level: LOW
+enabled: true
+tags: [code, general]
+allowed_tools: [read_text_artifact, get_runtime_info]
+planning_overlay: |
+  Skill: refactor_plan for {{goal}}. Emphasize small steps, compatibility, and rollback points.
+reasoning_overlay: |
+  Deliver phased plan: goals, modules touched, risks, validation per phase.
+output_contract:
+  require_summary: true
+  prefer_structured: true
+presentation:
+  display_order: 12
+  input_form_schema:
+    type: object
+    properties:
+      goal: { type: string, title: "Refactor target" }
+    required: [goal]
+  example_prompts: ["Plan refactor of monolithic service into modules"]
+examples:
+  - input: "Split god-class UserService"
+    output: "Phased refactor plan"

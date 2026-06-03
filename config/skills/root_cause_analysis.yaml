@@ -1,0 +1,34 @@
+skill_id: root_cause_analysis
+name: Root Cause Analysis
+version: "1.0.0"
+description: Structured RCA for incidents with timeline and contributing factors.
+summary: RCA report with 5-whys style analysis and remediation.
+source_type: builtin
+status: published
+visibility: system_public
+base_domain: analysis
+category: analysis
+preferred_execution_mode: single
+required_role: user
+risk_level: LOW
+enabled: true
+tags: [analysis, general]
+allowed_tools: [get_runtime_info, read_text_artifact]
+planning_overlay: |
+  Skill: root_cause_analysis. Incident: {{goal}}. Build timeline, hypotheses, evidence, root cause, preventive actions.
+reasoning_overlay: |
+  Sections: Summary, Timeline, Root cause, Contributing factors, Remediation, Prevention.
+output_contract:
+  require_summary: true
+  prefer_structured: true
+presentation:
+  display_order: 31
+  input_form_schema:
+    type: object
+    properties:
+      goal: { type: string, title: "Incident description" }
+    required: [goal]
+  example_prompts: ["RCA for API outage on Tuesday"]
+examples:
+  - input: "502 errors after deploy"
+    output: "RCA document"

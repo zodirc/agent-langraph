@@ -1,0 +1,41 @@
+skill_id: qa_general
+slug: qa-general
+name: General Q&A
+version: "1.0.0"
+description: Answer questions clearly with optional tool use when facts or files are needed.
+summary: Default Q&A skill with balanced tool access and concise answers.
+source_type: builtin
+status: published
+visibility: system_public
+base_domain: single_turn
+category: general
+preferred_execution_mode: single
+required_role: user
+risk_level: LOW
+enabled: true
+tags:
+  - general
+  - qa
+allowed_tools:
+  - get_runtime_info
+  - read_text_artifact
+  - calculator
+planning_overlay: |
+  Skill: qa_general. Prefer direct answers; use tools only when they materially improve accuracy.
+  Keep plans short (≤4 steps) for simple questions.
+reasoning_overlay: |
+  Answer the user's question directly. Use plain language. Cite tools or knowledge only when used.
+presentation:
+  icon: chat
+  display_order: 5
+  input_form_schema:
+    type: object
+    properties:
+      goal: { type: string, title: "Question" }
+    required: [goal]
+  example_prompts:
+    - "Explain how checkpoint recovery works in this runtime"
+    - "What is the difference between mission and single mode?"
+examples:
+  - input: "How does tool selection work?"
+    output: "Clear explanation"

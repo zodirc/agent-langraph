@@ -3,11 +3,15 @@
   --panel: #161b22;
   --border: #30363d;
   --text: #c9d1d9;
+  --input-bg: #0d1117;
+  --input-text: #c9d1d9;
+  --accent: #58a6ff;
   --green: #3fb950;
   --cyan: #58a6ff;
   --yellow: #d29922;
   --red: #f85149;
   --muted: #8b949e;
+  color-scheme: dark;
 }
 
 body.theme-light {
@@ -15,11 +19,23 @@ body.theme-light {
   --panel: #ffffff;
   --border: #cfd8e3;
   --text: #1f2937;
+  --input-bg: #ffffff;
+  --input-text: #1f2937;
+  --accent: #2563eb;
   --green: #1f8f45;
   --cyan: #2563eb;
   --yellow: #b7791f;
   --red: #dc2626;
   --muted: #6b7280;
+  color-scheme: light;
+}
+
+html.theme-light {
+  color-scheme: light;
+}
+
+html.theme-dark {
+  color-scheme: dark;
 }
 
 * {
@@ -651,11 +667,13 @@ body.theme-light .flow-node-label {
 }
 
 body.theme-light #command-input {
-  color: #0f172a;
+  color: var(--input-text);
+  background: var(--input-bg);
 }
 
 body.theme-light .theme-select {
-  background: #ffffff;
+  background-color: var(--input-bg);
+  color: var(--input-text);
 }
 
 body.theme-light .flow-node-box {
@@ -1285,4 +1303,33 @@ body.theme-light .state-debug-json {
   .terminal-output {
     max-height: 58vh;
   }
+}
+
+.skill-params-panel {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.skill-param-label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 160px;
+  flex: 1 1 200px;
+}
+
+.skill-param-label input,
+.skill-param-label textarea {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background-color: var(--input-bg);
+  color: var(--input-text, var(--text));
+  font: inherit;
 }

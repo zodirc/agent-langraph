@@ -6,7 +6,7 @@ from app.services.skill_registry import SkillRegistry, reset_skill_registry
 
 def test_register_and_list_skills():
     registry = SkillRegistry()
-    registry.register(
+    registry.register_manifest(
         SkillManifest(
             skill_id="test_skill",
             name="Test",
@@ -19,7 +19,7 @@ def test_register_and_list_skills():
 
 def test_disclosure_filters_by_role():
     registry = SkillRegistry()
-    registry.register(
+    registry.register_manifest(
         SkillManifest(
             skill_id="admin_skill",
             name="Admin",
@@ -39,5 +39,7 @@ def test_load_from_config_dir():
     registry = SkillRegistry()
     root = Path(__file__).resolve().parents[2] / "config" / "skills"
     count = registry.load_from_config_dir(root)
-    assert count >= 1
-    assert "echo_helper" in [s.skill_id for s in registry.list_skills()]
+    assert count >= 16
+    ids = [s.skill_id for s in registry.list_skills()]
+    assert "echo_helper" in ids
+    assert "code_review" in ids

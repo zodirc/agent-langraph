@@ -25,6 +25,10 @@ from app.api.review_api import router as review_router
 from app.api.schedule_api import router as schedule_router
 from app.api.tenant_api import router as tenant_router
 from app.api.task_api import router as task_router
+from app.api.skills_api import router as skills_router
+from app.api.skills_manage_api import router as skills_manage_router
+from app.api.skills_governance_api import router as skills_governance_router
+from app.api.skills_marketplace_api import router as skills_marketplace_router
 from app.api.tools_api import router as tools_router
 import app.config.settings as settings_module
 from app.services.knowledge_seed import ensure_builtin_knowledge, seed_default_knowledge
@@ -105,6 +109,10 @@ app.include_router(knowledge_router)
 app.include_router(batch_router)
 app.include_router(schedule_router)
 app.include_router(tools_router)
+app.include_router(skills_marketplace_router)
+app.include_router(skills_governance_router)
+app.include_router(skills_router)
+app.include_router(skills_manage_router)
 app.include_router(domains_router)
 app.include_router(supervisor_router)
 app.include_router(metrics_router)
@@ -119,11 +127,29 @@ if (WEB_DIR / "static").exists():
 
 
 @app.get("/")
-def web_cli() -> FileResponse:
-    index = WEB_DIR / "index.html"
-    if not index.exists():
-        raise RuntimeError(f"Web CLI not found: {index}")
-    return FileResponse(index)
+def platform_home() -> FileResponse:
+    """Platform landing page."""
+    page = WEB_DIR / "home.html"
+    if not page.exists():
+        raise RuntimeError(f"Platform home not found: {page}")
+    return FileResponse(page)
+
+
+@app.get("/chat")
+def web_chat() -> FileResponse:
+    """Web CLI conversation page."""
+    page = WEB_DIR / "chat.html"
+    if not page.exists():
+        raise RuntimeError(f"Chat page not found: {page}")
+    return FileResponse(page)
+
+
+@app.get("/cli")
+def web_cli_redirect():
+    """Backward-compatible alias for the conversation page."""
+    from fastapi.responses import RedirectResponse
+
+    return RedirectResponse(url="/chat", status_code=302)
 
 
 @app.get("/dashboard")

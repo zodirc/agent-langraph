@@ -3,7 +3,7 @@
 # 与 docker-compose.yml 叠加使用（推荐，亦见 Makefile `make up`）：
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 #
-# 访问 https://localhost:${HOST_PORT}/ （端口见 .env，默认 8080）
+# 平台 https://localhost:${HOST_PORT}/  对话 /chat （端口见 .env，默认 8080）
 # - 改 app/：uvicorn 自动 reload
 # - 改 web/static：浏览器强刷
 # - 改 config/：docker compose ... restart agent

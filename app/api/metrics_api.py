@@ -21,6 +21,14 @@ def metrics_summary(
     return get_metrics_service().summary(tenant_id=tenant_id)
 
 
+@router.get("/skills")
+def metrics_skills(
+    _principal: AuthPrincipal = Depends(get_current_principal),
+) -> dict:
+    """Per-skill invocation and outcome counters."""
+    return get_metrics_service().skill_metrics_summary()
+
+
 @router.get("/tenant")
 def metrics_tenant_snapshot(
     _principal: AuthPrincipal = Depends(get_current_principal),

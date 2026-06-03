@@ -522,8 +522,12 @@ embedding:
   auto_reindex_on_incompatibility: false
 
 skill:
-  enabled: false
+  enabled: true
+  runtime_policy_enabled: true
   config_dir: config/skills
+  data_dir: data/skills
+  packages_dir: config/skill_packages
+  packages_enabled: true
 
 memory_compress:
   enabled: true

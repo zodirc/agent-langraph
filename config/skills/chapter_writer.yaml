@@ -1,0 +1,33 @@
+skill_id: chapter_writer
+name: Chapter Writer
+version: "1.0.0"
+description: Write fiction chapters within an existing outline/manuscript.
+summary: Mission-friendly chapter production with consistency checks.
+source_type: builtin
+status: published
+visibility: system_public
+base_domain: writing
+category: writing
+preferred_execution_mode: mission
+required_role: user
+risk_level: LOW
+enabled: true
+tags: [writing, general]
+allowed_tools: [read_text_artifact, append_text_artifact, write_text_artifact]
+planning_overlay: |
+  Skill: chapter_writer. Task: {{goal}}. Read outline first; use mission step_policy for append_body; respect manuscript paths.
+reasoning_overlay: |
+  Brief status update only; chapter prose via writing node.
+output_contract:
+  require_summary: true
+presentation:
+  display_order: 42
+  input_form_schema:
+    type: object
+    properties:
+      goal: { type: string, title: "Chapter goal" }
+    required: [goal]
+  example_prompts: ["Write chapter 3 from existing outline"]
+examples:
+  - input: "Append chapter 2"
+    output: "Chapter written to artifact"

@@ -12,7 +12,7 @@ make init && make up                   # HTTPS + 代码热更新
 # 切换厂商：改 MODEL_PROVIDER / MODEL_NAME 后 make restart
 ```
 
-浏览器打开 **https://localhost:8080/**（虚拟机局域网：`https://<VM-IP>:8080/`，setup 会打印地址）。
+浏览器打开 **https://localhost:8080/** 平台首页；对话页 **https://localhost:8080/chat**（虚拟机局域网：`https://<VM-IP>:8080/`，setup 会打印地址）。
 
 - 默认 **关闭认证**（`AUTH_ENABLED=false`），可直接用；要开启见 `.env` 设 `AUTH_ENABLED=true` 后 `make restart`。
 - 高级环境变量：[`docs/ENV_REFERENCE.md`](docs/ENV_REFERENCE.md)
@@ -24,7 +24,9 @@ make init && make up                   # HTTPS + 代码热更新
 
 | 入口 | 说明 |
 |------|------|
-| **Web CLI** | https://localhost:8080/（`HOST_PORT`，本地默认 `make up` 即 HTTPS + 热更新） |
+| **平台首页** | https://localhost:8080/ |
+| **对话 (Web CLI)** | https://localhost:8080/chat（`HOST_PORT`，本地默认 `make up` 即 HTTPS + 热更新） |
+| **Skills 目录** | https://localhost:8080/skills |
 | **监控面板** | https://localhost:8080/dashboard |
 | **独立 CLI** | `python -m app.cli --local run "你的任务"` |
 | **HTTP API** | 见下方 API 列表 |
@@ -74,11 +76,29 @@ export SERVICE_API_KEY=your-service-key
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/` | Web CLI |
+| GET | `/` | 平台首页 |
+| GET | `/chat` | Web CLI 对话页 |
+| GET | `/cli` | 302 → `/chat`（兼容旧链接） |
 | GET | `/dashboard` | 任务监控面板 |
 | GET | `/health` | 健康检查 |
-| POST | `/tasks` | 创建任务 |
+| POST | `/tasks` | 创建任务（可选 `skill_id` + `skill_params`） |
 | POST | `/tasks/stream` | SSE 流式 |
+| GET | `/skills` | 技能目录 |
+| GET | `/skills/{id}` | 技能详情 |
+| POST | `/skills` | 创建自定义技能草稿 |
+| PUT | `/skills/{id}` | 更新草稿 |
+| POST | `/skills/{id}/publish` | 发布 |
+| POST | `/skills/{id}/clone` | 克隆（含官方模板） |
+| GET | `/skills/{id}/versions` | 版本历史 |
+| POST | `/skills/{id}/versions/{v}/rollback` | 回滚 |
+| POST | `/skills/{id}/dry-run` | 预览 policy / 工具 / planning prompt |
+| GET | `/metrics/skills` | 按 skill 聚合指标 |
+| GET | `/skills/test` (Web) | Skill 测试台 |
+| GET | `/skills/marketplace/packages` | 已安装 skill 包 |
+| PUT | `/skills/admin/global-disabled` | 全局禁用 skill（admin） |
+| PUT | `/skills/admin/tenants/{id}/blocks` | 租户屏蔽 skill（admin） |
+| GET | `/skills` (Web) | https://localhost:8080/skills 浏览与选用 |
+| GET | `/skills/manage` (Web) | https://localhost:8080/skills/manage 自定义技能管理 |
 | GET | `/tasks/{id}/status` | 状态 + **node_history** 时间线 |
 | GET | `/tasks/{id}/audit` | 审计链路 |
 | POST | `/supervisor/tasks` | Supervisor 任务 |
@@ -319,7 +339,8 @@ docker compose up -d --build
 
 | 地址 | 说明 |
 |------|------|
-| https://localhost:8080/ | Web CLI（提交任务；`HOST_PORT` 可改） |
+| https://localhost:8080/ | 平台首页 |
+| https://localhost:8080/chat | Web CLI 对话（提交任务；`HOST_PORT` 可改） |
 | https://localhost:8080/dashboard | 监控面板 |
 | https://localhost:8080/health | 健康检查 |
 | https://localhost:8080/docs | OpenAPI 文档 |
@@ -328,7 +349,8 @@ docker compose up -d --build
 
 | 用途 | 地址 |
 |------|------|
-| 浏览器 / Web CLI | `https://192.168.25.128:8080/` |
+| 浏览器 / 平台 | `https://192.168.25.128:8080/` |
+| 对话 | `https://192.168.25.128:8080/chat` |
 | 宿主机 `curl` 测通（明文） | `http://192.168.25.128:8081/health` |
 
 - 浏览器访问 HTTPS 时接受自签证书警告；Web CLI 内 `/login admin <密码>`。
@@ -386,7 +408,7 @@ docker run -d --name agent-langraph -p 8000:8000 \
 
 ### 7. 代码热更新（默认 HTTPS）
 
-本地默认 **`make up`**（或叠加 `docker-compose.dev.yml`）：**HTTPS 经 Caddy** + **uvicorn `--reload`**，访问 **https://localhost:8080/**（端口见 `.env` `HOST_PORT`）。
+本地默认 **`make up`**（或叠加 `docker-compose.dev.yml`）：**HTTPS 经 Caddy** + **uvicorn `--reload`**，访问 **https://localhost:8080/**（平台）与 **/chat**（对话，端口见 `.env` `HOST_PORT`）。
 
 ```bash
 make up          # 启动（HTTPS + 热更新）
