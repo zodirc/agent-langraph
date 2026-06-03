@@ -390,7 +390,7 @@ SSE / 确认块内附带机器可读动作（`confirmation.user_actions` / `conf
 | 字段 | 来源 | 用途 |
 |------|------|------|
 | `system_lines` | `mission_intervention.reason`（规划 LLM）、`steer_intent_summary`、`mission_control.reason`、编排摘要 | `mission_paused` / steer API 系统行 |
-| `autonomous_ui.behavior` | 程序判定门闸状态 | `auto_resume_step` / `wait_intent_confirm` / `resume_after_steer` 等 |
+| `autonomous_ui.behavior` | 程序判定门闸状态 | `manual_resume`（仅提示，不自动 resume）/ `wait_intent_confirm` 等 |
 | `client_display` | `POST /steer` 响应 | 运行中插队反馈 |
 | `confirmation.display.title` | 服务端 phase 标签 | 确认面板标题 |
 

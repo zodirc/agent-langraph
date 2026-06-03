@@ -26,7 +26,7 @@ def test_mission_paused_uses_intervention_reason():
     )
     body = build_mission_paused_payload(state, autonomous=True, steer_pause=True)
     assert any("timeline" in line for line in body["system_lines"])
-    assert body["autonomous_ui"]["behavior"] == "resume_after_steer"
+    assert body["autonomous_ui"]["behavior"] == "manual_resume"
 
 
 def test_outcome_gate_blocks_auto_resume_when_snapshot_false(isolated_stores):
@@ -119,6 +119,27 @@ def test_wall_clock_pause_blocks_auto_resume():
     assert body["autonomous_ui"]["behavior"] == "wall_clock_pause"
     assert any("墙钟" in line for line in body["system_lines"])
     assert not any(line.startswith("下一步：继续生成下一章") for line in body["system_lines"])
+
+
+def test_autonomous_step_pause_is_manual_resume():
+    state = merge_state(
+        {
+            "task_id": "t-manual",
+            "session_id": "s1",
+            "status": TaskStatus.MISSION_PAUSED.value,
+            "mission": {"kind": "writing", "execution_mode": "autonomous"},
+            "mission_control": {
+                "done": True,
+                "reason": "stepwise orchestration: awaiting user steer or resume",
+                "action": "pause",
+                "pause_reason": "step_checkpoint",
+            },
+            "input_payload": {"goal": "novel"},
+        },
+    )
+    body = build_mission_paused_payload(state, autonomous=True, steer_pause=False)
+    assert body["autonomous_ui"]["behavior"] == "manual_resume"
+    assert "/resume" in " ".join(body["autonomous_ui"]["system_lines"])
 
 
 def test_orchestration_summary_truncates_completed_list():

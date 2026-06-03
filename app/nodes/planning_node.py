@@ -115,11 +115,15 @@ def planning_node(state: AgentState) -> AgentState:
 
         task_id = state["task_id"]
         ms = resolve_manuscript(task_id, state.get("manuscript"))
-        payload = enrich_payload(
-            dict(state.get("input_payload") or {}),
-            task_id,
-            session_turn=int(state.get("session_turn") or 1),
-            manuscript=ms,
+        from app.services.mission_intervention import normalize_payload_execution_fields
+
+        payload = normalize_payload_execution_fields(
+            enrich_payload(
+                dict(state.get("input_payload") or {}),
+                task_id,
+                session_turn=int(state.get("session_turn") or 1),
+                manuscript=ms,
+            )
         )
         payload.pop("turn_contract", None)
         from app.services.mission_steer import complete_steer_planning, steer_requires_planning
@@ -276,7 +280,7 @@ def planning_node(state: AgentState) -> AgentState:
         if payload_patch:
             patch = dict(payload_patch)
             patch.pop("force_slow_reasoning", None)
-            payload = {**payload, **patch}
+            payload = normalize_payload_execution_fields({**payload, **patch})
         if result.get("force_slow_reasoning"):
             payload["force_slow_reasoning"] = True
 

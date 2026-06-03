@@ -257,7 +257,9 @@ def apply_mission_step_to_payload(state: AgentState) -> dict[str, Any]:
         is_forced,
     )
 
-    payload = dict(state.get("input_payload") or {})
+    from app.services.mission_intervention import normalize_payload_execution_fields
+
+    payload = normalize_payload_execution_fields(dict(state.get("input_payload") or {}))
     mission = state.get("mission") or {}
     if mission.get("kind") != "writing":
         return payload

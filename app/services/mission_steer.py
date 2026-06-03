@@ -132,7 +132,9 @@ def apply_review_outline_mode(
     mission = mission or {}
     policy = StepPolicy.from_dict(mission.get("step_policy") or {})
     outline_name = str(policy.outline_artifact or "outline.txt")
-    out = dict(payload)
+    from app.services.mission_intervention import normalize_payload_execution_fields
+
+    out = normalize_payload_execution_fields(dict(payload))
     out["steer_review_outline"] = True
     out["writing_intent"] = {
         "enabled": False,
@@ -140,7 +142,6 @@ def apply_review_outline_mode(
         "source": "steer_review",
     }
     out["selected_tools"] = ["read_text_artifact"]
-    out.setdefault("tool_params", {})
     out["tool_params"]["read_text_artifact"] = {
         "filename": outline_name,
         "max_chars": int(getattr(settings, "MISSION_OUTLINE_MAX_CHARS", 12000)),

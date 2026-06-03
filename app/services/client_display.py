@@ -140,11 +140,11 @@ def autonomous_ui_for_pause(state: AgentState, *, autonomous: bool, steer_pause:
             "autonomous: paused after repeated step failures — steer or resume manually when ready"
         )
     elif steer_pause:
-        behavior = "resume_after_steer"
-        lines.append("autonomous: steer applied — call resume to continue planning/execution")
+        behavior = "manual_resume"
+        lines.append("autonomous: paused after steer — continue with /resume or 「继续写作」 when ready")
     elif not steer_pause:
-        behavior = "auto_resume_step"
-        lines.append("autonomous: auto-resume next work item")
+        behavior = "manual_resume"
+        lines.append("autonomous: step paused — continue with /resume or 「继续写作」 when ready")
 
     if behavior in ("wait_outcome_confirm", "wait_intent_confirm"):
         resume_confirm = True

@@ -703,8 +703,6 @@ let pendingNewSession = false;
 let sessionHasInFlightMission = false;
 /** True when this process is executing the mission graph (SSE may be disconnected). */
 let sessionMissionExecutorActive = false;
-/** Deferred autonomous /resume when mission_paused fires before SSE `done`. */
-let pendingAutonomousResume = null;
 const ORCHESTRATION_COMPLETED_DISPLAY_MAX = 8;
 
 /** UUID v4; works on http://<LAN-IP> where crypto.randomUUID is unavailable. */
@@ -2612,38 +2610,10 @@ function appendSystemLines(lines, className = "system") {
   }
 }
 
-async function flushPendingAutonomousResume() {
-  const pending = pendingAutonomousResume;
-  pendingAutonomousResume = null;
-  if (!pending?.taskId) return;
-  await runResumeStream(pending.taskId, {
-    confirm: Boolean(pending.confirm),
-    fromPendingQueue: true,
-  });
-}
-
 async function runAutonomousUi(autonomousUi, taskId) {
   if (!autonomousUi?.enabled || !taskId) return;
   appendSystemLines(autonomousUi.system_lines);
-  const behavior = autonomousUi.behavior;
-  if (
-    behavior === "wait_outcome_confirm" ||
-    behavior === "wait_intent_confirm" ||
-    behavior === "steer_review_only" ||
-    behavior === "failure_pause" ||
-    behavior === "wall_clock_pause"
-  ) {
-    return;
-  }
-  if (behavior === "auto_resume_step" || behavior === "resume_after_steer") {
-    const confirm = Boolean(autonomousUi.resume_confirm);
-    if (running) {
-      pendingAutonomousResume = { taskId, confirm };
-      appendLine("autonomous: 本轮流结束后将自动继续（/resume）", "system");
-      return;
-    }
-    await runResumeStream(taskId, { confirm });
-  }
+  /* Mission pause hints only — resume is always user-initiated (/resume or continue goal). */
 }
 
 async function steerActiveMission(message, opts = {}) {
@@ -2991,7 +2961,6 @@ async function runResumeStream(taskId, { confirm = false, fromPendingQueue = fal
       activeSseAbortController = null;
     }
     setRunning(false);
-    await flushPendingAutonomousResume();
     await refreshFlowPanel(taskIdRef?.id || taskId || activeTaskId);
   }
 }
@@ -3652,7 +3621,6 @@ async function runTaskStream(goal, riskLevel = "LOW", endpoint = "/tasks/stream"
       activeSseAbortController = null;
     }
     setRunning(false);
-    await flushPendingAutonomousResume();
     await refreshFlowPanel(taskIdRef?.id || activeTaskId);
   }
 }

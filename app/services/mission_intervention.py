@@ -10,6 +10,19 @@ from typing import Any, Literal, Optional
 
 from app.config.settings import settings
 
+def normalize_payload_execution_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Coerce nullable JSON fields (e.g. tool_params: null from LLM patches) before .setdefault chains.
+    """
+    out = dict(payload)
+    if not isinstance(out.get("tool_params"), dict):
+        out["tool_params"] = {}
+    wi = out.get("writing_intent")
+    if wi is not None and not isinstance(wi, dict):
+        out.pop("writing_intent", None)
+    return out
+
+
 InterventionAction = Literal[
     "rewrite_outline",
     "review_outline",
@@ -185,7 +198,7 @@ def apply_planning_intervention(
         return payload
     block = _normalize_intervention(raw)
     if not block:
-        return payload
+        return normalize_payload_execution_fields(payload)
     if state is not None:
         block = coerce_steer_intervention(state, block)
     return apply_intervention_to_payload(payload, block)
@@ -196,7 +209,7 @@ def apply_intervention_to_payload(
     intervention: dict[str, Any],
 ) -> dict[str, Any]:
     """Merge intervention into payload for this turn."""
-    out = {**payload, "mission_intervention": intervention}
+    out = normalize_payload_execution_fields({**payload, "mission_intervention": intervention})
     action = intervention["action"]
     if action in ("rewrite_outline", "reset_body", "edit_plot"):
         out["steer_watch_outcome"] = True

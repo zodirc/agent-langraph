@@ -286,14 +286,14 @@ def work_item_to_writing_intent(
 
 def _apply_tools_for_edit_plot(payload: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
     from app.config.settings import settings
+    from app.services.mission_intervention import normalize_payload_execution_fields
 
     outline_name = str(
         spec.get("filename")
         or getattr(settings, "MANUSCRIPT_DEFAULT_OUTLINE", "outline.txt")
     )
-    payload = dict(payload)
+    payload = normalize_payload_execution_fields(dict(payload))
     payload["selected_tools"] = ["read_text_artifact", "edit_text_artifact"]
-    payload.setdefault("tool_params", {})
     payload["tool_params"]["read_text_artifact"] = {
         "filename": outline_name,
         "max_chars": int(spec.get("read_max_chars", 12000)),
@@ -325,8 +325,9 @@ def _apply_tools_for_work_item(
 ) -> dict[str, Any]:
     kind = str(item.get("kind") or "")
     params = dict(item.get("params") or {})
-    payload = dict(payload)
-    payload.setdefault("tool_params", {})
+    from app.services.mission_intervention import normalize_payload_execution_fields
+
+    payload = normalize_payload_execution_fields(dict(payload))
 
     if kind == "patch_recent_chapter":
         file_path = str(params.get("filename") or params.get("path") or default_body_name)
