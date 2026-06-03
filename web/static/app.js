@@ -2,7 +2,7 @@ const outputEl = document.getElementById("output");
 const formEl = document.getElementById("command-form");
 const inputEl = document.getElementById("command-input");
 const stopBtnEl = document.getElementById("stop-btn");
-const envBadge = document.getElementById("env-badge");
+const runStatusEl = document.getElementById("terminal-run-status");
 const sessionBadgeEl = document.getElementById("session-badge");
 const flowMetaEl = document.getElementById("flow-meta");
 const flowTaskEl = document.getElementById("flow-task");
@@ -652,7 +652,6 @@ const MISSION_LOOP_NODES = new Set([
   "mission_observe",
   "mission_eval",
 ]);
-let healthBadgeBase = "";
 const TOKEN_KEY = "agent_access_token";
 const SESSION_KEY = "agent_session_id";
 const THEME_KEY = "agent_theme";
@@ -733,6 +732,12 @@ function startNewSession() {
   appendLine(`new session: ${id.slice(0, 8)}… (server task isolated)`, "system");
   refreshHistorySidebar();
   refreshSessionFilesPane();
+  skillsRailEnabled.clear();
+  activeSkillId = null;
+  loadSkillsRailState();
+  syncSkillHeaderUi();
+  loadSkillInputForm(null);
+  renderSkillsRailList();
   return id;
 }
 
@@ -1285,11 +1290,14 @@ function startRunTimer() {
   runStartedAt = Date.now();
   lastPhaseMessage = "处理中";
   if (runTimer) clearInterval(runTimer);
-  envBadge.classList.add("badge-busy");
+  if (runStatusEl) {
+    runStatusEl.hidden = false;
+    runStatusEl.classList.add("is-busy");
+  }
   runTimer = setInterval(() => {
     const sec = Math.floor((Date.now() - runStartedAt) / 1000);
     const phase = lastPhaseMessage || "处理中";
-    envBadge.textContent = `运行中 ${sec}s | ${phase}`;
+    if (runStatusEl) runStatusEl.textContent = `运行中 ${sec}s · ${phase}`;
   }, 1000);
 }
 
@@ -1301,8 +1309,11 @@ function stopRunTimer() {
   runStartedAt = 0;
   lastPhaseMessage = "";
   progressLineEl = null;
-  envBadge.classList.remove("badge-busy");
-  envBadge.textContent = healthBadgeBase || envBadge.textContent;
+  if (runStatusEl) {
+    runStatusEl.classList.remove("is-busy");
+    runStatusEl.hidden = true;
+    runStatusEl.textContent = "";
+  }
 }
 
 function resetTraceBlock() {
@@ -1587,16 +1598,12 @@ function setRunning(value) {
 
 async function fetchHealth() {
   try {
-    const res = await fetch("/health");
-    const data = await res.json();
-    healthBadgeBase = `${data.env} | auth:${data.auth_enabled} | kb:${data.knowledge_docs}`;
-    if (!running && envBadge) envBadge.textContent = healthBadgeBase;
+    await fetch("/health");
     if (window.PlatformAuth) {
       await window.PlatformAuth.fetchRuntimeMeta();
       await window.PlatformAuth.renderNavAuth();
     }
   } catch {
-    if (envBadge) envBadge.textContent = "offline";
     if (window.PlatformAuth) await window.PlatformAuth.renderNavAuth();
   }
 }
@@ -2321,6 +2328,126 @@ async function consumeSseStream(res, taskIdRef) {
 
 let activeSkillId = null;
 const skillDetailCache = new Map();
+const skillsRailCatalog = [];
+const skillsRailEnabled = new Set();
+let skillsRailPinned = false;
+let skillsRailFilter = "";
+
+const skillsPaneEl = document.getElementById("skills-pane");
+const skillsPaneTabEl = document.getElementById("skills-pane-tab");
+const skillsPanePinEl = document.getElementById("skills-pane-pin");
+const skillsRailListEl = document.getElementById("skills-rail-list");
+const skillsPaneSearchEl = document.getElementById("skills-pane-search");
+const skillsEnabledCountEl = document.getElementById("skills-enabled-count");
+const skillActiveBadgeEl = document.getElementById("skill-active-badge");
+
+const SCENARIO_LABELS_RAIL = {
+  general: "通用",
+  code: "代码",
+  document: "文档",
+  analysis: "分析",
+  writing: "写作",
+};
+
+function skillsRailStorageKey() {
+  return `chat_skills_rail_${getSessionId()}`;
+}
+
+function saveSkillsRailState() {
+  try {
+    sessionStorage.setItem(
+      skillsRailStorageKey(),
+      JSON.stringify({
+        enabled: [...skillsRailEnabled],
+        active: activeSkillId,
+        pinned: skillsRailPinned,
+      })
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadSkillsRailState() {
+  try {
+    const raw = sessionStorage.getItem(skillsRailStorageKey());
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    skillsRailEnabled.clear();
+    for (const id of data.enabled || []) {
+      if (id) skillsRailEnabled.add(id);
+    }
+    activeSkillId = data.active || null;
+    skillsRailPinned = Boolean(data.pinned);
+    if (skillsPaneEl) skillsPaneEl.classList.toggle("expanded", skillsRailPinned);
+    syncSkillsPanePinUi();
+  } catch {
+    /* ignore */
+  }
+}
+
+function syncSkillHeaderUi() {
+  const sel = document.getElementById("skill-select");
+  if (sel) sel.value = activeSkillId || "";
+  if (skillActiveBadgeEl) {
+    if (activeSkillId) {
+      const item = skillsRailCatalog.find((s) => s.skill_id === activeSkillId);
+      skillActiveBadgeEl.textContent = item?.name || activeSkillId;
+      skillActiveBadgeEl.hidden = false;
+    } else {
+      skillActiveBadgeEl.hidden = true;
+    }
+  }
+  if (skillsEnabledCountEl) {
+    const n = skillsRailEnabled.size;
+    if (n > 0) {
+      skillsEnabledCountEl.textContent = String(n);
+      skillsEnabledCountEl.hidden = false;
+    } else {
+      skillsEnabledCountEl.hidden = true;
+    }
+  }
+}
+
+function setActiveSkill(skillId, { announce } = { announce: false }) {
+  if (skillId && !skillsRailEnabled.has(skillId)) return;
+  activeSkillId = skillId || null;
+  syncSkillHeaderUi();
+  saveSkillsRailState();
+  loadSkillInputForm(activeSkillId);
+  renderSkillsRailList();
+  if (announce && skillId) {
+    const item = skillsRailCatalog.find((s) => s.skill_id === skillId);
+    appendLine(`下一条任务将使用 Skill: ${item?.name || skillId}`, "system");
+  }
+}
+
+function toggleSkillEnabled(skillId) {
+  if (skillsRailEnabled.has(skillId)) {
+    skillsRailEnabled.delete(skillId);
+    if (activeSkillId === skillId) {
+      activeSkillId = skillsRailEnabled.size ? [...skillsRailEnabled][0] : null;
+    }
+  } else {
+    skillsRailEnabled.add(skillId);
+    if (!activeSkillId) activeSkillId = skillId;
+  }
+  syncSkillHeaderUi();
+  saveSkillsRailState();
+  loadSkillInputForm(activeSkillId);
+  renderSkillsRailList();
+}
+
+function enableSkillFromOutside(skillId) {
+  if (!skillId) return;
+  skillsRailEnabled.add(skillId);
+  activeSkillId = skillId;
+  setSkillsPanePinned(true);
+  syncSkillHeaderUi();
+  saveSkillsRailState();
+  loadSkillInputForm(skillId);
+  renderSkillsRailList();
+}
 
 async function loadSkillInputForm(skillId) {
   const panel = document.getElementById("skill-params-panel");
@@ -2351,6 +2478,154 @@ async function loadSkillInputForm(skillId) {
   }
 }
 
+function renderSkillsRailList() {
+  if (!skillsRailListEl) return;
+  const q = skillsRailFilter.trim().toLowerCase();
+  const items = skillsRailCatalog.filter((s) => {
+    if (!q) return true;
+    const hay = `${s.skill_id} ${s.name} ${s.summary || ""}`.toLowerCase();
+    return hay.includes(q);
+  });
+  if (!items.length) {
+    skillsRailListEl.innerHTML = '<p class="flow-empty">没有匹配的技能。</p>';
+    return;
+  }
+  skillsRailListEl.innerHTML = items
+    .map((s) => {
+      const enabled = skillsRailEnabled.has(s.skill_id);
+      const active = activeSkillId === s.skill_id;
+      const origin = s.source_type === "tenant" ? "自定义" : "内置";
+      const scenario = SCENARIO_LABELS_RAIL[s.category] || s.category || "—";
+      return `<article class="skills-rail-item${enabled ? " is-enabled" : ""}${active ? " is-active" : ""}" data-skill-id="${escapeHtml(s.skill_id)}">
+        <button type="button" class="skills-toggle" aria-pressed="${enabled ? "true" : "false"}">${enabled ? "已启用" : "启用"}</button>
+        <div class="skills-rail-info" role="button" tabindex="0" title="设为下一条任务所用">
+          <strong>${escapeHtml(s.name || s.skill_id)}</strong>
+          <span class="meta">${escapeHtml(scenario)} · ${escapeHtml(origin)}</span>
+        </div>
+      </article>`;
+    })
+    .join("");
+
+  skillsRailListEl.querySelectorAll(".skills-rail-item").forEach((row) => {
+    const id = row.dataset.skillId;
+    row.querySelector(".skills-toggle")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleSkillEnabled(id);
+    });
+    const info = row.querySelector(".skills-rail-info");
+    const pick = () => {
+      if (!skillsRailEnabled.has(id)) {
+        toggleSkillEnabled(id);
+        return;
+      }
+      setActiveSkill(id, { announce: true });
+    };
+    info?.addEventListener("click", pick);
+    info?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+      }
+    });
+  });
+}
+
+async function loadSkillsRailCatalog() {
+  if (!skillsRailListEl) return;
+  skillsRailListEl.innerHTML = '<p class="flow-empty">加载技能目录…</p>';
+  try {
+    const res = await fetch("/skills?scope=all&status=published", { headers: getAuthHeaders() });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const err = await res.json();
+        if (err.detail) detail = String(err.detail);
+      } catch {
+        /* ignore */
+      }
+      skillsRailListEl.innerHTML = `<p class="flow-empty">无法加载 Skills：${escapeHtml(detail)}</p>`;
+      return;
+    }
+    const data = await res.json();
+    skillsRailCatalog.length = 0;
+    skillsRailCatalog.push(...(data.skills || []));
+    skillsRailCatalog.sort(
+      (a, b) => (a.display_order ?? 0) - (b.display_order ?? 0) || a.skill_id.localeCompare(b.skill_id)
+    );
+    const sel = document.getElementById("skill-select");
+    if (sel) {
+      while (sel.options.length > 1) sel.remove(1);
+      for (const s of skillsRailCatalog) {
+        const opt = document.createElement("option");
+        opt.value = s.skill_id;
+        opt.textContent = s.name || s.skill_id;
+        sel.appendChild(opt);
+      }
+    }
+    reconcileSkillsRailWithCatalog();
+    renderSkillsRailList();
+    syncSkillHeaderUi();
+    loadSkillInputForm(activeSkillId);
+  } catch {
+    skillsRailListEl.innerHTML = '<p class="flow-empty">加载失败。</p>';
+  }
+}
+
+function reconcileSkillsRailWithCatalog() {
+  const ids = new Set(skillsRailCatalog.map((s) => s.skill_id));
+  for (const id of [...skillsRailEnabled]) {
+    if (!ids.has(id)) skillsRailEnabled.delete(id);
+  }
+  if (activeSkillId && !ids.has(activeSkillId)) {
+    activeSkillId = skillsRailEnabled.size ? [...skillsRailEnabled][0] : null;
+  }
+}
+
+function syncSkillsPanePinUi() {
+  if (!skillsPanePinEl) return;
+  skillsPanePinEl.textContent = skillsRailPinned ? "取消固定" : "固定";
+  skillsPanePinEl.title = skillsRailPinned ? "取消固定展开，恢复为悬停展开" : "固定展开侧栏";
+  skillsPanePinEl.setAttribute("aria-pressed", skillsRailPinned ? "true" : "false");
+}
+
+function setSkillsPanePinned(pinned) {
+  skillsRailPinned = Boolean(pinned);
+  if (skillsPaneEl) {
+    skillsPaneEl.classList.toggle("expanded", skillsRailPinned);
+  }
+  syncSkillsPanePinUi();
+  saveSkillsRailState();
+}
+
+function toggleSkillsPanePinned() {
+  setSkillsPanePinned(!skillsRailPinned);
+}
+
+function initSkillsRail() {
+  loadSkillsRailState();
+  syncSkillsPanePinUi();
+
+  if (skillsPaneTabEl && skillsPaneEl) {
+    skillsPaneTabEl.addEventListener("click", () => {
+      toggleSkillsPanePinned();
+    });
+  }
+
+  if (skillsPanePinEl && skillsPaneEl) {
+    skillsPanePinEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleSkillsPanePinned();
+    });
+  }
+
+  if (skillsPaneSearchEl) {
+    skillsPaneSearchEl.addEventListener("input", () => {
+      skillsRailFilter = skillsPaneSearchEl.value;
+      renderSkillsRailList();
+    });
+  }
+}
+
 function buildDefaultTaskBody(goal, riskLevel = "LOW") {
   const body = attachSessionFlags({
     task_type: "qa",
@@ -2377,42 +2652,15 @@ function buildTaskRequestBody(goal, riskLevel = "LOW") {
   return buildDefaultTaskBody(goal, riskLevel);
 }
 
-async function loadSkillOptions() {
-  const sel = document.getElementById("skill-select");
-  if (!sel) return;
-  try {
-    const res = await fetch("/skills?scope=all&status=published", { headers: getAuthHeaders() });
-    if (!res.ok) return;
-    const data = await res.json();
-    for (const s of data.skills || []) {
-      const opt = document.createElement("option");
-      opt.value = s.skill_id;
-      opt.textContent = s.name || s.skill_id;
-      sel.appendChild(opt);
-    }
-  } catch {
-    /* catalog optional */
-  }
-}
-
 function initSkillFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const sid = params.get("skill_id");
   const goal = params.get("goal");
   if (sid) {
-    activeSkillId = sid;
-    const sel = document.getElementById("skill-select");
-    if (sel) sel.value = sid;
+    enableSkillFromOutside(sid);
     if (goal && inputEl) inputEl.value = goal;
-    appendLine(`已选择 Skill: ${sid}`, "system");
-    loadSkillInputForm(sid);
-  }
-  const sel = document.getElementById("skill-select");
-  if (sel) {
-    sel.addEventListener("change", () => {
-      activeSkillId = sel.value || null;
-      loadSkillInputForm(activeSkillId);
-    });
+    const item = skillsRailCatalog.find((s) => s.skill_id === sid);
+    appendLine(`已启用 Skill: ${item?.name || sid}`, "system");
   }
 }
 
@@ -2837,4 +3085,19 @@ refreshFlowPanel();
 refreshHistorySidebar();
 refreshSessionFilesPane();
 startSessionFilesPolling();
-loadSkillOptions().then(initSkillFromUrl);
+initSkillsRail();
+function bootSkillsRail() {
+  loadSkillsRailCatalog().then(() => {
+    loadSkillsRailState();
+    reconcileSkillsRailWithCatalog();
+    renderSkillsRailList();
+    syncSkillHeaderUi();
+    loadSkillInputForm(activeSkillId);
+    initSkillFromUrl();
+  });
+}
+
+bootSkillsRail();
+window.addEventListener("platform-auth-login", () => bootSkillsRail());
+window.addEventListener("platform-auth-logout", () => bootSkillsRail());
+document.addEventListener("platform-auth-ready", () => bootSkillsRail(), { once: true });

@@ -4,88 +4,109 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>对话 — Agent Runtime</title>
-  <link rel="stylesheet" href="/static/terminal.css?v=ui-8" />
-  <link rel="stylesheet" href="/static/platform.css?v=ui-8" />
+  <link rel="stylesheet" href="/static/terminal.css?v=ui-12" />
+  <link rel="stylesheet" href="/static/platform.css?v=ui-12" />
 </head>
-<body class="platform-shell" data-active-page="chat">
+<body class="platform-shell chat-page-shell" data-active-page="chat">
   <div id="platform-nav"></div>
-  <div class="terminal">
-    <header class="terminal-header">
-      <select id="theme-select" class="theme-select" title="主题" hidden aria-hidden="true">
-        <option value="dark">深色</option>
-        <option value="light">淡色</option>
-      </select>
-      <span class="dot red"></span>
-      <span class="dot yellow"></span>
-      <span class="dot green"></span>
-      <span class="title">agent-langraph — 对话</span>
-      <div class="header-actions">
-        <select id="skill-select" class="theme-select" title="任务 Skill">
-          <option value="">Skill: 无</option>
-        </select>
-        <button id="state-debug-btn" type="button" class="flow-btn" title="查看当前会话 AgentState">State</button>
-        <button id="flow-open-btn" type="button" class="flow-btn">Flow</button>
+  <div class="chat-workspace">
+    <aside class="skills-pane" id="skills-pane" aria-label="Skills 能力栏">
+      <button type="button" id="skills-pane-tab" class="skills-pane-tab" title="Skills — 悬停或点击展开">
+        <span class="skills-tab-icon" aria-hidden="true">◇</span>
+        <span class="skills-tab-label">Skills</span>
+        <span id="skills-enabled-count" class="skills-tab-badge" hidden>0</span>
+      </button>
+      <div class="skills-pane-body">
+        <div class="skills-pane-head">
+          <h3 class="history-title">Skills</h3>
+          <button type="button" id="skills-pane-pin" class="flow-btn" title="固定展开侧栏" aria-pressed="false">固定</button>
+        </div>
+        <p class="skills-pane-hint">点击「启用」加入本对话；已启用项点击名称设为下一条任务所用。</p>
+        <input type="search" id="skills-pane-search" class="skills-pane-search" placeholder="筛选技能…" />
+        <div id="skills-rail-list" class="skills-rail-list">
+          <p class="flow-empty">加载技能目录…</p>
+        </div>
+        <div id="skill-params-panel" class="skill-params-panel"></div>
       </div>
-      <div class="header-badges">
-        <span id="env-badge" class="badge badge-env">loading</span>
-        <span id="session-badge" class="badge badge-session" title="当前会话 ID">session …</span>
-      </div>
-    </header>
-    <div class="terminal-main">
-      <main id="output" class="terminal-output"></main>
-      <aside class="history-pane" id="history-pane">
-        <div class="history-head">
-          <h3 class="history-title">历史会话</h3>
-          <button id="history-refresh-btn" type="button" class="flow-btn">刷新</button>
-        </div>
-        <div class="history-list" id="history-list">
-          <p class="flow-empty">暂无历史会话。</p>
-        </div>
-        <div id="flow-cache" style="display:none">
-          <p class="flow-meta" id="flow-meta">等待任务运行</p>
-          <p class="flow-task" id="flow-task">task: -</p>
-          <div class="flow-graph" id="flow-graph">
-            <p class="flow-empty">流程图等待任务数据…</p>
+    </aside>
+    <div class="chat-main">
+      <div class="terminal">
+        <header class="terminal-header">
+          <select id="theme-select" class="theme-select" title="主题" hidden aria-hidden="true">
+            <option value="dark">深色</option>
+            <option value="light">淡色</option>
+          </select>
+          <span class="dot red"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+          <span class="title">对话</span>
+          <div class="header-actions">
+            <select id="skill-select" class="theme-select" title="任务 Skill" hidden aria-hidden="true">
+              <option value="">Skill: 无</option>
+            </select>
+            <span id="skill-active-badge" class="badge badge-skill" title="下一条任务使用的 Skill" hidden>—</span>
+            <span id="terminal-run-status" class="terminal-run-status" hidden></span>
+            <span id="session-badge" class="badge badge-session" title="当前会话 ID">session …</span>
+            <button id="state-debug-btn" type="button" class="flow-btn" title="查看当前会话 AgentState">State</button>
+            <button id="flow-open-btn" type="button" class="flow-btn">Flow</button>
           </div>
-          <div class="flow-timeline" id="flow-timeline">
-            <p class="flow-empty">暂无节点数据。运行任务后将自动显示。</p>
-          </div>
-        </div>
-      </aside>
-      <aside class="session-files-pane collapsed" id="session-files-pane">
-        <button id="session-files-toggle" type="button" class="session-files-tab" title="会话文件">
-          Files
-        </button>
-        <div class="session-files-body">
-          <div class="session-files-head">
-            <h3 class="history-title">会话文件</h3>
-            <div class="session-files-actions">
-              <button id="session-files-up-btn" type="button" class="flow-btn">上级</button>
-              <button id="session-files-refresh-btn" type="button" class="flow-btn">刷新</button>
+        </header>
+        <div class="terminal-main">
+          <main id="output" class="terminal-output"></main>
+          <aside class="history-pane" id="history-pane">
+            <div class="history-head">
+              <h3 class="history-title">历史会话</h3>
+              <button id="history-refresh-btn" type="button" class="flow-btn">刷新</button>
             </div>
-          </div>
-          <div class="session-files-meta" id="session-files-meta">等待会话…</div>
-          <div class="session-files-breadcrumb" id="session-files-breadcrumb"></div>
-          <div class="session-files-list" id="session-files-list">
-            <p class="flow-empty">暂无文件。</p>
-          </div>
-          <p class="session-files-tip">双击文件可打开实时预览窗口。</p>
+            <div class="history-list" id="history-list">
+              <p class="flow-empty">暂无历史会话。</p>
+            </div>
+            <div id="flow-cache" style="display:none">
+              <p class="flow-meta" id="flow-meta">等待任务运行</p>
+              <p class="flow-task" id="flow-task">task: -</p>
+              <div class="flow-graph" id="flow-graph">
+                <p class="flow-empty">流程图等待任务数据…</p>
+              </div>
+              <div class="flow-timeline" id="flow-timeline">
+                <p class="flow-empty">暂无节点数据。运行任务后将自动显示。</p>
+              </div>
+            </div>
+          </aside>
+          <aside class="session-files-pane collapsed" id="session-files-pane">
+            <button id="session-files-toggle" type="button" class="session-files-tab" title="会话文件">
+              Files
+            </button>
+            <div class="session-files-body">
+              <div class="session-files-head">
+                <h3 class="history-title">会话文件</h3>
+                <div class="session-files-actions">
+                  <button id="session-files-up-btn" type="button" class="flow-btn">上级</button>
+                  <button id="session-files-refresh-btn" type="button" class="flow-btn">刷新</button>
+                </div>
+              </div>
+              <div class="session-files-meta" id="session-files-meta">等待会话…</div>
+              <div class="session-files-breadcrumb" id="session-files-breadcrumb"></div>
+              <div class="session-files-list" id="session-files-list">
+                <p class="flow-empty">暂无文件。</p>
+              </div>
+              <p class="session-files-tip">双击文件可打开实时预览窗口。</p>
+            </div>
+          </aside>
         </div>
-      </aside>
+        <form id="command-form" class="terminal-input-row" autocomplete="off">
+          <label for="command-input" class="prompt">&gt;</label>
+          <input
+            id="command-input"
+            type="text"
+            list="command-suggestions"
+            placeholder="输入任务目标，或 /help 查看命令"
+            autofocus
+          />
+          <button id="stop-btn" type="button" class="stop-btn" disabled>Stop</button>
+        </form>
+        <datalist id="command-suggestions"></datalist>
+      </div>
     </div>
-    <div id="skill-params-panel" class="skill-params-panel" hidden></div>
-    <form id="command-form" class="terminal-input-row" autocomplete="off">
-      <label for="command-input" class="prompt">&gt;</label>
-      <input
-        id="command-input"
-        type="text"
-        list="command-suggestions"
-        placeholder="输入任务目标，或 /help 查看命令"
-        autofocus
-      />
-      <button id="stop-btn" type="button" class="stop-btn" disabled>Stop</button>
-    </form>
-    <datalist id="command-suggestions"></datalist>
   </div>
   <dialog id="state-debug-modal" class="state-debug-modal">
     <div class="state-debug-shell">
@@ -119,6 +140,6 @@
   <script src="/static/platform-nav.js?v=6"></script>
   <script src="/static/platform-auth.js?v=6"></script>
   <script src="/static/skill_form.js?v=1"></script>
-  <script src="/static/app.js?v=theme-5"></script>
+  <script src="/static/app.js?v=ui-13"></script>
 </body>
 </html>
