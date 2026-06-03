@@ -701,6 +701,8 @@ const THEME_KEY = "agent_theme";
 /** Next stream submit uses new_session=true once (after /new). */
 let pendingNewSession = false;
 let sessionHasInFlightMission = false;
+/** True when this process is executing the mission graph (SSE may be disconnected). */
+let sessionMissionExecutorActive = false;
 /** Deferred autonomous /resume when mission_paused fires before SSE `done`. */
 let pendingAutonomousResume = null;
 const ORCHESTRATION_COMPLETED_DISPLAY_MAX = 8;
@@ -2712,15 +2714,19 @@ async function stopTaskById(taskId) {
   return true;
 }
 
-async function getTaskStatusValue(taskId) {
+async function fetchTaskStatus(taskId) {
   try {
     const res = await fetch(`/tasks/${taskId}/status`, { headers: getAuthHeaders() });
-    if (!res.ok) return "";
-    const data = await res.json();
-    return String(data.status || "");
+    if (!res.ok) return null;
+    return await res.json();
   } catch {
-    return "";
+    return null;
   }
+}
+
+async function getTaskStatusValue(taskId) {
+  const data = await fetchTaskStatus(taskId);
+  return data ? String(data.status || "") : "";
 }
 
 async function stopAllInFlightMissions({ limit = 100 } = {}) {
@@ -3787,23 +3793,22 @@ async function handleCommand(raw) {
     sessionHasInFlightMission = false;
     return;
   }
-  // Only intercept when mission is actively running (steer queue). Paused missions use
-  // normal session turn so backend turn_policy + planning LLM interpret intent.
-  if (sessionHasInFlightMission && !text.startsWith("/")) {
+  // Steer queue only while the executor is actually running on the server.
+  // After worker_lost / PAUSED, use normal session turn (insert + explicit /resume).
+  if (!text.startsWith("/")) {
     const taskId = activeTaskId || getSessionId();
-    const st = await getTaskStatusValue(taskId);
-    if (st === "MISSION_RUNNING") {
-      const ok = await steerActiveMission(text, {
+    const statusData = await fetchTaskStatus(taskId);
+    const st = String(statusData?.status || "");
+    const executorActive = Boolean(statusData?.executor_active);
+    sessionMissionExecutorActive = st === "MISSION_RUNNING" && executorActive;
+    sessionHasInFlightMission = st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
+    updateStopButtonState();
+    if (st === "MISSION_RUNNING" && executorActive) {
+      await steerActiveMission(text, {
         preempt: true,
         priority: 80,
         replaceGoal: true,
       });
-      if (ok) {
-        appendLine(
-          "任务运行中：已按接管模式处理输入。暂停后续写请等本轮结束，或使用 /append <text>。",
-          "system"
-        );
-      }
       return;
     }
   }
@@ -4016,35 +4021,31 @@ if (themeSelectEl) {
 
 async function warnIfSessionMissionInFlight() {
   const taskId = getSessionId();
-  try {
-    const res = await fetch(`/tasks/${taskId}/status`, { headers: getAuthHeaders() });
-    if (!res.ok) return;
-    const data = await res.json();
-    const st = String(data.status || "");
-    if (st === "MISSION_RUNNING") {
-      sessionHasInFlightMission = true;
-      ensureFlowAutoRefresh();
+  const data = await fetchTaskStatus(taskId);
+  if (!data) return;
+  const st = String(data.status || "");
+  const executorActive = Boolean(data.executor_active);
+  const pauseReason = String(data.pause_reason || "");
+  sessionMissionExecutorActive = st === "MISSION_RUNNING" && executorActive;
+  sessionHasInFlightMission = st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
+  if (st === "MISSION_RUNNING" && executorActive) {
+    ensureFlowAutoRefresh();
+  } else if (st === "MISSION_PAUSED") {
+    if (pauseReason === "worker_lost") {
       appendLine(
-        `Note: session ${taskId.slice(0, 8)}… is MISSION_RUNNING (node ${data.current_node}). ` +
-          "运行中输入会进入 steer 接管；暂停后请用普通输入续写。",
+        `Note: session ${taskId.slice(0, 8)}… 执行已中断 (worker_lost, node ${data.current_node})。` +
+          " 直接输入为插入/纠偏（已写入状态）；不会自动续跑，请 /resume 或「继续写作」。",
         "system"
       );
-      updateStopButtonState();
-    } else if (st === "MISSION_PAUSED") {
-      sessionHasInFlightMission = false;
+    } else {
       appendLine(
         `Note: session ${taskId.slice(0, 8)}… is MISSION_PAUSED (node ${data.current_node}). ` +
           "直接输入「继续写作」等即可，由规划/会话策略理解意图；待确认时用 /confirm，不必先 /resume。",
         "system"
       );
-      updateStopButtonState();
-    } else {
-      sessionHasInFlightMission = false;
-      updateStopButtonState();
     }
-  } catch {
-    /* ignore */
   }
+  updateStopButtonState();
 }
 
 updateSessionBadge(getSessionId());

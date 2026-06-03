@@ -85,6 +85,7 @@ flowchart TB
 | `step_checkpoint` | stepwise 每步暂停 | `POST /resume` 或机械续写 session turn（签发 grant） |
 | `gate_intent` / `gate_outcome` | HITL 闸门 | `{"confirm": true}` |
 | `steer_queued` | 运行中 steer 队列未消费 | 等待边界消费或暂停后 steer |
+| `worker_lost` | 持久化 RUNNING 但本进程无 graph worker（重启等） | 插入/steer 后立即 merge；续跑需 `/resume` 或机械继续 |
 | `human_gate` | 编排人工检查点 | 同 step_checkpoint |
 | `budget` / `forced` / `failure` | 预算、强制暂停、失败 | 见 mission 文档 |
 

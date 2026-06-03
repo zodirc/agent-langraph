@@ -260,13 +260,25 @@ def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[
     depth = len((pending.get("messages") if isinstance(pending, dict) else []) or [])
     intervention = _intervention_display(payload)
 
+    pause_reason = ""
+    mc = state.get("mission_control")
+    if isinstance(mc, dict):
+        pause_reason = str(mc.get("pause_reason") or "")
+
     if queued:
         lines = [
-            "steer_queued: applied after current mission step completes",
+            "steer_queued: will apply after the current mission step completes",
             f"queue_depth={depth}",
+            "不会自动续跑；当前步结束后消费队列。",
         ]
     else:
-        lines = ["steer_applied: merged into task state"]
+        lines = ["steer_applied: 插入/纠偏已写入任务状态"]
+        if pause_reason == "worker_lost":
+            lines.append(
+                "执行器已中断：不会自动写作；续跑请 /resume 或发送「继续写作」。"
+            )
+        elif str(state.get("status") or "") == "MISSION_PAUSED":
+            lines.append("任务已暂停：续跑请 /resume 或发送「继续写作」。")
         if intervention and intervention.get("reason"):
             lines.append(intervention["reason"])
         elif intervention and intervention.get("action"):

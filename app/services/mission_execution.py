@@ -24,6 +24,7 @@ PAUSE_HUMAN_GATE = "human_gate"
 PAUSE_FAILURE = "failure"
 PAUSE_BUDGET = "budget"
 PAUSE_FORCED = "forced"
+PAUSE_WORKER_LOST = "worker_lost"
 
 _MECHANICAL_RESUME_SOURCES = frozenset(
     {

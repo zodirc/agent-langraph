@@ -453,9 +453,12 @@ def queue_steer_message(
     if not (message or "").strip() and not intervention and not confirm:
         raise ValueError("steer requires message, intervention, and/or confirm=true")
 
+    from app.services.mission_worker_lost import reconcile_worker_lost
+
     stored = get_state_store().load(task_id)
     if not stored:
         raise KeyError(f"Task not found: {task_id}")
+    stored = reconcile_worker_lost(stored)
     status = str(stored.get("status", ""))
 
     if status in (TaskStatus.MISSION_PAUSED.value, TaskStatus.REASONED.value):

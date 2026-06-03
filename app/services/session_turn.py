@@ -115,6 +115,10 @@ def prepare_session_turn(
     store = get_state_store()
     task_id = session_id
     existing = store.load(task_id) if not new_session else None
+    if existing:
+        from app.services.mission_worker_lost import reconcile_worker_lost
+
+        existing = reconcile_worker_lost(existing)
 
     if existing and existing.get("session_id") == session_id:
         history = conversation_history_from_state(existing)

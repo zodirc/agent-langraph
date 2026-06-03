@@ -64,6 +64,9 @@ class TaskStatusResponse(BaseModel):
     errors: list[str]
     node_history: list[NodeHistoryEntry] = Field(default_factory=list)
     review_requested_at: Optional[str] = None
+    executor_active: bool = False
+    pause_reason: Optional[str] = None
+    pending_steer_queued: bool = False
 
 
 class TaskResultResponse(BaseModel):
@@ -524,9 +527,14 @@ def get_task_status(
 ) -> TaskStatusResponse:
     from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
 
-    state = get_state_store().load(task_id, read_only=True)
+    from app.services.graph_run_registry import executor_active_for_state
+    from app.services.mission_steer import pending_steer_is_set
+    from app.services.mission_worker_lost import reconcile_worker_lost
+
+    state = get_state_store().load(task_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    state = reconcile_worker_lost(state)
     state = enrich_agent_state_manuscript(state)
     history = [
         NodeHistoryEntry(
@@ -542,6 +550,7 @@ def get_task_status(
         manuscript = state.get("manuscript") or {}
         if manuscript.get("body_path"):
             display_node = "writing"
+    mission_control = state.get("mission_control") if isinstance(state.get("mission_control"), dict) else {}
     return TaskStatusResponse(
         task_id=task_id,
         status=str(state["status"]),
@@ -550,6 +559,9 @@ def get_task_status(
         errors=list(state.get("errors", [])),
         node_history=history,
         review_requested_at=state.get("review_requested_at"),
+        executor_active=executor_active_for_state(state),
+        pause_reason=str(mission_control.get("pause_reason") or "") or None,
+        pending_steer_queued=pending_steer_is_set(state.get("pending_user_message")),
     )
 
 

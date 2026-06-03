@@ -82,6 +82,7 @@ from app.services.stream_progress import (
     set_trace_handler,
     set_writing_handler,
 )
+from app.services.graph_run_registry import begin_graph_run, execution_run_meta, end_graph_run
 from app.services.live_task_state import clear_live, register_live, touch_live
 from app.services.state_store import get_state_store
 from app.services.graph_execution_pool import (
@@ -163,6 +164,19 @@ def _prepare_mission_for_turn(
         return merge_state(state, execution_mode="mission")
 
     return init_mission_state(state, payload)
+
+
+def _begin_task_graph_run(state: AgentState) -> tuple[AgentState, str]:
+    """Register in-process executor; persist execution_run on state."""
+    task_id = str(state["task_id"])
+    run_id = begin_graph_run(task_id)
+    return merge_state(state, execution_run=execution_run_meta(run_id)), run_id
+
+
+def _end_task_graph_run(task_id: str, run_id: str) -> None:
+    """Drop executor registry and live snapshot when the graph thread finishes."""
+    end_graph_run(task_id, run_id)
+    clear_live(task_id)
 
 
 def _format_stream_exception(exc: BaseException) -> str:
@@ -517,12 +531,16 @@ class GraphRunner:
             get_metrics_service().inc_tenant_task(tenant_id)
             quota_started = True
 
+        state, run_id = _begin_task_graph_run(state)
+        get_state_store().save(state)
+
         def _execute() -> AgentState:
             return self._invoke_graph_safe(state, thread=thread, mode=exec_mode)
 
         try:
             final_state = self._run_with_slot(_execute)
         finally:
+            _end_task_graph_run(str(state["task_id"]), run_id)
             if quota_started:
                 get_tenant_quota_store().task_finished(tenant_id)
         final_state = _maybe_pause_for_review(final_state)
@@ -614,6 +632,8 @@ class GraphRunner:
         interrupted_for_review = False
         started_at = time.monotonic()
         task_id = state["task_id"]
+        state, run_id = _begin_task_graph_run(state)
+        get_state_store().save(state)
         register_live(state)
         progress_q: queue.SimpleQueue[str] = queue.SimpleQueue()
         trace_q: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
@@ -682,6 +702,7 @@ class GraphRunner:
                 stream_error[0] = exc
             finally:
                 node_q.put(None)
+                _end_task_graph_run(task_id, run_id)
 
         yield _format_progress_event(
             task_id, "任务已开始，Agent 正在处理…", started_at=started_at, phase="started"
@@ -832,7 +853,7 @@ class GraphRunner:
             set_writing_handler(None)
             if worker is not threading.current_thread():
                 worker.join(timeout=2.0)
-            clear_live(task_id)
+            _end_task_graph_run(task_id, run_id)
 
         yield from self._stream_finalize(latest, interrupted_for_review)
 
@@ -870,6 +891,8 @@ class GraphRunner:
         latest = state
         interrupted_for_review = False
         task_id = state["task_id"]
+        state, run_id = _begin_task_graph_run(state)
+        get_state_store().save(state)
         register_live(state)
         try:
             for node_name, snapshot in stream_supervisor_graph(state):
@@ -897,7 +920,7 @@ class GraphRunner:
             yield from self._stream_error(latest, exc)
             return
         finally:
-            clear_live(task_id)
+            _end_task_graph_run(task_id, run_id)
 
         yield from self._stream_finalize(latest, interrupted_for_review)
 
@@ -1025,9 +1048,12 @@ class GraphRunner:
 
         Prepare resume: confirm steer gates, issue_execution_grant, MISSION_RUNNING, no graph invoke.
         """
+        from app.services.mission_worker_lost import reconcile_worker_lost
+
         stored = get_state_store().load(task_id)
         if not stored:
             raise KeyError(f"Task not found: {task_id}")
+        stored = reconcile_worker_lost(stored)
         status = str(stored.get("status", ""))
         if status not in (
             TaskStatus.MISSION_PAUSED.value,
@@ -1104,10 +1130,15 @@ class GraphRunner:
     def resume_mission(self, task_id: str, *, confirm: bool = False) -> AgentState:
         """Continue an orchestrated mission from MISSION_PAUSED (one or more steps)."""
         resumed = self.prepare_resume_mission(task_id, confirm=confirm)
+        resumed, run_id = _begin_task_graph_run(resumed)
+        get_state_store().save(resumed)
         thread = graph_thread_id(resumed)
-        final_state = self._run_with_slot(
-            lambda: self._invoke_graph_safe(resumed, thread=thread, mode="mission")
-        )
+        try:
+            final_state = self._run_with_slot(
+                lambda: self._invoke_graph_safe(resumed, thread=thread, mode="mission")
+            )
+        finally:
+            _end_task_graph_run(str(resumed["task_id"]), run_id)
         final_state = self._finalize_turn(final_state)
         get_state_store().save(final_state)
         get_audit_store().append_events(task_id, final_state.get("audit_log", []))
