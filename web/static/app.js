@@ -24,8 +24,13 @@ const flowOpenBtnEl = document.getElementById("flow-open-btn");
 const stateDebugBtnEl = document.getElementById("state-debug-btn");
 const historyListEl = document.getElementById("history-list");
 const historyRefreshBtnEl = document.getElementById("history-refresh-btn");
-const sessionFilesPaneEl = document.getElementById("session-files-pane");
-const sessionFilesToggleEl = document.getElementById("session-files-toggle");
+const rightRailPaneEl = document.getElementById("right-rail-pane");
+const rightRailTabEl = document.getElementById("right-rail-tab");
+const rightRailPinEl = document.getElementById("right-rail-pin");
+const rightRailTabHistoryEl = document.getElementById("right-rail-tab-history");
+const rightRailTabFilesEl = document.getElementById("right-rail-tab-files");
+const historyPanelEl = document.getElementById("history-panel");
+const filesPanelEl = document.getElementById("files-panel");
 const sessionFilesUpBtnEl = document.getElementById("session-files-up-btn");
 const sessionFilesRefreshBtnEl = document.getElementById("session-files-refresh-btn");
 const sessionFilesMetaEl = document.getElementById("session-files-meta");
@@ -969,9 +974,102 @@ function renderSessionFilesBreadcrumb() {
     .join("");
 }
 
+let rightRailPinned = false;
+const RIGHT_RAIL_PINNED_KEY = "chat_right_rail_pinned";
+const RIGHT_RAIL_PANEL_KEY = "chat_right_rail_panel";
+
+function showRightRailPanel(panelName) {
+  const name = panelName === "files" ? "files" : "history";
+  const pairs = [
+    { panel: historyPanelEl, tab: rightRailTabHistoryEl, id: "history" },
+    { panel: filesPanelEl, tab: rightRailTabFilesEl, id: "files" },
+  ];
+  for (const { panel, tab, id } of pairs) {
+    const on = id === name;
+    if (panel) {
+      panel.classList.toggle("is-active", on);
+      panel.hidden = !on;
+    }
+    if (tab) {
+      tab.classList.toggle("is-active", on);
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+    }
+  }
+  try {
+    sessionStorage.setItem(RIGHT_RAIL_PANEL_KEY, name);
+  } catch {
+    /* ignore */
+  }
+  if (name === "files") {
+    refreshSessionFilesPane();
+  }
+}
+
+function syncRightRailPinUi() {
+  if (!rightRailPinEl) return;
+  rightRailPinEl.textContent = rightRailPinned ? "取消固定" : "固定";
+  rightRailPinEl.title = rightRailPinned ? "取消固定展开，恢复为悬停展开" : "固定展开侧栏";
+  rightRailPinEl.setAttribute("aria-pressed", rightRailPinned ? "true" : "false");
+}
+
+function setRightRailPinned(pinned) {
+  rightRailPinned = Boolean(pinned);
+  if (rightRailPaneEl) {
+    rightRailPaneEl.classList.toggle("expanded", rightRailPinned);
+  }
+  syncRightRailPinUi();
+  try {
+    sessionStorage.setItem(RIGHT_RAIL_PINNED_KEY, rightRailPinned ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadRightRailState() {
+  try {
+    rightRailPinned = sessionStorage.getItem(RIGHT_RAIL_PINNED_KEY) === "1";
+    if (rightRailPaneEl) {
+      rightRailPaneEl.classList.toggle("expanded", rightRailPinned);
+    }
+    const panel = sessionStorage.getItem(RIGHT_RAIL_PANEL_KEY);
+    if (panel === "files" || panel === "history") {
+      showRightRailPanel(panel);
+    }
+  } catch {
+    /* ignore */
+  }
+  syncRightRailPinUi();
+}
+
+function initRightRail() {
+  loadRightRailState();
+  if (rightRailTabEl && rightRailPaneEl) {
+    rightRailTabEl.addEventListener("click", () => {
+      setRightRailPinned(!rightRailPinned);
+    });
+  }
+  if (rightRailPinEl && rightRailPaneEl) {
+    rightRailPinEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setRightRailPinned(!rightRailPinned);
+    });
+  }
+  if (rightRailTabHistoryEl) {
+    rightRailTabHistoryEl.addEventListener("click", () => showRightRailPanel("history"));
+  }
+  if (rightRailTabFilesEl) {
+    rightRailTabFilesEl.addEventListener("click", () => showRightRailPanel("files"));
+  }
+}
+
+/** @deprecated use showRightRailPanel('files') */
 function setSessionFilesCollapsed(collapsed) {
-  if (!sessionFilesPaneEl) return;
-  sessionFilesPaneEl.classList.toggle("collapsed", collapsed);
+  if (!collapsed) {
+    showRightRailPanel("files");
+    if (!rightRailPinned && rightRailPaneEl) {
+      rightRailPaneEl.classList.add("expanded");
+    }
+  }
 }
 
 function buildSessionFileViewerHtml(filePath) {
@@ -3288,14 +3386,6 @@ if (historyListEl) {
   });
 }
 
-if (sessionFilesToggleEl) {
-  sessionFilesToggleEl.addEventListener("click", () => {
-    const collapsed = sessionFilesPaneEl?.classList.contains("collapsed");
-    setSessionFilesCollapsed(!collapsed);
-    if (collapsed) refreshSessionFilesPane();
-  });
-}
-
 if (sessionFilesRefreshBtnEl) {
   sessionFilesRefreshBtnEl.addEventListener("click", () => {
     refreshSessionFilesPane();
@@ -3390,6 +3480,7 @@ refreshHistorySidebar();
 refreshSessionFilesPane();
 startSessionFilesPolling();
 initSkillsRail();
+initRightRail();
 function bootSkillsRail() {
   loadSkillsRailCatalog().then(() => {
     loadSkillsRailState();

@@ -506,6 +506,7 @@ body.chat-page-shell {
 
 .chat-workspace {
   --skills-rail-collapsed: 22px;
+  --right-rail-collapsed: 22px;
   display: flex;
   flex: 1;
   width: 100%;
@@ -514,6 +515,7 @@ body.chat-page-shell {
   position: relative;
   /* 窄条占位；展开时侧栏叠加，不挤压主对话区宽度 */
   padding-left: var(--skills-rail-collapsed);
+  padding-right: var(--right-rail-collapsed);
 }
 
 .chat-main {
