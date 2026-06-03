@@ -29,7 +29,19 @@ COPY config/ ./config/
 COPY web/ ./web/
 COPY knowledge/ ./knowledge/
 
-RUN mkdir -p /data/db /data/vectorstore /data/logs /data/code_verify /data/models/sentence-transformers
+RUN mkdir -p /app/models-baked/sentence-transformers
+
+# 构建时预拉取 embedding 模型到镜像内（非 /data，避免 agent_data 卷挂载覆盖）
+RUN python -c "\
+from sentence_transformers import SentenceTransformer; \
+SentenceTransformer( \
+    'sentence-transformers/all-MiniLM-L6-v2', \
+    device='cpu', \
+    cache_folder='/app/models-baked/sentence-transformers', \
+)"
+
+COPY deploy/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # 与 docker-compose.yml 一致；宿主机通过 -e / --env-file 覆盖
 ENV CONFIG_PATH=/app/config/config.docker.yaml \
@@ -42,4 +54,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://127.0.0.1:8000/health || exit 1
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

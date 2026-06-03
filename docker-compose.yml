@@ -72,17 +72,21 @@ services:
       TENANT_QUOTA_BACKEND: ${TENANT_QUOTA_BACKEND:-memory}
       TENANT_QUOTA_REDIS: ${TENANT_QUOTA_REDIS:-false}
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_USER_PER_MIN: ${RATE_LIMIT_USER_PER_MIN:-600}
+      RATE_LIMIT_IP_PER_MIN: ${RATE_LIMIT_IP_PER_MIN:-3000}
       RATE_LIMIT_REDIS: ${RATE_LIMIT_REDIS:-false}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      LOCAL_EMBEDDING_CACHE_DIR: /data/models/sentence-transformers
     volumes:
-      - agent_data:/data   # Chroma 向量库、artifact、日志（不含 SQLite 业务库）
+      # 整卷挂载 /data：Chroma、artifact、日志、embedding 缓存（/data/models/sentence-transformers）
+      - agent_data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s
+      start_period: 90s
 
   caddy:
     image: caddy:2-alpine

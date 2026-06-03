@@ -138,6 +138,15 @@ if (WEB_DIR / "static").exists():
     app.mount("/static", static_cls(directory=WEB_DIR / "static"), name="static")
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> FileResponse:
+    """Browser default favicon request."""
+    icon = WEB_DIR / "static" / "favicon.svg"
+    if not icon.exists():
+        raise RuntimeError(f"Favicon not found: {icon}")
+    return FileResponse(icon, media_type="image/svg+xml")
+
+
 @app.get("/")
 def platform_home() -> FileResponse:
     """Platform landing page."""

@@ -42,6 +42,17 @@ make init && make up                   # HTTPS + 代码热更新
 - `/risk high <text>`
 - `/supervisor 分析文档并审查代码`
 
+### 近期前端更新（2026-06-03）
+
+基于今天的 commits，Web 端最近一轮更新主要集中在 **Skills 能力入口**、**平台 UI 统一化**、**对话页交互增强**、以及 **文件/产物操作安全性** 四块：
+
+- **Skills 能力平台化**：新增 Skills 浏览、管理、测试入口，形成从目录浏览、草稿编辑、发布、版本回滚到 dry-run 的闭环。
+- **平台导航与认证统一**：平台首页、聊天页、dashboard、skills 系列页面共享统一导航与平台样式，前端认证接入也更完整。
+- **Chat 交互增强**：聊天页持续补强终端样式、任务流展示、交互反馈与可视化细节，提升 Web CLI 的可操作性。
+- **产物与任务清理补强**：配合后端最近的 artifact 删除、任务清理与审计写入能力，前端在任务/产物管理上的交互基础更完整。
+
+相关实现可参考 [`web/static/app.js`](web/static/app.js)、[`web/static/platform.css`](web/static/platform.css)、[`web/static/terminal.css`](web/static/terminal.css)、[`web/static/skills.js`](web/static/skills.js)、[`app/api/skills_api.py`](app/api/skills_api.py:1)、[`app/services/task_cleanup.py`](app/services/task_cleanup.py:1)。
+
 ## 独立 CLI（§8.2）
 
 ```bash

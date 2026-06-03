@@ -355,8 +355,9 @@ observability:
 
 rate_limit:
   enabled: ${RATE_LIMIT_ENABLED:true}
-  user_per_minute: 120
-  ip_per_minute: 600
+  # Docker 默认 600/min（对话页轮询）；.env 可设 RATE_LIMIT_USER_PER_MIN 覆盖
+  user_per_minute: ${RATE_LIMIT_USER_PER_MIN:600}
+  ip_per_minute: ${RATE_LIMIT_IP_PER_MIN:3000}
   window_sec: 60
   use_redis: ${RATE_LIMIT_REDIS:false}
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -78,6 +79,10 @@ DEFAULT_DOCUMENTS = [
 ]
 
 
+def _content_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
 def _load_content(spec: dict) -> str:
     path = spec.get("content_path")
     if path:
@@ -101,17 +106,32 @@ def ensure_builtin_knowledge() -> int:
     """Upsert fixed builtin doc_ids (safe on every startup; refreshes writing guidelines from disk)."""
     store = get_knowledge_store()
     updated = 0
+    skipped = 0
     for doc in DEFAULT_DOCUMENTS:
         content = _load_content(doc)
         if not content.strip():
             continue
+        did = str(doc["doc_id"])
+        digest = _content_hash(content)
+        existing = store.get_document(did)
+        if existing:
+            meta = existing.get("metadata") if isinstance(existing.get("metadata"), dict) else {}
+            if meta.get("content_hash") == digest:
+                skipped += 1
+                continue
+        meta = {**doc["metadata"], "content_hash": digest}
         store.upsert_document(
             title=doc["title"],
             content=content,
-            metadata=doc["metadata"],
-            doc_id=doc["doc_id"],
+            metadata=meta,
+            doc_id=did,
         )
         updated += 1
-    if updated:
-        logger.info("Ensured %s builtin knowledge document(s)", updated, extra={"seeded": updated})
+    if updated or skipped:
+        logger.info(
+            "Builtin knowledge: %s updated, %s unchanged (skipped re-embed)",
+            updated,
+            skipped,
+            extra={"seeded": updated, "skipped": skipped},
+        )
     return updated

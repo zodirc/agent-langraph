@@ -108,7 +108,9 @@ let sessionFilesPollingTimer = null;
 const sessionFileViewerMap = new Map();
 let sessionFilesCurrentPath = ".";
 let sessionFilesTextIndex = [];
-let sessionFilesTextIndexTaskId = null;
+/** @type {string | null} `taskId:relativeDir` */
+let sessionFilesTextIndexCacheKey = null;
+let sessionFileViewerPollTimer = null;
 const SESSION_TEXT_FILE_RE = /\.(txt|md|markdown|json|yaml|yml|log)$/i;
 const CHAPTER_HEADER_RE = /^(?:#{1,3}\s*)?第\s*([一二三四五六七八九十百零两\d]+)\s*章[^\n]*/gm;
 const CN_DIGITS = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 百: 100 };
@@ -1082,7 +1084,7 @@ function setSessionFilesCollapsed(collapsed) {
 }
 
 function buildSessionFileViewerHtml() {
-  return `<!doctype html><html><head><meta charset="utf-8"/><title>会话文件</title>
+  return `<!doctype html><html><head><meta charset="utf-8"/><link rel="icon" href="/static/favicon.svg" type="image/svg+xml"/><title>会话文件</title>
   <style>
     html,body{height:100%;margin:0;overflow:hidden}
     body{display:flex;flex-direction:column;background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Menlo,Consolas,monospace}
@@ -1262,9 +1264,29 @@ function renderPopupFileSwitcher(view) {
     paths
       .map((path) => {
         const selected = path === view.path ? " selected" : "";
-        return `<option value="${escapeAttr(path)}"${selected}>${escapeHtml(path)}</option>`;
+        const label = path.includes("/") ? path.split("/").pop() : path;
+        return `<option value="${escapeAttr(path)}"${selected}>${escapeHtml(label || path)}</option>`;
       })
       .join("");
+  syncPopupViewerToolbar(view);
+}
+
+function syncPopupViewerToolbar(view) {
+  const doc = popupViewerDoc(view);
+  if (!doc) return;
+  const paths = view.fileIndex || [];
+  const markers = view.chapterMarkers || [];
+  const multiChapter = markers.length > 1;
+  const fileSel = doc.getElementById("file-switcher");
+  const chapterSel = doc.getElementById("chapter-jump");
+  const fileRow = fileSel?.closest(".toolbar-row");
+  const navGroup = doc.querySelector(".nav-group");
+  const chapterNowWrap = doc.querySelector(".chapter-now-wrap");
+  if (fileSel) fileSel.hidden = paths.length <= 1;
+  if (chapterSel) chapterSel.hidden = !multiChapter;
+  if (fileRow) fileRow.hidden = paths.length <= 1 && !multiChapter;
+  if (navGroup) navGroup.hidden = !multiChapter;
+  if (chapterNowWrap) chapterNowWrap.hidden = !multiChapter;
 }
 
 function renderPopupChapterJump(view, markers) {
@@ -1275,6 +1297,7 @@ function renderPopupChapterJump(view, markers) {
   if (!markers.length) {
     sel.innerHTML = '<option value="">章节</option>';
     sel.disabled = true;
+    syncPopupViewerToolbar(view);
     return;
   }
   sel.disabled = false;
@@ -1284,21 +1307,87 @@ function renderPopupChapterJump(view, markers) {
       .map((m) => `<option value="${String(m.offset)}">${escapeHtml(m.label || `第${m.chapter}章`)}</option>`)
       .join("");
   updatePopupCurrentChapter(view);
+  syncPopupViewerToolbar(view);
 }
 
+function lineStartOffsetAt(text, offset) {
+  const pos = Math.max(0, Math.min(Number(offset) || 0, text.length));
+  let i = pos - 1;
+  while (i >= 0 && text.charCodeAt(i) !== 10) i -= 1;
+  return i + 1;
+}
+
+/** scrollTop so the line containing `charOffset` aligns with the top of the textarea viewport. */
+function measureTextareaScrollTopForLineTop(area, charOffset) {
+  const text = String(area.value || "");
+  const lineStart = lineStartOffsetAt(text, charOffset);
+  const win = area.ownerDocument.defaultView;
+  const cs = win.getComputedStyle(area);
+  const paddingLeft = parseFloat(cs.paddingLeft) || 0;
+  const paddingRight = parseFloat(cs.paddingRight) || 0;
+  const innerWidth = Math.max(1, area.clientWidth - paddingLeft - paddingRight);
+
+  const mirror = area.ownerDocument.createElement("div");
+  mirror.setAttribute("aria-hidden", "true");
+  Object.assign(mirror.style, {
+    position: "absolute",
+    left: "-99999px",
+    top: "0",
+    visibility: "hidden",
+    overflow: "hidden",
+    whiteSpace: "pre-wrap",
+    wordWrap: "break-word",
+    width: `${innerWidth}px`,
+    font: cs.font,
+    fontSize: cs.fontSize,
+    fontFamily: cs.fontFamily,
+    lineHeight: cs.lineHeight,
+    letterSpacing: cs.letterSpacing,
+    tabSize: cs.tabSize,
+    padding: "0",
+    margin: "0",
+    border: "0",
+    boxSizing: "content-box",
+  });
+  mirror.textContent = text.slice(0, lineStart);
+  area.ownerDocument.body.appendChild(mirror);
+  const beforeHeight = mirror.offsetHeight;
+  mirror.remove();
+  const maxScroll = Math.max(0, area.scrollHeight - area.clientHeight);
+  return Math.min(Math.max(0, beforeHeight), maxScroll);
+}
+
+/** Scroll so the chapter line (offset) sits flush at the top of the visible area. */
 function scrollPopupViewerToOffset(view, offset) {
   const doc = popupViewerDoc(view);
   const area = doc?.getElementById("content");
   if (!area) return;
-  const pos = Math.max(0, Number(offset) || 0);
-  const before = area.value.slice(0, pos);
-  const lineCount = before.split("\n").length - 1;
-  const style = view.win.getComputedStyle(area);
-  const lineHeight = parseFloat(style.lineHeight) || 20;
-  area.scrollTop = Math.max(0, lineCount * lineHeight - area.clientHeight * 0.12);
+  const text = String(area.value || "");
+  const pos = Math.max(0, Math.min(Number(offset) || 0, text.length));
+  const lineStart = lineStartOffsetAt(text, pos);
+  const desired = measureTextareaScrollTopForLineTop(area, lineStart);
+
+  const applyScroll = () => {
+    area.scrollTop = desired;
+  };
+
   area.focus();
-  area.setSelectionRange(pos, pos);
+  applyScroll();
+  area.setSelectionRange(lineStart, lineStart);
+  applyScroll();
+  view.win.requestAnimationFrame(() => {
+    if (!area.isConnected) return;
+    applyScroll();
+    updatePopupCurrentChapter(view);
+  });
   updatePopupCurrentChapter(view);
+}
+
+function formatPopupViewerUpdatedAt(view) {
+  if (view?.lastMtimeMs) {
+    return new Date(view.lastMtimeMs).toLocaleTimeString();
+  }
+  return new Date().toLocaleTimeString();
 }
 
 function updatePopupViewerMeta(view, extra = "") {
@@ -1306,11 +1395,13 @@ function updatePopupViewerMeta(view, extra = "") {
   const metaEl = doc?.getElementById("m");
   const contentEl = doc?.getElementById("content");
   const titleEl = doc?.getElementById("title");
-  if (titleEl) titleEl.textContent = view.path || "-";
+  const path = view.path || "-";
+  const titleLabel = path.includes("/") ? path.split("/").pop() : path;
+  if (titleEl) titleEl.textContent = titleLabel || path;
   if (!metaEl || !contentEl) return;
   const total = view.totalChars != null ? view.totalChars : contentEl.value.length;
   const dirtyFlag = view.dirty ? " · 未保存" : "";
-  metaEl.textContent = `chars ${contentEl.value.length}/${total} · updated ${new Date().toLocaleTimeString()}${dirtyFlag}${extra ? ` · ${extra}` : ""}`;
+  metaEl.textContent = `chars ${contentEl.value.length}/${total} · updated ${formatPopupViewerUpdatedAt(view)}${dirtyFlag}${extra ? ` · ${extra}` : ""}`;
 }
 
 function updateSessionFileViewer(taskId, data) {
@@ -1322,24 +1413,63 @@ function updateSessionFileViewer(taskId, data) {
     const contentEl = doc?.getElementById("content");
     if (!contentEl) return;
     const current = String(data?.content || "");
+    const mtimeMs = Number(data?.mtime_ms) || 0;
+    if (mtimeMs) view.lastMtimeMs = mtimeMs;
     if (!view.dirty) {
-      contentEl.value = current;
-      view.lastContent = current;
-      renderPopupChapterJump(view, parseChapterHeadings(current));
-      updatePopupCurrentChapter(view);
+      const unchanged =
+        current === view.lastContent && (!mtimeMs || mtimeMs === view.lastSyncedMtimeMs);
+      if (!unchanged) {
+        const scrollTop = contentEl.scrollTop;
+        const selStart = contentEl.selectionStart;
+        const selEnd = contentEl.selectionEnd;
+        contentEl.value = current;
+        view.lastContent = current;
+        if (mtimeMs) view.lastSyncedMtimeMs = mtimeMs;
+        contentEl.scrollTop = scrollTop;
+        try {
+          contentEl.setSelectionRange(selStart, selEnd);
+        } catch {
+          /* ignore */
+        }
+        renderPopupChapterJump(view, parseChapterHeadings(current));
+      }
     }
     view.totalChars = Number(data?.total_chars || current.length || 0);
     updatePopupViewerMeta(view);
     updatePopupCurrentChapter(view);
+    syncPopupViewerToolbar(view);
   } catch {
     /* ignore */
   }
+}
+
+/** 预览窗内容由右侧文件列表轮询顺带刷新，避免与 startSessionFilesPolling 双重打 API。 */
+function syncSessionFileViewerPolling() {
+  if (sessionFileViewerPollTimer) clearInterval(sessionFileViewerPollTimer);
+  sessionFileViewerPollTimer = null;
+}
+
+function pathsMatchSessionFile(viewPath, eventName) {
+  const filePath = String(viewPath || "").trim();
+  const name = String(eventName || "").trim();
+  if (!filePath || !name) return false;
+  if (filePath === name) return true;
+  return filePath.endsWith(`/${name}`);
+}
+
+function maybeRefreshOpenFileViewer(filename) {
+  const taskId = activeTaskId || getSessionId();
+  const view = sessionFileViewerMap.get(taskId);
+  if (!view || !view.win || view.win.closed || view.dirty || !view.path) return;
+  if (!pathsMatchSessionFile(view.path, filename)) return;
+  refreshSessionFileViewer(taskId);
 }
 
 async function refreshSessionFileViewer(taskId) {
   const view = sessionFileViewerMap.get(taskId);
   if (!view || !view.taskId || !view.path || !view.win || view.win.closed) {
     sessionFileViewerMap.delete(taskId);
+    syncSessionFileViewerPolling();
     return;
   }
   try {
@@ -1371,7 +1501,14 @@ async function loadSessionFileInViewer(view, relativePath) {
   }
   view.path = relativePath;
   view.lastContent = "";
+  view.lastMtimeMs = 0;
+  view.lastSyncedMtimeMs = 0;
   view.totalChars = null;
+  const dir = parentSessionPath(relativePath);
+  ensureSessionFilesTextIndex(view.taskId, dir).then((idx) => {
+    view.fileIndex = idx;
+    renderPopupFileSwitcher(view);
+  });
   const doc = popupViewerDoc(view);
   const contentEl = doc?.getElementById("content");
   const metaEl = doc?.getElementById("m");
@@ -1525,9 +1662,10 @@ async function openSessionFileViewer(taskId, relativePath) {
   let view = sessionFileViewerMap.get(key);
   if (view && view.win && !view.win.closed) {
     view.win.focus();
-    const fileIndex = await ensureSessionFilesTextIndex(taskId);
-    view.fileIndex = fileIndex;
+    const dir = parentSessionPath(relativePath);
+    view.fileIndex = await ensureSessionFilesTextIndex(taskId, dir);
     await loadSessionFileInViewer(view, relativePath);
+    syncSessionFileViewerPolling();
     return;
   }
 
@@ -1540,13 +1678,16 @@ async function openSessionFileViewer(taskId, relativePath) {
   win.document.write(buildSessionFileViewerHtml());
   win.document.close();
 
-  const fileIndex = await ensureSessionFilesTextIndex(taskId);
+  const dir = parentSessionPath(relativePath);
+  const fileIndex = await ensureSessionFilesTextIndex(taskId, dir);
   view = {
     win,
     taskId,
     path: relativePath,
     dirty: false,
     lastContent: "",
+    lastMtimeMs: 0,
+    lastSyncedMtimeMs: 0,
     fileIndex,
     chapterMarkers: [],
     totalChars: null,
@@ -1556,6 +1697,7 @@ async function openSessionFileViewer(taskId, relativePath) {
   wireSessionFileViewerWindow(view);
   syncSessionFileViewerTheme(win);
   await loadSessionFileInViewer(view, relativePath);
+  syncSessionFileViewerPolling();
 }
 
 function joinSessionPath(base, child) {
@@ -1616,13 +1758,15 @@ function isSessionTextFile(path) {
   return SESSION_TEXT_FILE_RE.test(String(path || ""));
 }
 
-async function ensureSessionFilesTextIndex(taskId) {
+async function ensureSessionFilesTextIndex(taskId, dirPath = ".") {
   if (!taskId) return [];
-  if (sessionFilesTextIndexTaskId === taskId && sessionFilesTextIndex.length) {
+  const dir = String(dirPath || ".").trim() || ".";
+  const cacheKey = `${taskId}:${dir}`;
+  if (sessionFilesTextIndexCacheKey === cacheKey && sessionFilesTextIndex.length) {
     return sessionFilesTextIndex;
   }
   try {
-    const params = new URLSearchParams({ path: ".", recursive: "true", max_entries: "500" });
+    const params = new URLSearchParams({ path: dir, recursive: "false", max_entries: "500" });
     const res = await fetchWithTimeout(
       `/tasks/${taskId}/files?${params.toString()}`,
       { headers: getAuthHeaders() },
@@ -1631,15 +1775,33 @@ async function ensureSessionFilesTextIndex(taskId) {
     if (!res.ok) return [];
     const data = await res.json();
     const entries = Array.isArray(data.entries) ? data.entries : [];
+    const prefix = dir === "." ? "" : `${dir}/`;
     sessionFilesTextIndex = entries
       .filter((entry) => String(entry?.type || "") === "file" && isSessionTextFile(entry.path))
-      .map((entry) => String(entry.path || ""))
+      .map((entry) => {
+        const rel = String(entry.path || "");
+        return prefix && rel ? `${prefix}${rel}` : rel;
+      })
       .filter(Boolean)
       .sort((a, b) => a.localeCompare(b));
-    sessionFilesTextIndexTaskId = taskId;
+    sessionFilesTextIndexCacheKey = cacheKey;
     return sessionFilesTextIndex;
   } catch {
     return [];
+  }
+}
+
+function invalidateSessionFilesTextIndex() {
+  sessionFilesTextIndex = [];
+  sessionFilesTextIndexCacheKey = null;
+}
+
+async function refreshOpenSessionFileViewersMeta() {
+  for (const [taskKey, view] of sessionFileViewerMap) {
+    if (!view?.win || view.win.closed || !view.path) continue;
+    const dir = parentSessionPath(view.path);
+    view.fileIndex = await ensureSessionFilesTextIndex(taskKey, dir);
+    renderPopupFileSwitcher(view);
   }
 }
 
@@ -1703,6 +1865,8 @@ async function refreshSessionFilesPane(options = {}) {
       })
       .join("");
     updateSessionFilesMeta(`session ${taskId.slice(0, 8)}… ${sessionFilesCurrentPath} ${entries.length} 项`);
+    invalidateSessionFilesTextIndex();
+    refreshOpenSessionFileViewersMeta();
     for (const [taskKey] of sessionFileViewerMap) {
       refreshSessionFileViewer(taskKey);
     }
@@ -1720,7 +1884,7 @@ function startSessionFilesPolling() {
   if (sessionFilesPollingTimer) clearInterval(sessionFilesPollingTimer);
   sessionFilesPollingTimer = setInterval(() => {
     refreshSessionFilesPane({ silent: true });
-  }, 1500);
+  }, 3000);
 }
 
 async function loginCommand(parts) {
@@ -2941,6 +3105,7 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
       }
     }
     appendWritingDelta(payload.text || "", payload);
+    maybeRefreshOpenFileViewer(payload.filename || "");
   } else if (eventType === "answer_delta") {
     appendAnswerDelta(payload.text || "");
   } else if (eventType === "answer_preview") {

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Agent LangGraph">
+  <defs>
+    <linearGradient id="g" x1="6" y1="6" x2="26" y2="26" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7eb8ff"/>
+      <stop offset="1" stop-color="#5b9cf5"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="#0f1419"/>
+  <rect width="32" height="32" rx="7" fill="url(#g)" opacity="0.08"/>
+  <path
+    d="M9 23.5 L16 9 L23 23.5"
+    fill="none"
+    stroke="url(#g)"
+    stroke-width="2.25"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="9" cy="23.5" r="3.2" fill="#5b9cf5"/>
+  <circle cx="16" cy="9" r="4" fill="#9ec5ff"/>
+  <circle cx="23" cy="23.5" r="3.2" fill="#5b9cf5"/>
+  <circle cx="16" cy="16.5" r="2" fill="#fbbf24" opacity="0.95"/>
+</svg>

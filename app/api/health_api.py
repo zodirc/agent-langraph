@@ -48,6 +48,9 @@ def health_full() -> dict[str, object]:
         "checkpoint_backend": settings.CHECKPOINT_BACKEND,
         "queue_backend": settings.QUEUE_BACKEND,
         "rate_limit_enabled": settings.RATE_LIMIT_ENABLED,
+        "rate_limit_user_per_minute": settings.RATE_LIMIT_USER_PER_MIN,
+        "rate_limit_ip_per_minute": settings.RATE_LIMIT_IP_PER_MIN,
+        "rate_limit_window_sec": settings.RATE_LIMIT_WINDOW_SEC,
         "secrets_backend": settings.SECRETS_BACKEND,
         "checks": checks["checks"],
     }

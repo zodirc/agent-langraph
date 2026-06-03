@@ -567,7 +567,7 @@ class Settings:
 
         rate_limit = raw.get("rate_limit", {})
         self.RATE_LIMIT_ENABLED = _coerce_bool(rate_limit.get("enabled", True))
-        self.RATE_LIMIT_USER_PER_MIN = int(rate_limit.get("user_per_minute", 10))
+        self.RATE_LIMIT_USER_PER_MIN = int(rate_limit.get("user_per_minute", 60))
         self.RATE_LIMIT_IP_PER_MIN = int(rate_limit.get("ip_per_minute", 100))
         self.RATE_LIMIT_WINDOW_SEC = int(rate_limit.get("window_sec", 60))
         self.RATE_LIMIT_REDIS = _coerce_bool(rate_limit.get("use_redis", False))

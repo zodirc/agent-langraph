@@ -456,7 +456,7 @@ secrets:
 
 rate_limit:
   enabled: ${RATE_LIMIT_ENABLED:true}
-  user_per_minute: 10
+  user_per_minute: 60
   ip_per_minute: 100
   window_sec: 60
   use_redis: ${RATE_LIMIT_REDIS:false}
