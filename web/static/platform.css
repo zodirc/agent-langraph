@@ -3,9 +3,18 @@
 .platform-shell {
   margin: 0;
   min-height: 100vh;
-  background: var(--bg, #0d1117);
-  color: var(--text, #c9d1d9);
-  font-family: "JetBrains Mono", "Fira Code", "Consolas", ui-monospace, monospace;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.platform-shell code,
+.platform-shell pre,
+.platform-shell kbd {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
 }
 
 .sr-only {
@@ -26,19 +35,22 @@
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-  padding: 0.5rem 1.25rem;
-  border-bottom: 1px solid var(--border, #30363d);
-  background: var(--panel, #161b22);
-  font-size: 0.82rem;
+  padding: 0.65rem 1.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--nav-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  font-size: 0.875rem;
   position: sticky;
   top: 0;
   z-index: 100;
+  box-shadow: var(--shadow-sm);
 }
 
 .platform-nav-start {
   display: flex;
   align-items: center;
-  gap: 1.25rem;
+  gap: 1.5rem;
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -46,50 +58,57 @@
 .platform-nav-end {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.55rem;
   flex-wrap: wrap;
   justify-content: flex-end;
   position: relative;
 }
 
 .platform-brand {
-  color: var(--text, #c9d1d9);
+  color: var(--text);
   text-decoration: none;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: -0.02em;
   white-space: nowrap;
+  transition: color 0.2s var(--ease);
 }
 
 .platform-brand:hover {
-  color: var(--cyan, #58a6ff);
+  color: var(--accent);
 }
 
 .platform-links {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  border: 1px solid var(--border-subtle);
 }
 
 .platform-link {
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   text-decoration: none;
-  padding: 0.3rem 0.65rem;
-  border-radius: 6px;
+  padding: 0.38rem 0.75rem;
+  border-radius: var(--radius-sm);
   border: 1px solid transparent;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  font-weight: 500;
+  transition: color 0.18s var(--ease), background 0.18s var(--ease), border-color 0.18s var(--ease);
 }
 
 .platform-link:hover {
-  color: var(--text, #c9d1d9);
-  border-color: var(--border, #30363d);
+  color: var(--text);
+  background: var(--panel-hover);
 }
 
 .platform-link.active {
-  color: var(--text, #c9d1d9);
-  background: var(--bg, #0d1117);
-  border-color: var(--cyan, #58a6ff);
-  box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.25);
+  color: var(--text);
+  background: var(--panel);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .platform-theme-label {
@@ -98,65 +117,59 @@
 }
 
 .platform-theme-select,
-.platform-btn {
+.platform-btn,
+.skills-page .flow-btn,
+.manage-page .flow-btn {
   font: inherit;
-  font-size: 0.8rem;
-  border-radius: 6px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--input-bg);
   color: var(--input-text, var(--text));
-  padding: 0.28rem 0.5rem;
+  padding: 0.38rem 0.65rem;
   cursor: pointer;
+  transition: border-color 0.18s var(--ease), color 0.18s var(--ease), background 0.18s var(--ease),
+    box-shadow 0.18s var(--ease), transform 0.12s var(--ease);
 }
 
 .platform-theme-select {
   padding-right: 1.5rem;
 }
 
-.platform-btn:hover {
-  border-color: var(--cyan, #58a6ff);
-  color: var(--cyan, #58a6ff);
+.platform-btn:hover,
+.skills-page .flow-btn:hover,
+.manage-page .flow-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--accent);
+  background: var(--panel-hover);
 }
 
-.platform-btn-primary {
-  background: color-mix(in srgb, var(--accent) 14%, var(--input-bg));
-  border-color: var(--accent);
+.platform-btn-primary,
+.skills-page .flow-btn.platform-btn-primary {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
   color: var(--accent);
 }
 
-body.theme-light .platform-btn-primary {
-  background: color-mix(in srgb, var(--accent) 10%, var(--input-bg));
-}
-
-/* Reuse terminal flow buttons on skills/manage pages */
-.skills-page .flow-btn {
-  font: inherit;
-  font-size: 0.8rem;
-  padding: 0.3rem 0.65rem;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--input-bg);
-  color: var(--input-text, var(--text));
-  cursor: pointer;
-}
-
-.skills-page .flow-btn:hover {
-  border-color: var(--cyan, #58a6ff);
-  color: var(--cyan, #58a6ff);
+.platform-btn-primary:hover {
+  background: color-mix(in srgb, var(--accent) 18%, var(--input-bg));
 }
 
 .platform-runtime-badge {
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
+  padding: 0.28rem 0.55rem;
+  border-radius: var(--radius-sm);
   font-size: 0.72rem;
-  color: var(--muted, #8b949e);
-  border: 1px solid var(--border, #30363d);
-  background: var(--bg, #0d1117);
+  font-weight: 500;
+  color: var(--muted);
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--panel) 80%, var(--bg));
 }
 
 .platform-runtime-badge.runtime-offline {
-  color: var(--red, #f85149);
-  border-color: rgba(248, 81, 73, 0.4);
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 35%, var(--border));
+  background: color-mix(in srgb, var(--red) 8%, var(--panel));
 }
 
 .platform-auth-slot {
@@ -165,9 +178,10 @@ body.theme-light .platform-btn-primary {
 
 .platform-auth-badge {
   font: inherit;
-  padding: 0.22rem 0.55rem;
-  border-radius: 999px;
+  padding: 0.28rem 0.65rem;
+  border-radius: var(--radius-pill);
   font-size: 0.72rem;
+  font-weight: 500;
   border: 1px solid transparent;
   max-width: 280px;
   overflow: hidden;
@@ -175,46 +189,47 @@ body.theme-light .platform-btn-primary {
   white-space: nowrap;
   cursor: pointer;
   background: transparent;
-  transition: border-color 0.12s, background 0.12s;
+  transition: border-color 0.18s var(--ease), background 0.18s var(--ease), box-shadow 0.18s var(--ease);
 }
 
 .platform-auth-badge:hover {
   border-color: var(--border);
+  background: var(--panel-hover);
 }
 
 .platform-auth-badge[aria-expanded="true"] {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  box-shadow: var(--shadow-focus);
 }
 
 .platform-auth-badge.auth-checking {
-  color: var(--muted, #8b949e);
-  border-color: var(--border, #30363d);
-  background: var(--bg, #0d1117);
+  color: var(--muted);
+  border-color: var(--border-subtle);
+  background: var(--input-bg);
 }
 
 .platform-auth-badge.auth-disabled {
-  color: var(--green, #3fb950);
-  border-color: rgba(63, 185, 80, 0.35);
-  background: rgba(63, 185, 80, 0.08);
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 35%, transparent);
+  background: color-mix(in srgb, var(--green) 10%, var(--panel));
 }
 
 .platform-auth-badge.auth-ok {
-  color: var(--green, #3fb950);
-  border-color: rgba(63, 185, 80, 0.4);
-  background: rgba(63, 185, 80, 0.1);
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 40%, transparent);
+  background: color-mix(in srgb, var(--green) 12%, var(--panel));
 }
 
 .platform-auth-badge.auth-anonymous {
-  color: var(--yellow, #d29922);
-  border-color: rgba(210, 153, 34, 0.4);
-  background: rgba(210, 153, 34, 0.08);
+  color: var(--yellow);
+  border-color: color-mix(in srgb, var(--yellow) 40%, transparent);
+  background: color-mix(in srgb, var(--yellow) 10%, var(--panel));
 }
 
 .platform-auth-badge.auth-invalid {
-  color: var(--red, #f85149);
-  border-color: rgba(248, 81, 73, 0.45);
-  background: rgba(248, 81, 73, 0.1);
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, var(--panel));
 }
 
 .platform-auth-panel[hidden] {
@@ -223,19 +238,19 @@ body.theme-light .platform-btn-primary {
 
 .platform-auth-panel {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 8px);
   right: 0;
   z-index: 200;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  min-width: 240px;
+  gap: 0.55rem;
+  min-width: 248px;
   max-width: min(92vw, 320px);
-  padding: 0.75rem;
+  padding: 0.85rem;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-lg);
 }
 
 .platform-auth-panel-head {
@@ -245,39 +260,41 @@ body.theme-light .platform-btn-primary {
   gap: 0.5rem;
   margin-bottom: 0.1rem;
   color: var(--text);
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-weight: 600;
 }
 
 .platform-auth-panel-close {
   font: inherit;
   line-height: 1;
-  width: 1.5rem;
-  height: 1.5rem;
+  width: 1.6rem;
+  height: 1.6rem;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 
 .platform-auth-panel-close:hover {
   color: var(--text);
   border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .platform-auth-meta {
   margin: 0;
-  font-size: 0.78rem;
+  font-size: 0.8rem;
 }
 
 .platform-auth-meta > div {
   display: grid;
   grid-template-columns: 3.2rem 1fr;
   gap: 0.35rem 0.5rem;
-  padding: 0.2rem 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .platform-auth-meta > div:last-child {
@@ -287,6 +304,7 @@ body.theme-light .platform-btn-primary {
 .platform-auth-meta dt {
   margin: 0;
   color: var(--muted);
+  font-weight: 500;
 }
 
 .platform-auth-meta dd {
@@ -298,14 +316,14 @@ body.theme-light .platform-btn-primary {
 .platform-auth-hint {
   margin: 0;
   font-size: 0.78rem;
-  line-height: 1.45;
+  line-height: 1.5;
   color: var(--muted);
 }
 
 .platform-login-form {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
+  gap: 0.5rem;
 }
 
 .platform-login-form[hidden],
@@ -317,7 +335,7 @@ body.theme-light .platform-btn-primary {
 .platform-btn-danger {
   width: 100%;
   margin-top: 0.25rem;
-  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
   color: var(--red);
 }
 
@@ -327,7 +345,7 @@ body.theme-light .platform-btn-primary {
   color: var(--red);
 }
 
-/* Shared form controls on platform / skills / manage pages */
+/* Shared form controls */
 .platform-shell input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
 .platform-shell select,
 .platform-shell textarea {
@@ -336,8 +354,9 @@ body.theme-light .platform-btn-primary {
   color: var(--input-text, var(--text));
   background-color: var(--input-bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: none;
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--bg) 40%, transparent);
+  transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease);
   -webkit-appearance: none;
   appearance: none;
 }
@@ -347,11 +366,11 @@ body.theme-light .platform-btn-primary {
 .platform-shell textarea:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+  box-shadow: var(--shadow-focus), inset 0 1px 2px color-mix(in srgb, var(--bg) 40%, transparent);
 }
 
 .platform-shell select {
-  padding-right: 1.25rem;
+  padding-right: 1.35rem;
   background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
     linear-gradient(135deg, var(--muted) 50%, transparent 50%);
   background-position: calc(100% - 14px) calc(50% - 2px), calc(100% - 9px) calc(50% - 2px);
@@ -367,7 +386,7 @@ body.theme-light .platform-btn-primary {
 .platform-shell input::placeholder,
 .platform-shell textarea::placeholder {
   color: var(--muted);
-  opacity: 1;
+  opacity: 0.85;
 }
 
 body.theme-light .platform-shell input:-webkit-autofill,
@@ -378,32 +397,32 @@ body.theme-light .platform-shell select:-webkit-autofill {
 }
 
 .platform-login-form input {
-  font-size: 0.8rem;
-  padding: 0.4rem 0.55rem;
+  font-size: 0.8125rem;
+  padding: 0.45rem 0.6rem;
 }
 
 .platform-login-error {
   margin: 0;
   font-size: 0.75rem;
   min-height: 1.1em;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .platform-login-error.login-msg-error {
-  color: var(--red, #f85149);
+  color: var(--red);
 }
 
 .platform-login-error.login-msg-success {
-  color: var(--green, #3fb950);
+  color: var(--green);
 }
 
 .platform-login-error.login-msg-info {
-  color: var(--cyan, #58a6ff);
+  color: var(--accent);
 }
 
 .platform-btn:disabled {
-  opacity: 0.6;
-  cursor: wait;
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .platform-nav-end {
@@ -413,26 +432,30 @@ body.theme-light .platform-shell select:-webkit-autofill {
 
 /* —— Home —— */
 .platform-home {
-  min-height: calc(100vh - 48px);
+  min-height: calc(100vh - 56px);
 }
 
 .platform-home-main {
-  max-width: 960px;
+  max-width: 980px;
   margin: 0 auto;
-  padding: 2rem 1.25rem 3rem;
+  padding: 2.5rem 1.5rem 3.5rem;
 }
 
 .platform-hero h1 {
-  margin: 0 0 0.5rem;
-  font-size: 1.6rem;
-  font-weight: 600;
+  margin: 0 0 0.65rem;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  color: var(--text);
 }
 
 .platform-hero p {
-  margin: 0 0 2rem;
-  color: var(--muted, #8b949e);
-  line-height: 1.5;
-  max-width: 42rem;
+  margin: 0 0 2.25rem;
+  color: var(--text-secondary);
+  line-height: 1.65;
+  max-width: 40rem;
+  font-size: 0.95rem;
 }
 
 .platform-cards {
@@ -443,120 +466,121 @@ body.theme-light .platform-shell select:-webkit-autofill {
 
 .platform-card {
   display: block;
-  padding: 1.25rem;
-  border: 1px solid var(--border, #30363d);
-  border-radius: 8px;
-  background: var(--panel, #161b22);
+  padding: 1.35rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
   text-decoration: none;
   color: inherit;
-  transition: border-color 0.15s, transform 0.15s;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.22s var(--ease), box-shadow 0.22s var(--ease), transform 0.22s var(--ease);
 }
 
 .platform-card:hover {
-  border-color: var(--cyan, #58a6ff);
-  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: var(--shadow-md);
+  transform: translateY(-3px);
 }
 
 .platform-card h2 {
-  margin: 0 0 0.5rem;
+  margin: 0 0 0.55rem;
   font-size: 1.05rem;
-  color: var(--cyan, #58a6ff);
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: -0.02em;
 }
 
 .platform-card p {
   margin: 0;
-  font-size: 0.85rem;
-  color: var(--muted, #8b949e);
-  line-height: 1.45;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
 }
 
-.platform-meta {
-  margin-top: 2rem;
-  padding: 1rem;
-  border: 1px dashed var(--border, #30363d);
-  border-radius: 6px;
-  font-size: 0.8rem;
-  color: var(--muted, #8b949e);
-}
-
-.platform-meta strong {
-  color: var(--text, #c9d1d9);
-}
-
-.platform-meta code {
-  color: var(--green, #3fb950);
-}
-
-.platform-sub-links {
-  margin-top: 1.5rem;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.platform-sub-links a {
-  color: var(--muted, #8b949e);
-  font-size: 0.8rem;
-  text-decoration: none;
-}
-
-.platform-sub-links a:hover {
-  color: var(--cyan, #58a6ff);
-}
-
-/* —— Chat (terminal under nav) —— */
+/* —— Chat —— */
 body.has-platform-nav.platform-shell .terminal {
   max-width: 1200px;
-  margin: 16px auto 24px;
+  margin: 20px auto 28px;
 }
 
-/* —— Skills pages —— */
-body.has-platform-nav .skills-page {
+/* —— Skills / manage pages —— */
+body.has-platform-nav .skills-page,
+body.has-platform-nav .manage-page {
   max-width: 1200px;
   margin: 0 auto;
-  min-height: calc(100vh - 52px);
-  padding: 1rem 1.25rem 2rem;
-  font-family: inherit;
-  color: var(--text, #c9d1d9);
+  min-height: calc(100vh - 56px);
+  padding: 1.25rem 1.5rem 2.5rem;
+  color: var(--text);
   background: transparent;
 }
 
-.skills-header {
-  margin-bottom: 0.5rem;
+.skills-header,
+.dashboard-header {
+  margin-bottom: 0.25rem;
 }
 
-.skills-header h1 {
-  color: var(--text, #c9d1d9);
+.skills-header h1,
+.dashboard-header h1 {
+  color: var(--text);
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
-/* —— Dashboard —— */
+.skills-sub,
+.dashboard-sub {
+  color: var(--text-secondary);
+}
+
+/* Panel utility for sidebars */
+.platform-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 1rem;
+}
+
 body.platform-shell main.dashboard-main {
-  padding: 1.5rem 2rem;
-  max-width: 1200px;
-  margin: 0 auto;
+  padding: 0;
 }
 
-body.theme-light .platform-nav,
-body.theme-light .platform-login-form {
-  background: var(--panel);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+/* Scrollbars (WebKit) */
+.platform-shell ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
-body.theme-light .platform-card {
-  background: var(--panel);
+.platform-shell ::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+  border-radius: var(--radius-pill);
 }
 
-body.theme-light .platform-runtime-badge,
-body.theme-light .platform-auth-badge.auth-checking {
-  background: var(--input-bg);
+.platform-shell ::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-body.theme-light .skills-filters label,
-body.theme-light .skill-form label {
-  color: var(--muted);
+/* Light theme tweaks */
+body.theme-light .platform-nav {
+  box-shadow: var(--shadow-sm);
+}
+
+body.theme-light .platform-links {
+  background: var(--border-subtle);
+}
+
+body.theme-light .platform-auth-panel {
+  box-shadow: var(--shadow-lg);
+}
+
+body.theme-light .platform-card:hover {
+  box-shadow: var(--shadow-md);
 }
 
 @media (max-width: 720px) {
+  .platform-nav {
+    padding: 0.55rem 1rem;
+  }
+
   .platform-nav-end {
     width: 100%;
     justify-content: flex-start;
@@ -570,5 +594,9 @@ body.theme-light .skill-form label {
     left: 0;
     right: 0;
     min-width: 0;
+  }
+
+  .platform-home-main {
+    padding: 1.75rem 1rem 2.5rem;
   }
 }

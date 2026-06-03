@@ -1,61 +1,98 @@
 .manage-page .manage-layout {
   display: grid;
-  grid-template-columns: 220px 1fr;
-  gap: 1rem;
-  margin-top: 1rem;
+  grid-template-columns: 240px 1fr;
+  gap: 1.1rem;
+  margin-top: 1.1rem;
+}
+
+.manage-list-panel {
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+  align-self: start;
 }
 
 .manage-list-panel .compact {
   max-height: 65vh;
+  overflow-y: auto;
+}
+
+.manage-editor {
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
 }
 
 .manage-list-head {
   display: flex;
   gap: 0.5rem;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.55rem;
 }
 
 #manage-status-filter {
   width: 100%;
-  margin-bottom: 0.5rem;
-  padding: 0.4rem 0.5rem;
-  font-size: 0.85rem;
+  margin-bottom: 0.55rem;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.875rem;
 }
 
 .skill-form fieldset {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-bottom: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  background: var(--panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: 0.85rem;
+  padding: 0.75rem 0.9rem;
+  background: color-mix(in srgb, var(--bg) 35%, var(--panel));
+}
+
+.skill-form legend {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text);
+  padding: 0 0.25rem;
 }
 
 .skill-form label {
   display: block;
-  margin: 0.35rem 0;
-  font-size: 0.8rem;
+  margin: 0.45rem 0;
+  font-size: 0.78rem;
+  font-weight: 600;
   color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .skill-form input,
 .skill-form textarea,
 .skill-form select {
   width: 100%;
-  margin-top: 0.2rem;
-  padding: 0.4rem 0.5rem;
+  margin-top: 0.35rem;
+  padding: 0.45rem 0.55rem;
   font-family: inherit;
+  text-transform: none;
+  font-weight: 400;
+  letter-spacing: normal;
+}
+
+.skill-form textarea {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
 }
 
 .manage-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin: 0.75rem 0;
+  margin: 0.85rem 0;
 }
 
 .versions-panel {
-  border-top: 1px solid var(--border, #30363d);
-  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 0.85rem;
+  margin-top: 0.5rem;
   font-size: 0.85rem;
 }
 
@@ -69,8 +106,12 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0.35rem 0;
-  border-bottom: 1px solid var(--border, #30363d);
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.manage-page .skill-card {
+  margin-bottom: 0.4rem;
 }
 
 @media (max-width: 800px) {

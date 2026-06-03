@@ -1,32 +1,64 @@
 :root {
-  --bg: #0d1117;
-  --panel: #161b22;
-  --border: #30363d;
-  --text: #c9d1d9;
-  --input-bg: #0d1117;
-  --input-text: #c9d1d9;
-  --accent: #58a6ff;
-  --green: #3fb950;
-  --cyan: #58a6ff;
-  --yellow: #d29922;
-  --red: #f85149;
-  --muted: #8b949e;
+  --font-sans: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui,
+    -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", "SF Mono", Consolas, ui-monospace, monospace;
+
+  --bg: #0b0f14;
+  --bg-elevated: #121820;
+  --panel: #151b24;
+  --panel-hover: #1a222d;
+  --nav-bg: rgba(12, 16, 22, 0.92);
+  --border: #2a3444;
+  --border-subtle: #1f2836;
+  --text: #e6edf5;
+  --text-secondary: #9aa8bc;
+  --input-bg: #0f141c;
+  --input-text: #e6edf5;
+  --accent: #5b9cf5;
+  --accent-soft: rgba(91, 156, 245, 0.12);
+  --green: #3ecf8e;
+  --cyan: #5b9cf5;
+  --yellow: #e3b341;
+  --red: #f47067;
+  --muted: #8b9cb3;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.4);
+  --shadow-focus: 0 0 0 3px var(--accent-soft);
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
   color-scheme: dark;
 }
 
 body.theme-light {
-  --bg: #f6f8fb;
+  --bg: #f4f6fa;
+  --bg-elevated: #ffffff;
   --panel: #ffffff;
-  --border: #cfd8e3;
-  --text: #1f2937;
+  --panel-hover: #f8fafc;
+  --nav-bg: rgba(255, 255, 255, 0.88);
+  --border: #d8e0ec;
+  --border-subtle: #e8edf4;
+  --text: #1a2332;
+  --text-secondary: #5c6b82;
   --input-bg: #ffffff;
-  --input-text: #1f2937;
+  --input-text: #1a2332;
   --accent: #2563eb;
-  --green: #1f8f45;
+  --accent-soft: rgba(37, 99, 235, 0.14);
+  --green: #15803d;
   --cyan: #2563eb;
-  --yellow: #b7791f;
+  --yellow: #b45309;
   --red: #dc2626;
-  --muted: #6b7280;
+  --muted: #64748b;
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 16px 36px rgba(15, 23, 42, 0.1);
   color-scheme: light;
 }
 
@@ -47,17 +79,44 @@ body {
   min-height: 100vh;
   background: var(--bg);
   color: var(--text);
-  font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body.platform-shell,
+body.platform-home {
+  background-color: var(--bg);
+  background-image: radial-gradient(
+    120% 80% at 50% -30%,
+    color-mix(in srgb, var(--accent) 14%, transparent),
+    transparent 55%
+  );
+  background-attachment: fixed;
+}
+
+.terminal,
+.terminal-body,
+.terminal-output,
+#command-input,
+.state-debug-json,
+pre,
+code,
+kbd,
+.mono {
+  font-family: var(--font-mono);
 }
 
 .terminal {
   max-width: 1200px;
   margin: 24px auto;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--panel);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-lg);
 }
 
 .terminal-header {
@@ -65,13 +124,13 @@ body {
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-  background: #010409;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
 }
 
 body.theme-light .terminal-header,
 body.theme-light .terminal-input-row {
-  background: #eef2f7;
+  background: var(--border-subtle);
 }
 
 body.theme-light .terminal {
@@ -490,17 +549,21 @@ body.theme-light .history-list {
 
 .flow-btn {
   border: 1px solid var(--border);
-  background: transparent;
-  color: var(--cyan);
-  border-radius: 6px;
-  padding: 4px 8px;
+  background: var(--input-bg);
+  color: var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.65rem;
   font: inherit;
-  font-size: 11px;
+  font-size: 0.75rem;
+  font-weight: 500;
   cursor: pointer;
+  transition: border-color 0.18s var(--ease), background 0.18s var(--ease), color 0.18s var(--ease);
 }
 
 .flow-btn:hover {
-  background: rgba(88, 166, 255, 0.12);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .flow-meta,
