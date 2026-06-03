@@ -822,11 +822,21 @@ function getAuthHeaders() {
   return headers;
 }
 
+async function apiFetch(url, options = {}) {
+  if (window.PlatformAuth?.authFetch) {
+    return window.PlatformAuth.authFetch(url, options);
+  }
+  return fetch(url, {
+    ...options,
+    headers: { ...getAuthHeaders(), ...(options.headers || {}) },
+  });
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    return await apiFetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
@@ -879,7 +889,7 @@ async function deleteHistoryTask(taskId) {
   const confirmed = window.confirm(`确认删除会话 ${taskId.slice(0, 8)}… ?`);
   if (!confirmed) return;
   try {
-    const res = await fetch(`/tasks/${taskId}`, {
+    const res = await apiFetch(`/tasks/${taskId}`, {
       method: "DELETE",
       headers: getAuthHeaders(),
     });
@@ -913,7 +923,7 @@ async function refreshHistorySidebar() {
   const seq = ++historyRefreshSeq;
   try {
     historyListEl.innerHTML = '<p class="flow-empty">历史会话加载中…</p>';
-    const res = await fetch("/tasks?limit=50", { headers: getAuthHeaders() });
+    const res = await apiFetch("/tasks?limit=50", { headers: getAuthHeaders() });
     if (seq !== historyRefreshSeq) return;
     if (!res.ok) {
       if (res.status === 429) {
@@ -1637,13 +1647,16 @@ function wireSessionFileViewerWindow(view) {
       const meta = doc.getElementById("m");
       if (!area) return;
       try {
-        const res = await fetch(`/tasks/${view.taskId}/files/content`, {
+        const res = await apiFetch(`/tasks/${view.taskId}/files/content`, {
           method: "PUT",
           headers: getAuthHeaders(),
           body: JSON.stringify({ path: view.path, content: area.value, append: false }),
         });
         if (!res.ok) {
-          if (meta) meta.textContent = `保存失败: ${res.status}`;
+          if (meta) {
+            meta.textContent =
+              res.status === 401 ? "保存失败: 请重新登录" : `保存失败: ${res.status}`;
+          }
           return;
         }
         view.dirty = false;
@@ -2529,7 +2542,7 @@ async function fetchHealth() {
 }
 
 async function listHistory() {
-  const res = await fetch("/tasks?limit=10", { headers: getAuthHeaders() });
+  const res = await apiFetch("/tasks?limit=10", { headers: getAuthHeaders() });
   if (!res.ok) {
     if (res.status === 429) {
       appendLine("history rate-limited (429). 请稍等 30-60 秒后重试。", "error");
@@ -2553,7 +2566,7 @@ async function listHistory() {
 }
 
 async function showStatus(taskId) {
-  const res = await fetch(`/tasks/${taskId}/status`, { headers: getAuthHeaders() });
+  const res = await apiFetch(`/tasks/${taskId}/status`, { headers: getAuthHeaders() });
   if (!res.ok) {
     appendLine(await res.text(), "error");
     return;
@@ -2577,7 +2590,7 @@ async function showStatus(taskId) {
 }
 
 async function showAudit(taskId) {
-  const res = await fetch(`/tasks/${taskId}/audit`, { headers: getAuthHeaders() });
+  const res = await apiFetch(`/tasks/${taskId}/audit`, { headers: getAuthHeaders() });
   if (!res.ok) {
     appendLine(await res.text(), "error");
     return;
@@ -2595,7 +2608,7 @@ async function showAudit(taskId) {
 }
 
 async function showResult(taskId) {
-  const res = await fetch(`/tasks/${taskId}/result`, { headers: getAuthHeaders() });
+  const res = await apiFetch(`/tasks/${taskId}/result`, { headers: getAuthHeaders() });
   if (!res.ok) {
     appendLine(await res.text(), "error");
     return;
@@ -2613,7 +2626,7 @@ async function showResult(taskId) {
 }
 
 async function submitReview(taskId, action) {
-  const res = await fetch("/reviews", {
+  const res = await apiFetch("/reviews", {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ task_id: taskId, action, comment: "web-cli" }),
@@ -2648,7 +2661,7 @@ async function steerActiveMission(message, opts = {}) {
     priority: Number.isFinite(opts.priority) ? opts.priority : 0,
     replace_goal: Boolean(opts.replaceGoal),
   };
-  const res = await fetch(`/tasks/${taskId}/steer`, {
+  const res = await apiFetch(`/tasks/${taskId}/steer`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(payload),
@@ -2675,12 +2688,14 @@ async function stopActiveMission() {
     }
   }
   const taskId = activeTaskId || getSessionId();
-  const res = await fetch(`/tasks/${taskId}/stop`, {
+  const res = await apiFetch(`/tasks/${taskId}/stop`, {
     method: "POST",
     headers: getAuthHeaders(),
   });
   if (!res.ok) {
-    appendLine(`stop failed: ${res.status} ${await res.text()}`, "error");
+    if (res.status !== 401) {
+      appendLine(`stop failed: ${res.status} ${await res.text()}`, "error");
+    }
     return false;
   }
   const data = await res.json();
@@ -2700,7 +2715,7 @@ async function stopActiveMission() {
 }
 
 async function stopTaskById(taskId) {
-  const res = await fetch(`/tasks/${taskId}/stop`, {
+  const res = await apiFetch(`/tasks/${taskId}/stop`, {
     method: "POST",
     headers: getAuthHeaders(),
   });
@@ -2710,7 +2725,7 @@ async function stopTaskById(taskId) {
 
 async function fetchTaskStatus(taskId) {
   try {
-    const res = await fetch(`/tasks/${taskId}/status`, { headers: getAuthHeaders() });
+    const res = await apiFetch(`/tasks/${taskId}/status`, { headers: getAuthHeaders() });
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -2724,7 +2739,7 @@ async function getTaskStatusValue(taskId) {
 }
 
 async function stopAllInFlightMissions({ limit = 100 } = {}) {
-  const res = await fetch(`/tasks?limit=${Math.min(limit, 100)}`, {
+  const res = await apiFetch(`/tasks?limit=${Math.min(limit, 100)}`, {
     headers: getAuthHeaders(),
   });
   if (!res.ok) {
@@ -2745,7 +2760,7 @@ async function stopAllInFlightMissions({ limit = 100 } = {}) {
   let limited = false;
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   for (const t of inflight) {
-    const r = await fetch(`/tasks/${t.task_id}/stop`, {
+    const r = await apiFetch(`/tasks/${t.task_id}/stop`, {
       method: "POST",
       headers: getAuthHeaders(),
     });
@@ -2936,7 +2951,7 @@ function appendSteerOutcomeConfirmPanel(confirmation, confirmationActions) {
 }
 
 async function resumeMissionOnce(taskId, { confirm = false } = {}) {
-  const res = await fetch(`/tasks/${taskId}/resume`, {
+  const res = await apiFetch(`/tasks/${taskId}/resume`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ confirm: Boolean(confirm) }),
@@ -2962,14 +2977,16 @@ async function runResumeStream(taskId, { confirm = false, fromPendingQueue = fal
   const sseAbort = new AbortController();
   bindActiveSseAbort(sseAbort);
   try {
-    const res = await fetch(`/tasks/${taskId}/resume/stream`, {
+    const res = await apiFetch(`/tasks/${taskId}/resume/stream`, {
       method: "POST",
       headers: getAuthHeaders(),
       body: JSON.stringify({ confirm: Boolean(confirm) }),
       signal: sseAbort.signal,
     });
     if (!res.ok || !res.body) {
-      appendLine(`resume stream failed: ${res.status} ${await res.text()}`, "error");
+      if (res.status !== 401) {
+        appendLine(`resume stream failed: ${res.status} ${await res.text()}`, "error");
+      }
       return null;
     }
     activeTaskId = taskId;
@@ -3402,7 +3419,7 @@ async function loadSkillInputForm(skillId) {
   try {
     let detail = skillDetailCache.get(skillId);
     if (!detail) {
-      const res = await fetch(`/skills/${encodeURIComponent(skillId)}`, { headers: getAuthHeaders() });
+      const res = await apiFetch(`/skills/${encodeURIComponent(skillId)}`, { headers: getAuthHeaders() });
       if (!res.ok) {
         window.SkillForm.clearContainer(panel);
         return;
@@ -3477,7 +3494,7 @@ async function loadSkillsRailCatalog() {
   if (!skillsRailListEl) return;
   skillsRailListEl.innerHTML = '<p class="flow-empty">加载技能目录…</p>';
   try {
-    const res = await fetch("/skills?scope=all&status=published", { headers: getAuthHeaders() });
+    const res = await apiFetch("/skills?scope=all&status=published", { headers: getAuthHeaders() });
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
       try {
@@ -3623,7 +3640,7 @@ async function runTaskStream(goal, riskLevel = "LOW", endpoint = "/tasks/stream"
   bindActiveSseAbort(sseAbort);
 
   try {
-    const res = await fetch(endpoint, {
+    const res = await apiFetch(endpoint, {
       method: "POST",
       headers: getAuthHeaders(),
       body: JSON.stringify(requestBody),
@@ -3631,7 +3648,9 @@ async function runTaskStream(goal, riskLevel = "LOW", endpoint = "/tasks/stream"
     });
 
     if (!res.ok || !res.body) {
-      appendLine(`stream failed: ${res.status}`, "error");
+      if (res.status !== 401) {
+        appendLine(`stream failed: ${res.status}`, "error");
+      }
       return;
     }
 
@@ -4067,4 +4086,8 @@ function bootSkillsRail() {
 bootSkillsRail();
 window.addEventListener("platform-auth-login", () => bootSkillsRail());
 window.addEventListener("platform-auth-logout", () => bootSkillsRail());
+window.addEventListener("platform-auth-expired", (e) => {
+  const msg = e.detail?.message || "登录已过期或令牌无效，请重新登录后再试。";
+  appendLine(msg, "error");
+});
 document.addEventListener("platform-auth-ready", () => bootSkillsRail(), { once: true });

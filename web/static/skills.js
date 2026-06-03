@@ -6,6 +6,14 @@
  * Skills catalog: list, detail, open chat with skill_id query params.
  */
 
+async function apiFetch(url, options = {}) {
+  if (window.PlatformAuth?.authFetch) return window.PlatformAuth.authFetch(url, options);
+  return fetch(url, {
+    ...options,
+    headers: { ...getAuthHeaders(), ...(options.headers || {}) },
+  });
+}
+
 function getAuthHeaders() {
   if (window.PlatformAuth) return window.PlatformAuth.getAuthHeaders();
   const headers = { "Content-Type": "application/json", Accept: "application/json" };
@@ -65,7 +73,7 @@ async function fetchSkills() {
   if (q) params.set("q", q);
   if (domain) params.set("domain", domain);
   if (category) params.set("category", category);
-  const res = await fetch(`/skills?${params}`, { headers: getAuthHeaders() });
+  const res = await apiFetch(`/skills?${params}`, { headers: getAuthHeaders() });
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
     const detail = errBody.detail || errBody.message;
@@ -93,7 +101,7 @@ function fillSelectOptions(sel, items, labelMap) {
 }
 
 async function fetchCategories() {
-  const res = await fetch("/skills/catalog/categories", { headers: getAuthHeaders() });
+  const res = await apiFetch("/skills/catalog/categories", { headers: getAuthHeaders() });
   if (!res.ok) {
     if (res.status === 503) throw new Error("Skill 平台未启用，请检查 config 中 skill.enabled");
     return;
@@ -152,7 +160,7 @@ async function selectSkill(skillId) {
   const panel = document.getElementById("skills-detail");
   if (!panel) return;
   panel.innerHTML = '<p class="flow-empty">加载详情…</p>';
-  const res = await fetch(`/skills/${encodeURIComponent(skillId)}`, { headers: getAuthHeaders() });
+  const res = await apiFetch(`/skills/${encodeURIComponent(skillId)}`, { headers: getAuthHeaders() });
   if (!res.ok) {
     panel.innerHTML = `<p class="flow-empty">加载失败: ${res.status}</p>`;
     return;
@@ -220,7 +228,7 @@ function applyUrlSkill() {
 
 async function loadPackageCount() {
   try {
-    const res = await fetch("/skills/marketplace/packages", { headers: getAuthHeaders() });
+    const res = await apiFetch("/skills/marketplace/packages", { headers: getAuthHeaders() });
     if (!res.ok) return;
     const data = await res.json();
     const el = document.getElementById("pkg-count");

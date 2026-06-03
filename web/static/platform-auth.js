@@ -12,6 +12,7 @@
   let navUiAttached = false;
   let loginInFlight = false;
   let skipVerifyUntil = 0;
+  let authExpiredNotifyUntil = 0;
 
   /** @type {{ authEnabled: boolean | null, env: string, version: string, status: string }} */
   let runtimeMeta = { authEnabled: null, env: "", version: "", status: "" };
@@ -241,9 +242,51 @@
     localStorage.removeItem(TENANT_KEY);
     localStorage.removeItem("auth_token");
     skipVerifyUntil = 0;
+    authExpiredNotifyUntil = 0;
     sessionStorage.removeItem(PANEL_COLLAPSED_KEY);
     setLoginMessage("");
     renderNavAuth().then(() => openAuthPanel());
+  }
+
+  /**
+   * Clear invalid JWT and surface re-login UI (debounced notifications).
+   */
+  async function handleUnauthorizedResponse(res) {
+    if (!res || res.status !== 401) return false;
+    if (runtimeMeta.authEnabled === null) await fetchRuntimeMeta();
+    if (runtimeMeta.authEnabled === false) return false;
+
+    const hadToken = Boolean(getToken());
+    const now = Date.now();
+    const shouldNotify = now >= authExpiredNotifyUntil;
+    if (shouldNotify) authExpiredNotifyUntil = now + 4000;
+
+    if (hadToken) {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem("auth_token");
+      skipVerifyUntil = 0;
+    }
+
+    const message = hadToken
+      ? "登录已过期或令牌无效，请重新登录。"
+      : "需要登录后才能继续操作。";
+    if (shouldNotify) {
+      setLoginMessage(message, "error");
+      global.dispatchEvent(
+        new CustomEvent("platform-auth-expired", { detail: { hadToken, message } })
+      );
+    }
+
+    await renderNavAuth();
+    openAuthPanel();
+    return true;
+  }
+
+  async function authFetch(url, options = {}) {
+    const headers = { ...getAuthHeaders(), ...(options.headers || {}) };
+    const res = await fetch(url, { ...options, headers });
+    if (res.status === 401) await handleUnauthorizedResponse(res);
+    return res;
   }
 
   async function verifyToken() {
@@ -251,9 +294,8 @@
     if (!token || runtimeMeta.authEnabled === false) return true;
     if (Date.now() < skipVerifyUntil) return true;
     try {
-      const res = await fetch("/skills?scope=all&status=published", {
-        headers: getAuthHeaders(),
-      });
+      const res = await authFetch("/skills?scope=all&status=published");
+      if (res.status === 401) return false;
       return res.ok;
     } catch {
       return false;
@@ -440,6 +482,8 @@
     USER_KEY,
     THEME_KEY,
     getAuthHeaders,
+    authFetch,
+    handleUnauthorizedResponse,
     getState,
     getToken,
     login,

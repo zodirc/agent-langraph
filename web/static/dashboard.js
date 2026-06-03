@@ -11,7 +11,9 @@ function getAuthHeaders() {
 }
 
 async function fetchJson(path) {
-  const res = await fetch(path, { headers: getAuthHeaders() });
+  const res = window.PlatformAuth?.authFetch
+    ? await window.PlatformAuth.authFetch(path, { headers: getAuthHeaders() })
+    : await fetch(path, { headers: getAuthHeaders() });
   if (!res.ok) throw new Error(`${path} ${res.status}`);
   return res.json();
 }
