@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
 from app.services.knowledge_store import get_knowledge_store
-from app.services.reasoning_trace import report_boundary, report_retrieval_trace
+from app.services.reasoning_trace import report_boundary
 from app.services.memory_store import get_memory_store
 from app.services.retrieval_policy import (
     retrieval_domains_for_state,
@@ -83,7 +83,7 @@ def retrieval_node(state: AgentState) -> AgentState:
             "retrieval",
             {"knowledge_count": len(knowledge), "memory_count": len(memories), "sanitized": True},
         )
-        report_retrieval_trace(updated)
+        # 检索 trace 由 graph_runner.trace_after_node(retrieval) 统一发出，避免重复
         get_state_store().save(updated)
         return updated
     except Exception as exc:

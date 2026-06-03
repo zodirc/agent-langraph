@@ -494,9 +494,10 @@ def report_policy_trace(state: dict[str, Any]) -> None:
         f"风险: {reasoning.get('risk_level', '?')}",
         f"需人工审核: {bool(state.get('review_required'))}",
     ]
-    summary = str(reasoning.get("summary") or "")[:300]
-    if summary:
-        lines.append(f"摘要: {summary}")
+    if not answer_stream_enabled():
+        summary = str(reasoning.get("summary") or "")[:300]
+        if summary:
+            lines.append(f"摘要: {summary}")
     report_block("policy", "done", "\n".join(lines), field="policy")
 
 
@@ -593,10 +594,11 @@ def report_reasoning_result_trace(state: dict[str, Any], *, source: str) -> None
         f"【推理结果】来源={source}",
         f"confidence={reasoning.get('confidence')} risk={reasoning.get('risk_level')}",
     ]
-    summary = str(reasoning.get("summary") or "")
-    if summary:
-        cap = 800 if trace_verbose() else 400
-        lines.append(f"summary: {summary[:cap]}")
+    if not answer_stream_enabled():
+        summary = str(reasoning.get("summary") or "")
+        if summary:
+            cap = 800 if trace_verbose() else 400
+            lines.append(f"summary: {summary[:cap]}")
     structured = reasoning.get("structured")
     if isinstance(structured, dict) and structured:
         if structured.get("code_artifact_repaired"):

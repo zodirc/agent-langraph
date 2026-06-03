@@ -663,6 +663,16 @@ const MISSION_LOOP_NODES = new Set([
   "mission_observe",
   "mission_eval",
 ]);
+/** 常规 QA 流水线节点：成功态不刷 `[node] → STATUS`，细节见「推理过程」面板。 */
+const PIPELINE_QUIET_NODES = new Set([
+  "planning",
+  "retrieval",
+  "reasoning",
+  "policy",
+  "output_guard",
+  "output",
+  "memory_writeback",
+]);
 const TOKEN_KEY = "agent_access_token";
 const SESSION_KEY = "agent_session_id";
 const THEME_KEY = "agent_theme";
@@ -2267,16 +2277,12 @@ function formatNodeEvent(payload) {
   const status = payload.status || "";
   const isError = status === "FAILED" || status === "DEAD_LETTER" || status === "WRITING_FAILED";
 
-  if (MISSION_LOOP_NODES.has(node) && !isError) {
+  if ((MISSION_LOOP_NODES.has(node) || PIPELINE_QUIET_NODES.has(node)) && !isError) {
     return;
   }
 
   const line = `[${node}] → ${status}`;
   appendLine(line, isError ? "error" : "node");
-
-  if (node === "planning" && status === "PLANNED") {
-    appendLine("  … 计划完成；若含万字续写，正文生成可能需数分钟，请看右上角计时", "system");
-  }
   if (node === "tool_execution" && status === "TOOL_EXECUTED") {
     appendLine("  … 工具执行完成，正在收尾", "system");
   }

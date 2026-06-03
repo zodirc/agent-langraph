@@ -38,7 +38,6 @@ from app.services.reasoning_trace import (
     extract_field_text,
     report_boundary,
     report_reasoning_context,
-    report_reasoning_result_trace,
     report_status_trace,
     stream_llm_trace,
     trace_enabled,
@@ -224,7 +223,7 @@ def reasoning_node(state: AgentState) -> AgentState:
                 ),
             )
         )
-        report_reasoning_result_trace(updated, source=reasoning_source)
+        # 推理结果 trace 由 graph_runner.trace_after_node(reasoning) 统一发出，避免重复
         get_state_store().save(updated)
         return updated
     except BudgetExceededError as exc:
