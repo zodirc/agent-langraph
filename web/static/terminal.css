@@ -680,32 +680,42 @@ body.theme-light .right-rail-panel-tab.is-active {
 }
 
 .session-files-breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-breadcrumb-btn {
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  border: none;
+  border-radius: 0;
   background: transparent;
   color: var(--cyan);
-  padding: 1px 8px;
+  padding: 0;
   font: inherit;
-  font-size: 11px;
+  font-size: inherit;
   cursor: pointer;
+  vertical-align: baseline;
+}
+
+.session-breadcrumb-btn:hover {
+  text-decoration: underline;
 }
 
 .session-breadcrumb-btn.current {
   color: var(--text);
-  border-color: rgba(139, 148, 158, 0.45);
+  cursor: default;
+  text-decoration: none;
 }
 
 .session-breadcrumb-sep {
   color: var(--muted);
+  margin: 0 1px;
+  user-select: none;
 }
 
 .session-files-list {
@@ -713,49 +723,40 @@ body.theme-light .right-rail-panel-tab.is-active {
   min-height: 100px;
   max-height: min(42vh, 360px);
   display: flex;
-  flex-direction: row;
-  flex-wrap: nowrap;
-  align-items: stretch;
-  gap: 8px;
-  overflow-x: auto;
-  overflow-y: hidden;
+  flex-direction: column;
+  gap: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #010409;
-  padding: 8px;
-  scroll-snap-type: x proximity;
+  padding: 2px 0;
 }
 
 .session-files-list .flow-empty {
-  flex: 1 0 100%;
-  min-width: 100%;
-  margin: 0;
-  align-self: center;
+  margin: 12px 10px;
   text-align: center;
 }
 
 .session-file-item {
-  flex: 0 0 auto;
-  min-width: 108px;
-  max-width: 168px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid rgba(139, 148, 158, 0.28);
-  margin-bottom: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 0;
   font-size: 12px;
+  line-height: 1.35;
   color: var(--text);
   cursor: pointer;
   user-select: none;
-  scroll-snap-align: start;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 4px;
 }
 
 .session-file-item:hover {
-  border-color: rgba(88, 166, 255, 0.55);
   background: rgba(88, 166, 255, 0.12);
 }
 
@@ -765,27 +766,37 @@ body.theme-light .right-rail-panel-tab.is-active {
 
 .session-file-item.dir {
   color: #86efac;
+  font-weight: 500;
+}
+
+.session-file-item .file-icon {
+  flex-shrink: 0;
+  width: 1.1em;
+  text-align: center;
+  opacity: 0.9;
 }
 
 .session-file-item .file-path {
-  display: block;
-  line-height: 1.35;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .session-file-item .file-meta {
-  display: block;
+  flex-shrink: 0;
   font-size: 10px;
   color: var(--muted);
-  margin-top: 2px;
+  margin-left: auto;
+  padding-left: 8px;
 }
 
 .session-files-tip {
   margin: 0;
   color: var(--muted);
   font-size: 11px;
+  flex-shrink: 0;
 }
 
 body.theme-light .session-files-list {

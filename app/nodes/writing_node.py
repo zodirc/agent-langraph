@@ -34,7 +34,9 @@ from app.services.manuscript_context import (
 )
 from app.services.manuscript_service import (
     Manuscript,
+    resolve_body_filename,
     resolve_manuscript,
+    resolve_outline_filename,
     validate_manuscript_content,
 )
 from app.services.manuscript_service import manuscript_has_body
@@ -133,6 +135,8 @@ def writing_node(state: AgentState) -> AgentState:
         task_id = state["task_id"]
         goal = str(payload.get("goal") or "")
         ms = resolve_manuscript(task_id, state.get("manuscript"))
+        outline_file = resolve_outline_filename(manuscript=ms, payload=payload, intent=intent)
+        body_file = resolve_body_filename(manuscript=ms, payload=payload, intent=intent)
         target_chars = int(intent.get("target_chars") or settings.ARTIFACT_CHUNK_CHARS)
 
         results: list[dict[str, Any]] = list(state.get("tool_results") or [])
@@ -152,14 +156,7 @@ def writing_node(state: AgentState) -> AgentState:
 
         writing_delta: dict[str, Any] | None = None
         if action in ("append_body", "write_body", "write_outline", "reset_body"):
-            if action in ("write_outline",):
-                delta_file = ms.outline_path or str(
-                    payload.get("outline_filename") or settings.MANUSCRIPT_DEFAULT_OUTLINE
-                )
-            else:
-                delta_file = ms.body_path or str(
-                    payload.get("novel_filename") or settings.MANUSCRIPT_DEFAULT_BODY
-                )
+            delta_file = outline_file if action == "write_outline" else body_file
             writing_delta = record_writing_step_start(
                 state,
                 filename=delta_file,
@@ -168,14 +165,7 @@ def writing_node(state: AgentState) -> AgentState:
             )
 
         if intent.get("require_read_first"):
-            if action == "write_outline":
-                read_name = ms.outline_path or str(
-                    payload.get("outline_filename") or settings.MANUSCRIPT_DEFAULT_OUTLINE
-                )
-            else:
-                read_name = ms.body_path or str(
-                    payload.get("novel_filename") or settings.MANUSCRIPT_DEFAULT_BODY
-                )
+            read_name = outline_file if action == "write_outline" else body_file
             if read_name:
                 read_out = handle_read_text_artifact(
                     {"task_id": task_id, "filename": read_name, "max_chars": 8000}
@@ -190,9 +180,7 @@ def writing_node(state: AgentState) -> AgentState:
                     payload["existing_body_excerpt"] = excerpt
 
         if action == "reset_body":
-            filename = ms.body_path or str(
-                payload.get("novel_filename") or settings.MANUSCRIPT_DEFAULT_BODY
-            )
+            filename = body_file
             save_artifact_snapshot(task_id, filename, work_item_id, state=state)
             payload["last_snapshot_id"] = work_item_id
             art_dir = task_artifact_dir(task_id)
@@ -211,9 +199,7 @@ def writing_node(state: AgentState) -> AgentState:
             action = "write_body"
 
         if action == "write_outline":
-            filename = ms.outline_path or str(
-                payload.get("outline_filename") or settings.MANUSCRIPT_DEFAULT_OUTLINE
-            )
+            filename = outline_file
             save_artifact_snapshot(task_id, filename, work_item_id, state=state)
             payload["last_snapshot_id"] = work_item_id
             content = _generate_validated_content(
@@ -252,9 +238,7 @@ def writing_node(state: AgentState) -> AgentState:
                             apply_chapter_patches,
                         )
 
-                        body_name = ms.body_path or str(
-                            payload.get("novel_filename") or settings.MANUSCRIPT_DEFAULT_BODY
-                        )
+                        body_name = ms.body_path or body_file
                         body_tail = read_artifact_tail(task_id, body_name, max_chars=2400)
                         diff = compute_outline_diff(
                             outline_before,
@@ -312,9 +296,7 @@ def writing_node(state: AgentState) -> AgentState:
                 pass
 
         elif action == "write_body":
-            filename = ms.body_path or str(
-                payload.get("novel_filename") or settings.MANUSCRIPT_DEFAULT_BODY
-            )
+            filename = body_file
             existing_body = read_body_text(task_id, filename, state=state)
             min_body = int(intent.get("min_chars") or settings.MANUSCRIPT_MIN_BODY_CHARS)
             if existing_body.strip() and len(existing_body) >= min_body:
@@ -345,9 +327,7 @@ def writing_node(state: AgentState) -> AgentState:
                 ms.body_outline_revision_seen = int(ms.outline_revision or 0)
 
         if action == "append_body":
-            filename = ms.body_path or str(
-                payload.get("novel_filename") or settings.MANUSCRIPT_DEFAULT_BODY
-            )
+            filename = ms.body_path or body_file
             requested = parse_requested_chars(goal) or target_chars
             if requested > settings.ARTIFACT_CHUNK_CHARS:
                 chunks = _build_append_chunks(state, goal, filename)
@@ -431,7 +411,7 @@ def writing_node(state: AgentState) -> AgentState:
                     )
                     from app.services.writing_phases import load_story_bible
 
-                    outline_name = ms.outline_path or settings.MANUSCRIPT_DEFAULT_OUTLINE
+                    outline_name = ms.outline_path or outline_file
                     outline_full = read_outline_text(task_id, outline_name, state=state)
                     chapter_text = extract_chapter_text(body_text, ch_idx)
                     prev_text = (

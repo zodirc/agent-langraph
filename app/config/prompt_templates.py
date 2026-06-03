@@ -13,9 +13,15 @@ PLANNING_ROLE = """You are the planning module. Read runtime_capabilities in the
 Required fields:
 - "plan": short step strings only (e.g. "outline via writing", "append chapter 1") — NOT JSON keys, NOT story prose
 - "selected_tools": non-writing registry tools only (read_text_artifact, calculator, get_runtime_info, …)
-- "writing_intent": {enabled, action, target_chars, chapter_label?} — per-step file write in single-turn graph
+- "writing_intent": {enabled, action, target_chars, chapter_label?, body_filename?, outline_filename?} — per-step file write in single-turn graph
+- Manuscript filenames (fiction / longform — REQUIRED before first write when no manuscript.body_path yet):
+  Pick short meaningful basenames from the work title or theme (Chinese OK), e.g. body "深空余烬.txt", outline "深空余烬_大纲.txt".
+  Long-horizon mission → mission.step_policy.body_artifact + outline_artifact.
+  Single-turn writing → writing_intent.body_filename + outline_filename (same rules).
+  After manuscript.body_path / outline_path exist in user JSON → reuse those paths exactly; never rename.
+  Do NOT default to novel.txt / outline.txt unless the user explicitly asked for those names.
 - "mission": optional — use when runtime_capabilities.execution_paths.mission applies (multi-step / many chapters / total_chars >> one reply). Example:
-  {"kind":"writing","total_target_chars":1200000,"step_policy":{"chars_per_step":4000,"first_step":"outline","then":"append_body"},"autonomous":true,"budget":{"max_steps":301}}
+  {"kind":"writing","total_target_chars":1200000,"step_policy":{"chars_per_step":4000,"first_step":"outline","then":"append_body","body_artifact":"深空余烬.txt","outline_artifact":"深空余烬_大纲.txt"},"autonomous":true,"budget":{"max_steps":301}}
   Set budget.max_steps yourself: ceil(total_target_chars/chars_per_step) plus 1 if first_step is outline; hard cap 500. If omitted, runtime estimates from totals.
   Full-book totals go in mission.total_target_chars, NOT in writing_intent.target_chars.
 - "tool_params", "tool_stages", "tool_dag": optional
@@ -28,7 +34,7 @@ Required fields:
 - "turn_contract": optional — executable plan for THIS turn (runtime materializes tools + writing_intent):
   {"intent_kind":"steer_material_change|forward_write|inspect|reasoning_only",
    "primary_op":"edit_plot|append_body|write_outline|...",
-   "ops":[{"op":"read","tool":"read_text_artifact","target":"outline.txt"}, ...],
+   "ops":[{"op":"read","tool":"read_text_artifact","target":"<outline_artifact or outline_filename>"}, ...],
    "tools":["read_text_artifact","edit_text_artifact"],
    "forbid":["append_body"],
    "user_visible_reason":"short line for the user"}
@@ -36,9 +42,9 @@ Required fields:
 
 Decision guide (use capabilities; respect payload flags):
 - Pure Q&A / capabilities / limits → selected_tools may include get_runtime_info; writing_intent.enabled=false; omit mission; mission_recommended=false
-- Source code (C/C++/Python/etc.) in this turn → writing_intent.enabled=false; put code in reasoning structured.artifacts; do NOT use write_body on novel.txt
-- Single fiction chapter or outline this turn → writing_intent.enabled=true with appropriate action; skip_retrieval=false; omit mission; mission_recommended=false
-- Long-horizon manuscript (many steps, total length clearly beyond one reply) → MUST set mission (kind, total_target_chars, step_policy, autonomous:true); writing_intent.enabled=false; mission_recommended=true
+- Source code (C/C++/Python/etc.) in this turn → writing_intent.enabled=false; put code in reasoning structured.artifacts; do NOT use write_body on the manuscript body file
+- Single fiction chapter or outline this turn → writing_intent.enabled=true with appropriate action AND body_filename + outline_filename; skip_retrieval=false; omit mission; mission_recommended=false
+- Long-horizon manuscript (many steps, total length clearly beyond one reply) → MUST set mission (kind, total_target_chars, step_policy with body_artifact + outline_artifact, autonomous:true); writing_intent.enabled=false; mission_recommended=true
 - If input_payload already has mission → keep/extend it; do not remove
 - If input_payload.mission_auto is false → never add mission; mission_recommended=false
 
@@ -55,12 +61,12 @@ When the user steers or rejects prior work (natural language in goal / conversat
    "edit_spec":{filename, old_text, new_text, ...} only when you can anchor edit_plot,
    "tools":["read_text_artifact","edit_text_artifact"], "use_planning":true}
 - Set force:true when user clearly requires redoing outline, wiping body, or a specific text replacement (not optional polish).
-- User wants to READ/INSPECT existing outline (检阅/查看/阅读大纲) without writing more body → action "review_outline", force:false, writing_intent.enabled=false; do NOT append_body to novel.txt.
+- User wants to READ/INSPECT existing outline (检阅/查看/阅读大纲) without writing more body → action "review_outline", force:false, writing_intent.enabled=false; do NOT append_body to the bound body file.
 - If user only asks a question or soft feedback without mandating redo → omit mission_intervention or force:false; use selected_tools + read/edit instead.
 - For edit_plot with force:true, prefer read_text_artifact first in selected_tools, then edit_text_artifact with exact old_text from the file.
 
 Outline already complete (see outline_status.steer_should_patch_not_rewrite in user JSON):
-- User corrects a setting/fact inside the outline (e.g. "A is B", name/relationship fix) → action "edit_plot", force:true, edit_spec.filename=outline.txt.
+- User corrects a setting/fact inside the outline (e.g. "A is B", name/relationship fix) → action "edit_plot", force:true, edit_spec.filename=<manuscript.outline_path or outline_filename from user JSON>.
   Set selected_tools to ["read_text_artifact","edit_text_artifact"] and tool_stages [["read_text_artifact"],["edit_text_artifact"]].
   If you can anchor from outline_status alone, you MAY fill tool_params.edit_text_artifact with exact old_text/new_text; otherwise leave edit params empty and runtime will read then plan anchor from file content.
   work_plan_patch: cancel pending write_outline; prepend edit_plot. Do NOT use rewrite_outline.

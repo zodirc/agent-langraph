@@ -81,6 +81,178 @@ def _default_outline() -> str:
     return str(getattr(settings, "MANUSCRIPT_DEFAULT_OUTLINE", "outline.txt"))
 
 
+def sanitize_artifact_basename(raw: Any) -> str:
+    """Validate a single-segment artifact basename for task-local writes."""
+    from app.services.artifact_tools import _safe_filename
+
+    name = str(raw or "").strip()
+    if not name:
+        raise ValueError("Artifact filename cannot be empty")
+    return _safe_filename(name)
+
+
+def _pick_artifact_basename(*candidates: Any, default: str) -> str:
+    for raw in candidates:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            return sanitize_artifact_basename(text)
+        except ValueError:
+            continue
+    return sanitize_artifact_basename(default)
+
+
+def resolve_outline_filename(
+    *,
+    manuscript: Manuscript,
+    payload: dict[str, Any],
+    intent: Optional[dict[str, Any]] = None,
+) -> str:
+    """Bound outline path, else model/mission names, else default."""
+    if manuscript.outline_path:
+        return str(manuscript.outline_path)
+    intent = intent or {}
+    mission = payload.get("mission") or {}
+    policy = mission.get("step_policy") if isinstance(mission.get("step_policy"), dict) else {}
+    return _pick_artifact_basename(
+        intent.get("outline_filename"),
+        intent.get("outline_path"),
+        payload.get("outline_filename"),
+        policy.get("outline_artifact"),
+        default=_default_outline(),
+    )
+
+
+def resolve_body_filename(
+    *,
+    manuscript: Manuscript,
+    payload: dict[str, Any],
+    intent: Optional[dict[str, Any]] = None,
+) -> str:
+    """Bound body path, else model/mission names, else default."""
+    if manuscript.body_path:
+        return str(manuscript.body_path)
+    intent = intent or {}
+    mission = payload.get("mission") or {}
+    policy = mission.get("step_policy") if isinstance(mission.get("step_policy"), dict) else {}
+    return _pick_artifact_basename(
+        intent.get("body_filename"),
+        intent.get("body_path"),
+        intent.get("novel_filename"),
+        payload.get("novel_filename"),
+        payload.get("body_filename"),
+        policy.get("body_artifact"),
+        policy.get("artifact_path"),
+        default=_default_body(),
+    )
+
+
+def normalize_writing_intent_filenames(
+    intent: dict[str, Any],
+    *,
+    mission_block: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Sanitize optional filename fields on writing_intent; inherit mission step_policy."""
+    out = dict(intent or {})
+    policy = {}
+    if isinstance(mission_block, dict):
+        raw_policy = mission_block.get("step_policy")
+        if isinstance(raw_policy, dict):
+            policy = raw_policy
+        else:
+            policy = mission_block
+    if not out.get("outline_filename") and policy.get("outline_artifact"):
+        out["outline_filename"] = str(policy["outline_artifact"]).strip()
+    if not out.get("body_filename") and policy.get("body_artifact"):
+        out["body_filename"] = str(policy["body_artifact"]).strip()
+    for key in ("outline_filename", "body_filename"):
+        if out.get(key):
+            out[key] = sanitize_artifact_basename(out[key])
+    return out
+
+
+def apply_planner_artifact_names(
+    payload: dict[str, Any],
+    *,
+    planning_result: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Lift planner-chosen basenames into mission.step_policy and payload."""
+    out = dict(payload)
+    manuscript = out.get("manuscript") or out.get("session_artifacts") or {}
+    if manuscript.get("body_path") or manuscript.get("outline_path"):
+        return sync_payload_artifact_names(out)
+
+    plan_intent: dict[str, Any] = {}
+    if isinstance(planning_result, dict):
+        raw = planning_result.get("writing_intent")
+        if isinstance(raw, dict):
+            plan_intent = raw
+
+    intent = dict(out.get("writing_intent") or plan_intent or {})
+    mission = out.get("mission")
+    if isinstance(mission, dict) and str(mission.get("kind") or "") == "writing":
+        policy = dict(mission.get("step_policy") or {})
+        body = _pick_artifact_basename(
+            policy.get("body_artifact"),
+            policy.get("artifact_path"),
+            intent.get("body_filename"),
+            intent.get("novel_filename"),
+            plan_intent.get("body_filename"),
+            out.get("novel_filename"),
+            out.get("body_filename"),
+            default=_default_body(),
+        )
+        outline = _pick_artifact_basename(
+            policy.get("outline_artifact"),
+            intent.get("outline_filename"),
+            plan_intent.get("outline_filename"),
+            out.get("outline_filename"),
+            default=_default_outline(),
+        )
+        policy["body_artifact"] = body
+        policy["outline_artifact"] = outline
+        out["mission"] = {**mission, "step_policy": policy}
+
+    return sync_payload_artifact_names(out, intent=intent)
+
+
+def sync_payload_artifact_names(
+    payload: dict[str, Any],
+    *,
+    intent: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Promote intent/mission artifact names onto payload before manuscript bind."""
+    out = dict(payload)
+    intent = dict(intent or out.get("writing_intent") or {})
+    manuscript = out.get("manuscript") or out.get("session_artifacts") or {}
+    mission = out.get("mission") or {}
+    policy = mission.get("step_policy") if isinstance(mission.get("step_policy"), dict) else {}
+
+    if not manuscript.get("outline_path"):
+        outline_raw = (
+            intent.get("outline_filename")
+            or out.get("outline_filename")
+            or policy.get("outline_artifact")
+        )
+        if outline_raw:
+            out["outline_filename"] = sanitize_artifact_basename(outline_raw)
+
+    if not manuscript.get("body_path"):
+        body_raw = (
+            intent.get("body_filename")
+            or intent.get("novel_filename")
+            or out.get("novel_filename")
+            or out.get("body_filename")
+            or policy.get("body_artifact")
+            or policy.get("artifact_path")
+        )
+        if body_raw:
+            out["novel_filename"] = sanitize_artifact_basename(body_raw)
+
+    return out
+
+
 def _placeholder_patterns() -> tuple[str, ...]:
     raw = getattr(settings, "MANUSCRIPT_PLACEHOLDER_PATTERNS", None)
     if isinstance(raw, (list, tuple)) and raw:
@@ -347,6 +519,7 @@ def build_writing_intent(
     if continue_turn and has_body and action == "write_body":
         intent["action"] = "append_body"
 
+    intent = normalize_writing_intent_filenames(intent, mission_block=mission_block)
     return intent
 
 
@@ -386,6 +559,7 @@ def enrich_payload(
 
     tail_chars = int(getattr(settings, "MANUSCRIPT_TAIL_EXCERPT_CHARS", 2400))
     enriched = {**payload, "manuscript": ms.to_dict(), "session_artifacts": ms.to_dict()}
+    enriched = sync_payload_artifact_names(enriched, intent=payload.get("writing_intent"))
 
     if ms.body_path:
         enriched["novel_filename"] = ms.body_path

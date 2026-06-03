@@ -23,6 +23,7 @@ from app.services.resource_budget import (
     init_task_budget,
 )
 from app.services.manuscript_service import (
+    apply_planner_artifact_names,
     build_writing_intent,
     enrich_payload,
     resolve_manuscript,
@@ -140,6 +141,7 @@ def planning_node(state: AgentState) -> AgentState:
                     mission=mission_in_state,
                 )
             intent = payload.get("writing_intent") or {}
+            payload = apply_planner_artifact_names(payload)
             trace_tools = ["writing_node"] if intent.get("enabled") else []
             report_plan_trace(
                 [],
@@ -450,6 +452,8 @@ def planning_node(state: AgentState) -> AgentState:
                 active_mission=state.get("mission"),
                 mission_step=int(state.get("mission_step") or 0),
             )
+
+        payload = apply_planner_artifact_names(payload, planning_result=result)
 
         payload["tool_params"] = tool_params
 

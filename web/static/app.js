@@ -107,6 +107,15 @@ let sessionFilesRefreshSeq = 0;
 let sessionFilesPollingTimer = null;
 const sessionFileViewerMap = new Map();
 let sessionFilesCurrentPath = ".";
+let sessionFilesTextIndex = [];
+let sessionFilesTextIndexTaskId = null;
+const SESSION_TEXT_FILE_RE = /\.(txt|md|markdown|json|yaml|yml|log)$/i;
+const CHAPTER_HEADER_RE = /^(?:#{1,3}\s*)?第\s*([一二三四五六七八九十百零两\d]+)\s*章[^\n]*/gm;
+const CN_DIGITS = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 百: 100 };
+const POPUP_VIEWER_FONT_KEY = "session_file_viewer_font_px";
+const POPUP_VIEWER_FONT_MIN = 10;
+const POPUP_VIEWER_FONT_MAX = 28;
+const POPUP_VIEWER_FONT_DEFAULT = 13;
 const COMMAND_SUGGESTIONS = [
   "/help",
   "/new",
@@ -1072,30 +1081,63 @@ function setSessionFilesCollapsed(collapsed) {
   }
 }
 
-function buildSessionFileViewerHtml(filePath) {
-  return `<!doctype html><html><head><meta charset="utf-8"/><title>${escapeHtml(filePath)}</title>
+function buildSessionFileViewerHtml() {
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>会话文件</title>
   <style>
-    body{margin:0;background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Menlo,Consolas,monospace}
+    html,body{height:100%;margin:0;overflow:hidden}
+    body{display:flex;flex-direction:column;background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Menlo,Consolas,monospace}
     body.theme-light{background:#f6f8fb;color:#1f2937}
-    .head{padding:10px 12px;border-bottom:1px solid #30363d;background:#010409}
-    .title{margin:0;font-size:12px;color:#93c5fd}
+    .head{flex-shrink:0;padding:10px 12px;border-bottom:1px solid #30363d;background:#010409}
+    .title{margin:0;font-size:12px;color:#93c5fd;word-break:break-all}
     .meta{margin:4px 0 0;font-size:11px;color:#8b949e}
-    .toolbar{margin-top:8px;display:flex;gap:8px;align-items:center}
-    .btn{border:1px solid #4b5563;background:transparent;color:#cbd5e1;border-radius:6px;padding:4px 10px;font:inherit;font-size:11px;cursor:pointer}
+    .toolbar{margin-top:8px;display:flex;flex-direction:column;gap:6px}
+    .toolbar-row{display:flex;gap:6px;align-items:center;flex-wrap:nowrap}
+    .toolbar-controls{justify-content:flex-start}
+    .btn,.sel{border:1px solid #4b5563;background:#0d1117;color:#cbd5e1;border-radius:6px;padding:4px 8px;font:inherit;font-size:11px;cursor:pointer;box-sizing:border-box}
     .btn:hover{background:rgba(88,166,255,.12)}
-    label{font-size:11px;color:#8b949e}
-    textarea{width:100%;height:calc(100vh - 120px);padding:12px;border:none;outline:none;background:transparent;color:inherit;font:inherit;line-height:1.45;resize:none}
+    .btn-nav{min-width:28px;width:28px;padding-inline:0;flex-shrink:0;text-align:center}
+    .sel{min-width:0;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .sel-file,.sel-chapter{flex:1 1 0;width:0}
+    .sel:disabled{opacity:.5;cursor:not-allowed}
+    .nav-group,.font-group{display:flex;gap:4px;align-items:center;flex-shrink:0}
+    .chapter-now-wrap{display:flex;align-items:center;gap:4px;flex:0 0 192px;width:192px;min-width:192px;overflow:hidden}
+    .chapter-now-label{flex-shrink:0;font-size:11px;color:#8b949e}
+    .chapter-now{flex:1;min-width:0;font-size:11px;color:#fbbf24;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .chapter-now.is-empty{color:#6b7280}
+    .font-size-label{font-size:11px;color:#8b949e;min-width:2.5em;text-align:center;flex-shrink:0}
+    .save-btn{flex-shrink:0;margin-left:auto}
+    .body-wrap{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+    textarea{flex:1;min-height:0;width:100%;height:100%;padding:12px;border:none;outline:none;background:transparent;color:inherit;font:inherit;line-height:1.55;resize:none;overflow-y:auto;overscroll-behavior:contain;box-sizing:border-box;white-space:pre-wrap;word-wrap:break-word}
     body.theme-light .head{background:#e2e8f0;border-bottom-color:#cbd5e1}
+    body.theme-light .sel{background:#fff}
   </style></head><body>
     <div class="head">
-      <p class="title">${escapeHtml(filePath)}</p>
+      <p id="title" class="title">-</p>
       <p id="m" class="meta">loading…</p>
       <div class="toolbar">
-        <button id="save-btn" class="btn" type="button">保存</button>
-        <label><input id="live-box" type="checkbox" checked /> 实时刷新</label>
+        <div class="toolbar-row">
+          <select id="file-switcher" class="sel sel-file" title="切换同会话文件"><option value="">文件…</option></select>
+          <select id="chapter-jump" class="sel sel-chapter" title="章节跳转" disabled><option value="">章节</option></select>
+        </div>
+        <div class="toolbar-row toolbar-controls">
+          <div class="nav-group">
+            <button id="prev-btn" class="btn btn-nav" type="button" title="上一章">‹</button>
+            <button id="next-btn" class="btn btn-nav" type="button" title="下一章">›</button>
+          </div>
+          <span class="chapter-now-wrap" title="当前阅读位置">
+            <span class="chapter-now-label">当前</span>
+            <span id="current-chapter" class="chapter-now is-empty">-</span>
+          </span>
+          <div class="font-group">
+            <button id="font-down-btn" class="btn btn-nav" type="button" title="缩小字体">A-</button>
+            <button id="font-up-btn" class="btn btn-nav" type="button" title="放大字体">A+</button>
+            <span id="font-size-label" class="font-size-label">13px</span>
+          </div>
+          <button id="save-btn" class="btn save-btn" type="button">保存</button>
+        </div>
       </div>
     </div>
-    <textarea id="content"></textarea>
+    <div class="body-wrap"><textarea id="content" spellcheck="false"></textarea></div>
   </body></html>`;
 }
 
@@ -1110,33 +1152,194 @@ function syncSessionFileViewerTheme(win) {
   }
 }
 
-function updateSessionFileViewer(fileKey, data) {
-  const view = sessionFileViewerMap.get(fileKey);
-  if (!view || !view.win || view.win.closed) return;
+function loadPopupViewerFontSize() {
   try {
-    syncSessionFileViewerTheme(view.win);
-    const doc = view.win.document;
-    const contentEl = doc.getElementById("content");
-    const metaEl = doc.getElementById("m");
-    if (!contentEl || !metaEl) return;
-    const current = String(data?.content || "");
-    const shouldLive = view.live !== false;
-    if (!view.dirty && shouldLive) {
-      contentEl.value = current;
-      view.lastContent = current;
-    }
-    const total = Number(data?.total_chars || current.length || 0);
-    const dirtyFlag = view.dirty ? " · 未保存" : "";
-    metaEl.textContent = `chars ${contentEl.value.length}/${total} · updated ${new Date().toLocaleTimeString()}${dirtyFlag}`;
+    const raw = Number(localStorage.getItem(POPUP_VIEWER_FONT_KEY));
+    if (!Number.isFinite(raw)) return POPUP_VIEWER_FONT_DEFAULT;
+    return Math.min(POPUP_VIEWER_FONT_MAX, Math.max(POPUP_VIEWER_FONT_MIN, Math.round(raw)));
+  } catch {
+    return POPUP_VIEWER_FONT_DEFAULT;
+  }
+}
+
+function savePopupViewerFontSize(size) {
+  try {
+    localStorage.setItem(POPUP_VIEWER_FONT_KEY, String(size));
   } catch {
     /* ignore */
   }
 }
 
-async function refreshSessionFileViewer(fileKey) {
-  const view = sessionFileViewerMap.get(fileKey);
+function applyPopupViewerFontSize(view, sizePx) {
+  const doc = popupViewerDoc(view);
+  const area = doc?.getElementById("content");
+  const label = doc?.getElementById("font-size-label");
+  const px = Math.min(POPUP_VIEWER_FONT_MAX, Math.max(POPUP_VIEWER_FONT_MIN, Math.round(sizePx)));
+  view.fontSize = px;
+  if (area) area.style.fontSize = `${px}px`;
+  if (label) label.textContent = `${px}px`;
+  savePopupViewerFontSize(px);
+}
+
+function bumpPopupViewerFontSize(view, delta) {
+  const current = view.fontSize || loadPopupViewerFontSize();
+  applyPopupViewerFontSize(view, current + delta);
+  updatePopupCurrentChapter(view);
+}
+
+function charOffsetAtScrollTop(textarea) {
+  if (!textarea) return 0;
+  const style = textarea.ownerDocument.defaultView.getComputedStyle(textarea);
+  const lineHeight = parseFloat(style.lineHeight) || 20;
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+  const firstVisibleLine = Math.max(0, Math.floor(Math.max(0, textarea.scrollTop - paddingTop) / lineHeight));
+  const text = String(textarea.value || "");
+  if (!text || firstVisibleLine === 0) return 0;
+  let line = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (line >= firstVisibleLine) return i;
+    if (text.charCodeAt(i) === 10) line += 1;
+  }
+  return text.length;
+}
+
+function chapterAtOffset(markers, offset) {
+  if (!markers?.length) return null;
+  let current = null;
+  for (const marker of markers) {
+    if (marker.offset <= offset) current = marker;
+    else break;
+  }
+  return current;
+}
+
+function updatePopupCurrentChapter(view) {
+  const doc = popupViewerDoc(view);
+  const area = doc?.getElementById("content");
+  const el = doc?.getElementById("current-chapter");
+  const wrap = doc?.querySelector(".chapter-now-wrap");
+  if (!el) return;
+  const markers = view.chapterMarkers || [];
+  if (!markers.length) {
+    el.textContent = "-";
+    el.classList.add("is-empty");
+    if (wrap) wrap.title = "未识别到章节标题";
+    el.title = "未识别到章节标题";
+    return;
+  }
+  const offset = area ? charOffsetAtScrollTop(area) : 0;
+  const current = chapterAtOffset(markers, offset);
+  if (!current) {
+    el.textContent = "序文";
+    el.classList.remove("is-empty");
+    if (wrap) wrap.title = "位于第一章之前";
+    el.title = "位于第一章之前";
+    return;
+  }
+  const label = current.label || `第${current.chapter}章`;
+  el.textContent = label;
+  el.classList.remove("is-empty");
+  if (wrap) wrap.title = label;
+  el.title = label;
+}
+
+function popupViewerDoc(view) {
+  if (!view?.win || view.win.closed) return null;
+  try {
+    return view.win.document;
+  } catch {
+    return null;
+  }
+}
+
+function renderPopupFileSwitcher(view) {
+  const doc = popupViewerDoc(view);
+  const sel = doc?.getElementById("file-switcher");
+  if (!sel) return;
+  const paths = (view.fileIndex || []).slice().sort((a, b) => a.localeCompare(b));
+  sel.innerHTML =
+    '<option value="">文件…</option>' +
+    paths
+      .map((path) => {
+        const selected = path === view.path ? " selected" : "";
+        return `<option value="${escapeAttr(path)}"${selected}>${escapeHtml(path)}</option>`;
+      })
+      .join("");
+}
+
+function renderPopupChapterJump(view, markers) {
+  const doc = popupViewerDoc(view);
+  const sel = doc?.getElementById("chapter-jump");
+  if (!sel) return;
+  view.chapterMarkers = markers.slice();
+  if (!markers.length) {
+    sel.innerHTML = '<option value="">章节</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  sel.innerHTML =
+    '<option value="">章节</option>' +
+    markers
+      .map((m) => `<option value="${String(m.offset)}">${escapeHtml(m.label || `第${m.chapter}章`)}</option>`)
+      .join("");
+  updatePopupCurrentChapter(view);
+}
+
+function scrollPopupViewerToOffset(view, offset) {
+  const doc = popupViewerDoc(view);
+  const area = doc?.getElementById("content");
+  if (!area) return;
+  const pos = Math.max(0, Number(offset) || 0);
+  const before = area.value.slice(0, pos);
+  const lineCount = before.split("\n").length - 1;
+  const style = view.win.getComputedStyle(area);
+  const lineHeight = parseFloat(style.lineHeight) || 20;
+  area.scrollTop = Math.max(0, lineCount * lineHeight - area.clientHeight * 0.12);
+  area.focus();
+  area.setSelectionRange(pos, pos);
+  updatePopupCurrentChapter(view);
+}
+
+function updatePopupViewerMeta(view, extra = "") {
+  const doc = popupViewerDoc(view);
+  const metaEl = doc?.getElementById("m");
+  const contentEl = doc?.getElementById("content");
+  const titleEl = doc?.getElementById("title");
+  if (titleEl) titleEl.textContent = view.path || "-";
+  if (!metaEl || !contentEl) return;
+  const total = view.totalChars != null ? view.totalChars : contentEl.value.length;
+  const dirtyFlag = view.dirty ? " · 未保存" : "";
+  metaEl.textContent = `chars ${contentEl.value.length}/${total} · updated ${new Date().toLocaleTimeString()}${dirtyFlag}${extra ? ` · ${extra}` : ""}`;
+}
+
+function updateSessionFileViewer(taskId, data) {
+  const view = sessionFileViewerMap.get(taskId);
+  if (!view || !view.win || view.win.closed) return;
+  try {
+    syncSessionFileViewerTheme(view.win);
+    const doc = popupViewerDoc(view);
+    const contentEl = doc?.getElementById("content");
+    if (!contentEl) return;
+    const current = String(data?.content || "");
+    if (!view.dirty) {
+      contentEl.value = current;
+      view.lastContent = current;
+      renderPopupChapterJump(view, parseChapterHeadings(current));
+      updatePopupCurrentChapter(view);
+    }
+    view.totalChars = Number(data?.total_chars || current.length || 0);
+    updatePopupViewerMeta(view);
+    updatePopupCurrentChapter(view);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function refreshSessionFileViewer(taskId) {
+  const view = sessionFileViewerMap.get(taskId);
   if (!view || !view.taskId || !view.path || !view.win || view.win.closed) {
-    sessionFileViewerMap.delete(fileKey);
+    sessionFileViewerMap.delete(taskId);
     return;
   }
   try {
@@ -1148,79 +1351,211 @@ async function refreshSessionFileViewer(fileKey) {
     );
     if (!res.ok) return;
     const data = await res.json();
-    updateSessionFileViewer(fileKey, data);
+    updateSessionFileViewer(taskId, data);
   } catch {
-    const doc = view.win?.document;
+    const doc = popupViewerDoc(view);
     const metaEl = doc?.getElementById("m");
     if (metaEl) metaEl.textContent = "文件读取超时/失败";
   }
 }
 
-function openSessionFileViewer(taskId, relativePath) {
-  const key = `${taskId}:${relativePath}`;
-  const existing = sessionFileViewerMap.get(key);
-  if (existing && existing.win && !existing.win.closed) {
-    existing.win.focus();
+async function loadSessionFileInViewer(view, relativePath) {
+  if (!view || !relativePath) return;
+  if (view.dirty && view.path !== relativePath) {
+    const ok = view.win.confirm("当前文件有未保存修改，切换将丢弃。继续？");
+    if (!ok) {
+      renderPopupFileSwitcher(view);
+      return;
+    }
+    view.dirty = false;
+  }
+  view.path = relativePath;
+  view.lastContent = "";
+  view.totalChars = null;
+  const doc = popupViewerDoc(view);
+  const contentEl = doc?.getElementById("content");
+  const metaEl = doc?.getElementById("m");
+  if (contentEl) contentEl.value = "";
+  if (metaEl) metaEl.textContent = "loading…";
+  renderPopupFileSwitcher(view);
+  renderPopupChapterJump(view, []);
+  updatePopupCurrentChapter(view);
+  try {
+    view.win.document.title = relativePath;
+  } catch {
+    /* ignore */
+  }
+  await refreshSessionFileViewer(view.taskId);
+}
+
+function navigatePopupChapter(view, step) {
+  const doc = popupViewerDoc(view);
+  const area = doc?.getElementById("content");
+  const markers = view.chapterMarkers || [];
+  if (!area || !markers.length) return;
+
+  const offset = charOffsetAtScrollTop(area);
+  const current = chapterAtOffset(markers, offset);
+  const idx = current ? markers.findIndex((m) => m.offset === current.offset) : -1;
+
+  if (step > 0) {
+    if (idx < 0) {
+      scrollPopupViewerToOffset(view, markers[0].offset);
+      return;
+    }
+    const next = markers[idx + 1];
+    if (next) scrollPopupViewerToOffset(view, next.offset);
     return;
   }
-  const win = window.open("", `session-file-${encodeURIComponent(key)}`, "width=960,height=700");
+
+  if (idx <= 0) {
+    scrollPopupViewerToOffset(view, 0);
+    return;
+  }
+  scrollPopupViewerToOffset(view, markers[idx - 1].offset);
+}
+
+function wireSessionFileViewerWindow(view) {
+  const doc = popupViewerDoc(view);
+  if (!doc) return;
+  const contentEl = doc.getElementById("content");
+  const saveBtn = doc.getElementById("save-btn");
+  const fileSwitcher = doc.getElementById("file-switcher");
+  const chapterJump = doc.getElementById("chapter-jump");
+  const prevBtn = doc.getElementById("prev-btn");
+  const nextBtn = doc.getElementById("next-btn");
+  const fontDownBtn = doc.getElementById("font-down-btn");
+  const fontUpBtn = doc.getElementById("font-up-btn");
+
+  applyPopupViewerFontSize(view, view.fontSize || loadPopupViewerFontSize());
+
+  let chapterScrollTimer = null;
+  const scheduleChapterUpdate = () => {
+    if (chapterScrollTimer) return;
+    chapterScrollTimer = view.win.setTimeout(() => {
+      chapterScrollTimer = null;
+      updatePopupCurrentChapter(view);
+    }, 80);
+  };
+
+  if (contentEl) {
+    contentEl.addEventListener("input", () => {
+      view.dirty = true;
+      updatePopupViewerMeta(view);
+      renderPopupChapterJump(view, parseChapterHeadings(contentEl.value));
+    });
+    contentEl.addEventListener("scroll", scheduleChapterUpdate, { passive: true });
+    contentEl.addEventListener("keyup", scheduleChapterUpdate);
+    contentEl.addEventListener("click", scheduleChapterUpdate);
+    contentEl.addEventListener("wheel", (ev) => {
+      if (ev.ctrlKey || ev.metaKey) {
+        ev.preventDefault();
+        bumpPopupViewerFontSize(view, ev.deltaY < 0 ? 1 : -1);
+        return;
+      }
+      ev.stopPropagation();
+    }, { passive: false });
+  }
+  if (fontDownBtn) {
+    fontDownBtn.addEventListener("click", () => bumpPopupViewerFontSize(view, -1));
+  }
+  if (fontUpBtn) {
+    fontUpBtn.addEventListener("click", () => bumpPopupViewerFontSize(view, 1));
+  }
+  doc.addEventListener("keydown", (ev) => {
+    if (!(ev.ctrlKey || ev.metaKey)) return;
+    if (ev.key === "=" || ev.key === "+") {
+      ev.preventDefault();
+      bumpPopupViewerFontSize(view, 1);
+    } else if (ev.key === "-") {
+      ev.preventDefault();
+      bumpPopupViewerFontSize(view, -1);
+    }
+  });
+  if (fileSwitcher) {
+    fileSwitcher.addEventListener("change", () => {
+      const nextPath = String(fileSwitcher.value || "").trim();
+      if (!nextPath || nextPath === view.path) return;
+      loadSessionFileInViewer(view, nextPath);
+    });
+  }
+  if (chapterJump) {
+    chapterJump.addEventListener("change", () => {
+      const raw = String(chapterJump.value || "").trim();
+      if (!raw) return;
+      scrollPopupViewerToOffset(view, raw);
+      chapterJump.value = "";
+    });
+  }
+  if (prevBtn) {
+    prevBtn.addEventListener("click", () => navigatePopupChapter(view, -1));
+  }
+  if (nextBtn) {
+    nextBtn.addEventListener("click", () => navigatePopupChapter(view, 1));
+  }
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      const area = doc.getElementById("content");
+      const meta = doc.getElementById("m");
+      if (!area) return;
+      try {
+        const res = await fetch(`/tasks/${view.taskId}/files/content`, {
+          method: "PUT",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ path: view.path, content: area.value, append: false }),
+        });
+        if (!res.ok) {
+          if (meta) meta.textContent = `保存失败: ${res.status}`;
+          return;
+        }
+        view.dirty = false;
+        view.lastContent = area.value;
+        updatePopupViewerMeta(view, "已保存");
+        refreshSessionFilesPane({ silent: true });
+      } catch {
+        if (meta) meta.textContent = "保存失败: network";
+      }
+    });
+  }
+  updatePopupCurrentChapter(view);
+}
+
+async function openSessionFileViewer(taskId, relativePath) {
+  const key = taskId;
+  let view = sessionFileViewerMap.get(key);
+  if (view && view.win && !view.win.closed) {
+    view.win.focus();
+    const fileIndex = await ensureSessionFilesTextIndex(taskId);
+    view.fileIndex = fileIndex;
+    await loadSessionFileInViewer(view, relativePath);
+    return;
+  }
+
+  const win = window.open("", `session-file-${encodeURIComponent(taskId)}`, "width=980,height=760");
   if (!win) {
     appendLine("预览窗口被浏览器拦截，请允许弹窗。", "error");
     return;
   }
   win.document.open();
-  win.document.write(buildSessionFileViewerHtml(relativePath));
+  win.document.write(buildSessionFileViewerHtml());
   win.document.close();
-  sessionFileViewerMap.set(key, { win, taskId, path: relativePath, dirty: false, live: true, lastContent: "" });
-  try {
-    const contentEl = win.document.getElementById("content");
-    const saveBtn = win.document.getElementById("save-btn");
-    const liveBox = win.document.getElementById("live-box");
-    if (contentEl) {
-      contentEl.addEventListener("input", () => {
-        const view = sessionFileViewerMap.get(key);
-        if (!view) return;
-        view.dirty = true;
-      });
-    }
-    if (liveBox) {
-      liveBox.addEventListener("change", () => {
-        const view = sessionFileViewerMap.get(key);
-        if (!view) return;
-        view.live = Boolean(liveBox.checked);
-      });
-    }
-    if (saveBtn) {
-      saveBtn.addEventListener("click", async () => {
-        const view = sessionFileViewerMap.get(key);
-        if (!view || !view.win || view.win.closed) return;
-        const area = view.win.document.getElementById("content");
-        const meta = view.win.document.getElementById("m");
-        if (!area) return;
-        try {
-          const res = await fetch(`/tasks/${view.taskId}/files/content`, {
-            method: "PUT",
-            headers: getAuthHeaders(),
-            body: JSON.stringify({ path: view.path, content: area.value, append: false }),
-          });
-          if (!res.ok) {
-            if (meta) meta.textContent = `保存失败: ${res.status}`;
-            return;
-          }
-          view.dirty = false;
-          view.lastContent = area.value;
-          if (meta) meta.textContent = `已保存 · ${new Date().toLocaleTimeString()}`;
-          refreshSessionFilesPane({ silent: true });
-        } catch {
-          if (meta) meta.textContent = "保存失败: network";
-        }
-      });
-    }
-  } catch {
-    /* ignore */
-  }
+
+  const fileIndex = await ensureSessionFilesTextIndex(taskId);
+  view = {
+    win,
+    taskId,
+    path: relativePath,
+    dirty: false,
+    lastContent: "",
+    fileIndex,
+    chapterMarkers: [],
+    totalChars: null,
+    fontSize: loadPopupViewerFontSize(),
+  };
+  sessionFileViewerMap.set(key, view);
+  wireSessionFileViewerWindow(view);
   syncSessionFileViewerTheme(win);
-  refreshSessionFileViewer(key);
+  await loadSessionFileInViewer(view, relativePath);
 }
 
 function joinSessionPath(base, child) {
@@ -1237,6 +1572,75 @@ function parentSessionPath(path) {
   const idx = p.lastIndexOf("/");
   if (idx < 0) return ".";
   return p.slice(0, idx) || ".";
+}
+
+function cnNumeralToInt(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+  if (/^\d+$/.test(text)) return parseInt(text, 10);
+  if (text === "十") return 10;
+  if (text.includes("十")) {
+    const parts = text.split("十");
+    const high = parts[0] ? CN_DIGITS[parts[0]] ?? 1 : 1;
+    const low = parts[1] ? CN_DIGITS[parts[1]] ?? 0 : 0;
+    return high * 10 + low;
+  }
+  let total = 0;
+  for (const ch of text) {
+    if (CN_DIGITS[ch] != null) total = total * 10 + CN_DIGITS[ch];
+  }
+  return total > 0 ? total : null;
+}
+
+function parseChapterHeadings(text) {
+  const markers = [];
+  const content = String(text || "");
+  CHAPTER_HEADER_RE.lastIndex = 0;
+  let match = CHAPTER_HEADER_RE.exec(content);
+  while (match) {
+    const chapter = cnNumeralToInt(match[1]);
+    if (chapter != null) {
+      markers.push({
+        chapter,
+        offset: match.index,
+        label: match[0].trim().replace(/^#+\s*/, ""),
+      });
+    }
+    match = CHAPTER_HEADER_RE.exec(content);
+  }
+  markers.sort((a, b) => a.offset - b.offset);
+  return markers;
+}
+
+function isSessionTextFile(path) {
+  return SESSION_TEXT_FILE_RE.test(String(path || ""));
+}
+
+async function ensureSessionFilesTextIndex(taskId) {
+  if (!taskId) return [];
+  if (sessionFilesTextIndexTaskId === taskId && sessionFilesTextIndex.length) {
+    return sessionFilesTextIndex;
+  }
+  try {
+    const params = new URLSearchParams({ path: ".", recursive: "true", max_entries: "500" });
+    const res = await fetchWithTimeout(
+      `/tasks/${taskId}/files?${params.toString()}`,
+      { headers: getAuthHeaders() },
+      12000
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    sessionFilesTextIndex = entries
+      .filter((entry) => String(entry?.type || "") === "file" && isSessionTextFile(entry.path))
+      .map((entry) => String(entry.path || ""))
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+    sessionFilesTextIndexTaskId = taskId;
+    return sessionFilesTextIndex;
+  } catch {
+    return [];
+  }
 }
 
 async function refreshSessionFilesPane(options = {}) {
@@ -1276,6 +1680,9 @@ async function refreshSessionFilesPane(options = {}) {
       return;
     }
     entries.sort((a, b) => {
+      const aDir = String(a?.type || "") === "dir";
+      const bDir = String(b?.type || "") === "dir";
+      if (aDir !== bDir) return aDir ? -1 : 1;
       const aPath = String(a?.path || "");
       const bPath = String(b?.path || "");
       return aPath.localeCompare(bPath);
@@ -1284,17 +1691,20 @@ async function refreshSessionFilesPane(options = {}) {
       .map((entry) => {
         const p = String(entry.path || "");
         const isDir = String(entry.type || "") === "dir";
-        const size = isDir ? "-" : formatBytes(entry.size);
-        const mtime = entry.mtime_ms ? new Date(entry.mtime_ms).toLocaleTimeString() : "-";
+        const label = p.includes("/") ? p.split("/").pop() : p;
+        const size = isDir ? "" : formatBytes(entry.size);
+        const mtime = entry.mtime_ms ? new Date(entry.mtime_ms).toLocaleTimeString() : "";
+        const meta = [size, mtime].filter(Boolean).join(" · ");
         return `<div class="session-file-item ${isDir ? "dir" : "file"}" data-file-path="${escapeAttr(p)}" data-file-type="${isDir ? "dir" : "file"}">
-          <span class="file-path">${escapeHtml(isDir ? `📁 ${p}` : `📄 ${p}`)}</span>
-          <span class="file-meta">${escapeHtml(`${size} · ${mtime}`)}</span>
+          <span class="file-icon" aria-hidden="true">${isDir ? "📁" : "📄"}</span>
+          <span class="file-path">${escapeHtml(label || p)}</span>
+          ${meta ? `<span class="file-meta">${escapeHtml(meta)}</span>` : ""}
         </div>`;
       })
       .join("");
     updateSessionFilesMeta(`session ${taskId.slice(0, 8)}… ${sessionFilesCurrentPath} ${entries.length} 项`);
-    for (const [key] of sessionFileViewerMap) {
-      refreshSessionFileViewer(key);
+    for (const [taskKey] of sessionFileViewerMap) {
+      refreshSessionFileViewer(taskKey);
     }
   } catch (err) {
     if (seq !== sessionFilesRefreshSeq) return;
@@ -3400,19 +3810,23 @@ if (sessionFilesUpBtnEl) {
 }
 
 if (sessionFilesListEl) {
-  sessionFilesListEl.addEventListener("dblclick", (ev) => {
+  sessionFilesListEl.addEventListener("click", (ev) => {
     const item = ev.target.closest("[data-file-path]");
     if (!item) return;
     const type = String(item.getAttribute("data-file-type") || "");
     const path = String(item.getAttribute("data-file-path") || "");
+    if (type !== "dir" || !path) return;
+    sessionFilesCurrentPath = joinSessionPath(sessionFilesCurrentPath, path);
+    refreshSessionFilesPane();
+  });
+  sessionFilesListEl.addEventListener("dblclick", (ev) => {
+    const item = ev.target.closest("[data-file-path]");
+    if (!item) return;
+    const type = String(item.getAttribute("data-file-type") || "");
+    if (type !== "file") return;
+    const path = String(item.getAttribute("data-file-path") || "");
     const taskId = getSessionFilesTaskId();
     if (!path || !taskId) return;
-    if (type === "dir") {
-      sessionFilesCurrentPath = joinSessionPath(sessionFilesCurrentPath, path);
-      refreshSessionFilesPane();
-      return;
-    }
-    if (type !== "file") return;
     const fullPath = joinSessionPath(sessionFilesCurrentPath, path);
     openSessionFileViewer(taskId, fullPath);
   });
