@@ -3,7 +3,7 @@
 创建与执行：POST /tasks、POST /tasks/stream → _prepare_task_request → GraphRunner。
 _prepare_task_request：sanitize_input_payload，可选 attach_skill_to_payload（仅 payload）。
 Mission 控制：POST /tasks/{id}/steer、resume、stop。
-查询：GET /tasks/{id}/status、result、audit 与任务列表。
+查询：GET /tasks/{id}/status、result、audit、llm-interactions 与任务列表。
 
 Task HTTP API for create, stream, mission steer/resume/stop, and status queries.
 _prepare_task_request sanitizes input and attaches skill policy to payload only.
@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -622,3 +622,61 @@ def get_task_audit(
             raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
         chain = state.get("audit_log", [])
     return {"task_id": task_id, "audit_chain": chain}
+
+
+@router.get("/{task_id}/llm-interactions")
+def get_task_llm_interactions(
+    task_id: str,
+    index: Optional[int] = Query(
+        None,
+        ge=1,
+        description="1-based 序号，仅返回第 N 次交互（监控页筛选）",
+    ),
+    summary: bool = Query(
+        False,
+        description="仅返回摘要列表（序号、purpose、字数），不含正文",
+    ),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> dict[str, Any]:
+    """LLM request/response log for a task (session_id equals task_id in session mode)."""
+    from app.services.llm_interaction_store import get_llm_interaction_store
+
+    store = get_llm_interaction_store()
+    state = get_state_store().load(task_id, read_only=True)
+    count = store.count_for_task(task_id)
+    if not state and count == 0:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+
+    session_id = (state or {}).get("session_id") or task_id
+    if summary:
+        return {
+            "task_id": task_id,
+            "session_id": session_id,
+            "count": count,
+            "total_bytes": store.bytes_for_task(task_id),
+            "retention": store.retention_limits(),
+            "summaries": store.list_summaries_for_task(task_id),
+        }
+
+    if index is not None:
+        one = store.get_by_index(task_id, index)
+        if not one:
+            raise HTTPException(
+                status_code=404,
+                detail=f"LLM interaction #{index} not found for task {task_id}",
+            )
+        return {
+            "task_id": task_id,
+            "session_id": session_id,
+            "count": count,
+            "index": index,
+            "interaction": one,
+        }
+
+    interactions = store.list_for_task(task_id)
+    return {
+        "task_id": task_id,
+        "session_id": session_id,
+        "count": len(interactions),
+        "interactions": interactions,
+    }

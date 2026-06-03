@@ -8,7 +8,7 @@
   <title>监控 — Agent Runtime</title>
   <link rel="stylesheet" href="/static/terminal.css?v=ui-8" />
   <link rel="stylesheet" href="/static/platform.css?v=ui-8" />
-  <link rel="stylesheet" href="/static/dashboard.css?v=ui-8" />
+  <link rel="stylesheet" href="/static/dashboard.css?v=ui-10" />
 </head>
 <body class="platform-shell" data-active-page="dashboard">
   <div id="platform-nav"></div>
@@ -47,9 +47,25 @@
       <section class="dashboard-section">
         <h2>最近任务</h2>
         <table id="tasks-table">
-          <thead><tr><th>ID</th><th>状态</th><th>节点</th><th>目标</th><th>更新</th></tr></thead>
+          <thead><tr><th>ID</th><th>状态</th><th>节点</th><th>目标</th><th>更新</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
+      </section>
+      <section id="llm-panel" class="dashboard-section llm-panel" hidden>
+        <div class="llm-panel-header">
+          <h2>LLM 交互</h2>
+          <p id="llm-panel-meta" class="dashboard-sub"></p>
+          <button type="button" id="llm-panel-close" class="dashboard-toolbar-btn dashboard-toolbar-btn-secondary">关闭</button>
+        </div>
+        <div id="llm-panel-filters" class="llm-panel-filters" hidden>
+          <label class="llm-filter-label" for="llm-index-select">查看第</label>
+          <select id="llm-index-select" class="llm-index-select" aria-label="选择第几次 LLM 交互">
+            <option value="">加载中…</option>
+          </select>
+          <span class="llm-filter-label">次</span>
+          <span id="llm-filter-hint" class="llm-filter-hint"></span>
+        </div>
+        <div id="llm-interactions-list" class="llm-interactions-list"></div>
       </section>
       <section class="dashboard-section">
         <h2>死信队列 (DLQ)</h2>
@@ -63,6 +79,6 @@
   </div>
   <script src="/static/platform-nav.js?v=6"></script>
   <script src="/static/platform-auth.js?v=6"></script>
-  <script src="/static/dashboard.js?v=3"></script>
+  <script src="/static/dashboard.js?v=5"></script>
 </body>
 </html>

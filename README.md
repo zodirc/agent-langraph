@@ -42,16 +42,16 @@ make init && make up                   # HTTPS + 代码热更新
 - `/risk high <text>`
 - `/supervisor 分析文档并审查代码`
 
-### 近期前端更新（2026-06-03）
+### 近期 Runtime / Mission 更新（2026-06-03）
 
-基于今天的 commits，Web 端最近一轮更新主要集中在 **Skills 能力入口**、**平台 UI 统一化**、**对话页交互增强**、以及 **文件/产物操作安全性** 四块：
+基于最近几次 commit，当前一轮核心变化已经从前端 UI 扩展为 **Mission OMAW 执行模型升级**、**长文执行控制加固**、以及 **运行中任务可恢复性补强** 三块：
 
-- **Skills 能力平台化**：新增 Skills 浏览、管理、测试入口，形成从目录浏览、草稿编辑、发布、版本回滚到 dry-run 的闭环。
-- **平台导航与认证统一**：平台首页、聊天页、dashboard、skills 系列页面共享统一导航与平台样式，前端认证接入也更完整。
-- **Chat 交互增强**：聊天页持续补强终端样式、任务流展示、交互反馈与可视化细节，提升 Web CLI 的可操作性。
-- **产物与任务清理补强**：配合后端最近的 artifact 删除、任务清理与审计写入能力，前端在任务/产物管理上的交互基础更完整。
+- **Mission OMAW 成为默认长文主路径**：长篇写作明确收敛到 `execution_mode=mission_oma`，由 Orchestrator + Writer / Reviewer / Editor / Planner / Continuity Worker 协作，主链路不再依赖单图内联写作阶段切换。
+- **事实与验收语义收敛**：新增 [`FactBundle`](app/domain/fact_bundle.py:35) 与 [`ReviewVerdict`](app/domain/review_verdict.py:54)，把 worker 的事实输入、检索来源、章节验收与 polish 决策统一成稳定对象模型。
+- **执行路径与回合语义更明确**：新增 [`turn_kind`](app/services/turn_kind.py:13) 与 planning→executor 路由约束，避免“计划说要执行、实际却只 narrate/reasoning 收尾”的漂移。
+- **Mission 控制面补强**：运行中任务通过 executor registry 跟踪活跃 graph run；SSE 刷新不再误清 live 状态，孤儿 `MISSION_RUNNING` 会被识别并自动转成 `worker_lost` pause，等待显式恢复。
 
-相关实现可参考 [`web/static/app.js`](web/static/app.js)、[`web/static/platform.css`](web/static/platform.css)、[`web/static/terminal.css`](web/static/terminal.css)、[`web/static/skills.js`](web/static/skills.js)、[`app/api/skills_api.py`](app/api/skills_api.py:1)、[`app/services/task_cleanup.py`](app/services/task_cleanup.py:1)。
+相关实现与文档可参考 [`docs/ADR_MISSION_LIFECYCLE_V2.md`](docs/ADR_MISSION_LIFECYCLE_V2.md)、[`docs/MANUSCRIPT_WRITING.md`](docs/MANUSCRIPT_WRITING.md)、[`docs/MISSION_EXECUTION_CONTROL.md`](docs/MISSION_EXECUTION_CONTROL.md)、[`app/services/graph_run_registry.py`](app/services/graph_run_registry.py:1)、[`app/services/mission_worker_lost.py`](app/services/mission_worker_lost.py:1)。
 
 ## 独立 CLI（§8.2）
 

@@ -8,6 +8,7 @@ import pytest
 
 from app.config.settings import Settings
 from app.services.audit_store import AuditStore
+from app.services.llm_interaction_store import LlmInteractionStore
 from app.services.knowledge_store import KnowledgeStore
 from app.services.memory_store import MemoryStore
 from app.services.state_store import StateStore
@@ -191,6 +192,7 @@ def _reset_service_singletons() -> None:
     import app.services.pack_params_store as pack_mod
     import app.runtime.exploration_graph as explore_mod
     import app.services.dead_letter_store as dlq_mod
+    import app.services.llm_interaction_store as llm_ix_mod
     import app.services.tool_bootstrap as bootstrap_mod
     import app.services.tool_registry as tool_mod
     import app.services.metrics_service as metrics_mod
@@ -212,6 +214,8 @@ def _reset_service_singletons() -> None:
     metrics_mod._service = None
     memory_mod._store = None
     audit_mod._store = None
+    llm_ix_mod._store = None
+    llm_ix_mod._stores = {}
     knowledge_mod._store = None
     tool_mod._registry = None
     runner_mod._runner = None
@@ -236,12 +240,17 @@ def isolated_stores(test_settings: Settings, monkeypatch: pytest.MonkeyPatch) ->
     state_store = StateStore(test_settings.SQLITE_PATH)
     memory_store = MemoryStore(test_settings.SQLITE_PATH)
     audit_store = AuditStore(test_settings.SQLITE_PATH)
+    llm_interaction_store = LlmInteractionStore(test_settings.SQLITE_PATH)
     knowledge_store = KnowledgeStore(test_settings.SQLITE_PATH)
     registry = ToolRegistry()
 
     monkeypatch.setattr("app.services.state_store.get_state_store", lambda: state_store)
     monkeypatch.setattr("app.services.memory_store.get_memory_store", lambda: memory_store)
     monkeypatch.setattr("app.services.audit_store.get_audit_store", lambda: audit_store)
+    monkeypatch.setattr(
+        "app.services.llm_interaction_store.get_llm_interaction_store",
+        lambda: llm_interaction_store,
+    )
     monkeypatch.setattr("app.services.knowledge_store.get_knowledge_store", lambda: knowledge_store)
     dlq_store = __import__(
         "app.services.dead_letter_store", fromlist=["DeadLetterStore"]

@@ -369,6 +369,18 @@ class Settings:
         self.LANGSMITH_API_KEY = str(observability.get("langsmith_api_key", ""))
         self.LANGSMITH_PROJECT = str(observability.get("langsmith_project", "agent-langraph"))
         self.METRICS_ENABLED = _coerce_bool(observability.get("metrics_enabled", True))
+        self.LLM_INTERACTION_LOG_ENABLED = _coerce_bool(
+            observability.get("llm_interaction_log_enabled", True)
+        )
+        self.LLM_INTERACTION_LOG_MAX_CHARS = int(
+            observability.get("llm_interaction_log_max_chars", 200_000)
+        )
+        self.LLM_INTERACTION_LOG_MAX_PER_TASK = int(
+            observability.get("llm_interaction_log_max_per_task", 120)
+        )
+        self.LLM_INTERACTION_LOG_MAX_BYTES_PER_TASK = int(
+            observability.get("llm_interaction_log_max_bytes_per_task", 1_073_741_824)
+        )
 
         batch = raw.get("batch", {})
         self.BATCH_MAX_WORKERS = int(batch.get("max_workers", 4))

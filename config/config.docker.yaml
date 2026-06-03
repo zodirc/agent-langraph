@@ -25,7 +25,7 @@ storage:
   # Docker 默认走 compose 内 PostgreSQL；本地无 Docker 时可设 STORAGE_BACKEND=sqlite
   backend: ${STORAGE_BACKEND:postgres}
   postgres_url: ${DATABASE_URL:postgresql://agent:agent@postgres:5432/agent}
-  postgres_pool_max_size: 10
+  postgres_pool_max_size: 20
   checkpoint_backend: ${CHECKPOINT_BACKEND:postgres}
   sqlite_path: /data/db/agent.db
   checkpoint_sqlite_path: /data/db/agent_checkpoints.db
@@ -369,6 +369,10 @@ cli:
 observability:
   langsmith_enabled: false
   metrics_enabled: true
+  llm_interaction_log_enabled: true
+  llm_interaction_log_max_chars: 200000
+  llm_interaction_log_max_per_task: 120
+  llm_interaction_log_max_bytes_per_task: 1073741824
 
 rate_limit:
   enabled: ${RATE_LIMIT_ENABLED:true}

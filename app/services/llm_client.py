@@ -680,6 +680,16 @@ def _record_llm_usage(
             tenant_id=tenant_id,
             user_id=user_id,
         )
+    from app.services.llm_interaction_store import record_llm_interaction
+
+    record_llm_interaction(
+        trace_state=trace_state,
+        purpose=purpose,
+        system_prompt=system_prompt,
+        user_content=user_content,
+        response_text=response_text,
+        status="ok",
+    )
     if isinstance(trace_state, dict) and trace_state.get("task_id"):
         from app.services.engineering_trace import init_trace_context, record_llm_span
 
@@ -777,6 +787,16 @@ def invoke_structured(
         raise
     except Exception as exc:
         metrics.inc_llm_invoke(purpose, model_name, "error")
+        from app.services.llm_interaction_store import record_llm_interaction
+
+        record_llm_interaction(
+            trace_state=trace_state,
+            purpose=purpose,
+            system_prompt=system_prompt,
+            user_content=user_content,
+            response_text=str(exc),
+            status="error",
+        )
         message = str(exc).lower()
         if "timeout" in message or "rate" in message or "529" in message or "503" in message:
             raise RetryableError(str(exc)) from exc

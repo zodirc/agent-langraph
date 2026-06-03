@@ -482,9 +482,10 @@ async function refreshFlowPanel(taskId = null, { preferStore = false } = {}) {
 function ensureFlowAutoRefresh() {
   if (flowAutoRefreshTimer) return;
   flowAutoRefreshTimer = setInterval(() => {
+    if (document.hidden) return;
     if (!running && !activeTaskId && !sessionHasInFlightMission) return;
     refreshFlowPanel();
-  }, 1800);
+  }, 4500);
 }
 
 function stopFlowAutoRefresh() {
@@ -1880,12 +1881,29 @@ async function refreshSessionFilesPane(options = {}) {
   }
 }
 
-function startSessionFilesPolling() {
-  if (sessionFilesPollingTimer) clearInterval(sessionFilesPollingTimer);
-  sessionFilesPollingTimer = setInterval(() => {
-    refreshSessionFilesPane({ silent: true });
-  }, 3000);
+function sessionFilesPollIntervalMs() {
+  if (document.hidden) return 30000;
+  if (running || sessionHasInFlightMission) return 12000;
+  return 5000;
 }
+
+function scheduleSessionFilesPoll() {
+  if (sessionFilesPollingTimer) clearTimeout(sessionFilesPollingTimer);
+  sessionFilesPollingTimer = setTimeout(async () => {
+    sessionFilesPollingTimer = null;
+    await refreshSessionFilesPane({ silent: true });
+    scheduleSessionFilesPoll();
+  }, sessionFilesPollIntervalMs());
+}
+
+function startSessionFilesPolling() {
+  if (sessionFilesPollingTimer) clearTimeout(sessionFilesPollingTimer);
+  scheduleSessionFilesPoll();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (sessionFilesPollingTimer) startSessionFilesPolling();
+});
 
 async function loginCommand(parts) {
   const username = parts[1] || "admin";

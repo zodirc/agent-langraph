@@ -82,9 +82,10 @@ services:
       - agent_data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      # 勿用 /health：写作高峰会跑向量/知识库检查，易超时误判 unhealthy
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health/live"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
       start_period: 90s
 

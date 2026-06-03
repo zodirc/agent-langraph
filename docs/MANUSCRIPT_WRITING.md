@@ -459,8 +459,10 @@ Mission graph 的 streaming 更新块可能只包含局部字段。为了避免�
 ### 与「多 Agent」的关系（见 ADR-001 Mission OMAW）
 
 - **唯一长期方案**：[`ADR_MISSION_LIFECYCLE_V2.md`](ADR_MISSION_LIFECYCLE_V2.md) — 一任务、一手稿、**Orchestrator + 角色 Worker**（Writer / Reviewer / Editor / Planner），经 `AgentMessage` 派单，可并行审阅多章。
-- **当前实现（OMAW）**：`execution_mode=mission_oma`；`mission_decide` 机械派单 → `mission_act` → `build_fact_bundle` → Worker（writer/reviewer/editor/planner/continuity）；`ReviewVerdict` 为合格唯一语义；并行 batch 审阅经 `run_subtasks_via_a2a` 且 `context` 绑定 `manuscript_paths` + `chapter_index`。
+- **当前实现（OMAW）**：`execution_mode=mission_oma`；`mission_decide` 机械派单 → `mission_act` → `build_fact_bundle` → Worker（writer/reviewer/editor/planner/continuity）；[`ReviewVerdict`](../app/domain/review_verdict.py:54) 为合格唯一语义；并行 batch 审阅经 `run_subtasks_via_a2a` 且 `context` 绑定 `manuscript_paths` + `chapter_index`。
+- **事实包约束**：每个 worker 回合先构建 [`FactBundle`](../app/domain/fact_bundle.py:35)，绑定 capability、chapter scope、RAG 来源与 `fact_bundle_id`；reviewer 产出的 verdict 必须回填同一个 `fact_bundle_id`，否则视为无效验收。
+- **执行回合语义**：Mission 现在显式区分 [`TurnKind`](../app/services/turn_kind.py:13)（`steer_replan` / `steer_execute` / `mission_step_execute` / `mechanical_continue` 等），用于约束 planning 后到底是进入 executor、等待确认，还是仅 narrate，避免回合语义漂移。
 - **禁止**：`task_type=supervisor` 用于手稿 mission（见 `manuscript_supervisor_guard`）；默认禁止 `run_pipeline_request` 作为写作执行器（`writing_llm_decide=false`）。
-- **模块**：`app/services/mission_oma/`、`fact_bundle_builder.py`、`worker_react_bridge.py`、`domain/review_verdict.py`。
+- **模块**：`app/services/mission_oma/`、`fact_bundle_builder.py`、`worker_react_bridge.py`、`domain/review_verdict.py`、`turn_kind.py`。
 
 **延伸阅读**：[`ROUTE_AUDIT.md`](ROUTE_AUDIT.md) · [`REASONING_SHORTCUT.md`](REASONING_SHORTCUT.md)。

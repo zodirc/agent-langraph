@@ -53,6 +53,31 @@ _TEXT_BLOCK_TYPES = frozenset({"text"})
 _TOOL_BLOCK_TYPES = frozenset({"tool_use"})
 
 ARTIFACT_TOOL_NAME = "submit_artifact"
+
+
+def _log_gateway_llm_interaction(
+    *,
+    purpose: str,
+    system: str,
+    user: str,
+    response_text: str,
+    user_payload: dict[str, Any],
+    status: str = "ok",
+) -> None:
+    from app.services.llm_interaction_store import record_llm_interaction
+
+    task_id = str(user_payload.get("task_id") or "")
+    record_llm_interaction(
+        trace_state=None,
+        purpose=purpose,
+        system_prompt=system,
+        user_content=user,
+        response_text=response_text,
+        status=status,
+        source="llm_gateway",
+        task_id=task_id or None,
+        session_id=task_id or None,
+    )
 ARTIFACT_TOOL_SCHEMA = {
     "name": ARTIFACT_TOOL_NAME,
     "description": "Submit finalized text to persist as the task artifact file.",
@@ -668,6 +693,14 @@ def _stream_artifact_live(
     draft.meta.update(generation.to_meta())
     if draft.content:
         report_writing_done(filename, len(draft.content))
+    _log_gateway_llm_interaction(
+        purpose=str(user_payload.get("purpose") or "writing"),
+        system=system,
+        user=user,
+        response_text=draft.content or "",
+        user_payload=user_payload,
+        status="ok" if draft.content else "empty",
+    )
     return draft
 
 
@@ -702,7 +735,16 @@ def invoke_artifact_draft(
 
         local = _local_structured_response("writing", user)
         content = str(local.get("content") or local.get("summary") or "local draft")
-        return ArtifactDraft(content=content, source="local")
+        draft = ArtifactDraft(content=content, source="local")
+        _log_gateway_llm_interaction(
+            purpose=purpose,
+            system=system,
+            user=user,
+            response_text=content,
+            user_payload=user_payload,
+            status="ok",
+        )
+        return draft
 
     if writing_stream_enabled():
         stream_retries = int(getattr(settings, "WRITING_STREAM_MAX_RETRIES", 2))
@@ -736,14 +778,33 @@ def invoke_artifact_draft(
                 break
 
     report_status_trace("writing", "gateway: invoking model (tool-first)…")
-    draft = _adapt_or_retry_thinking_only(
-        llm,
-        system=system,
-        user=user,
-        preferred=preferred,
-    )
+    try:
+        draft = _adapt_or_retry_thinking_only(
+            llm,
+            system=system,
+            user=user,
+            preferred=preferred,
+        )
+    except Exception as exc:
+        _log_gateway_llm_interaction(
+            purpose=purpose,
+            system=system,
+            user=user,
+            response_text=str(exc),
+            user_payload=user_payload,
+            status="error",
+        )
+        raise
     if writing_stream_enabled() and draft.content:
         emit_full_content_deltas(fname, draft.content, target_chars=target_chars)
+    _log_gateway_llm_interaction(
+        purpose=purpose,
+        system=system,
+        user=user,
+        response_text=draft.content or "",
+        user_payload=user_payload,
+        status="ok" if draft.content else "empty",
+    )
     return draft
 
 

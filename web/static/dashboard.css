@@ -166,6 +166,131 @@
   color: var(--red);
 }
 
+.llm-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.llm-panel-header h2 {
+  margin: 0;
+}
+
+.llm-panel-header .dashboard-sub {
+  flex: 1 1 12rem;
+  margin: 0;
+}
+
+.llm-panel-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  margin-bottom: 1rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 35%, var(--panel));
+}
+
+.llm-filter-label {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.llm-index-select {
+  min-width: min(100%, 22rem);
+  max-width: 100%;
+  flex: 1 1 16rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.llm-filter-hint {
+  flex: 1 1 100%;
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.llm-interactions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.llm-turn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+.llm-turn-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding: 0.55rem 0.85rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg) 40%, var(--panel));
+}
+
+.llm-turn-head strong {
+  color: var(--text);
+}
+
+.llm-turn-block {
+  padding: 0.65rem 0.85rem;
+}
+
+.llm-turn-block h3 {
+  margin: 0 0 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.llm-turn-block pre {
+  margin: 0;
+  padding: 0.65rem 0.75rem;
+  max-height: 280px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: color-mix(in srgb, var(--bg) 55%, var(--panel));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.tasks-table-btn {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.tasks-table-btn:hover {
+  background: var(--panel-hover);
+}
+
 @media (max-width: 720px) {
   .dashboard-toolbar {
     width: 100%;

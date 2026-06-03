@@ -47,6 +47,20 @@ CREATE TABLE IF NOT EXISTS audit_events (
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_task_id ON audit_events (task_id);
 
+CREATE TABLE IF NOT EXISTS llm_interactions (
+    id BIGSERIAL PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    response_text TEXT NOT NULL,
+    status TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'llm_client',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_interactions_task_id ON llm_interactions (task_id, id);
+
 CREATE TABLE IF NOT EXISTS dead_letter_queue (
     task_id TEXT PRIMARY KEY,
     status TEXT NOT NULL,

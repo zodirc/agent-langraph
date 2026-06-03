@@ -202,8 +202,10 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 | 写作流式 WGC (v1) | ✅ | `artifact_args_parser`、`writing_generation`、断流 partial + transport 重试；见 `docs/contracts/WRITING_GENERATION_CONTRACT.md` |
 | Planning → Mission handoff | ✅ | `enable_planning_mission_handoff` + `mission_auto` |
 | Lazy work_plan | ✅ | `mission_orchestrator` 按 `step_policy` 推进一步 |
-| agenda / DAG 扩展 | ✅ | `task_agenda.py`：`depends_on`、阻塞传播、局部重规划 |
+| agenda / DAG 扩展 | ✅ | `task_agenda.py`：`depends_on`、阻塞传播、局部重规划；支持 batch unit agenda 投影 |
 | Mission OMAW（ADR-001） | ✅ | M1–M8 闭环；`SUITE=oma` CI；§8.1 全链 golden；`chapter_facts`→KnowledgeStore；`run_pipeline_request` OMAW 重定向；12 章并行 subtasks 单测 |
+| `FactBundle` / `ReviewVerdict` 领域模型 | ✅ | 新增 capability-aware 事实包与统一章节验收语义；review verdict 强制绑定 `fact_bundle_id` |
+| turn kind / planning→executor 路由 | ✅ | `turn_kind.py` 区分 `steer_replan` / `steer_execute` / `mission_step_execute` / `mechanical_continue`；禁止执行回合误以 reasoning 收尾 |
 | 写作阶段（模型自选） | 🔶 遗留 | 仅 `writing_llm_decide=true` 时启用 |
 | autonomous 连续执行 | ✅ | `init_mission_state` 保留 autonomous；`stepwise_pause` 对 autonomous 为 false |
 | 输出保留 `MISSION_PAUSED` | ✅ | `output_node._resolve_output_status` |
@@ -225,7 +227,8 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 | Steer 优先级 / 抢占提示 | ✅ | `POST /tasks/{id}/steer` 支持 `priority`/`preempt` |
 | Session turn 规划闸门 | ✅ | `session_turn.py`；`graph_runner._prepare_mission_for_turn` |
 | execution_grant | ✅ | `mission_execution.py`；`resume_api` / session 机械续写签发继续令牌 |
-| pause_reason 分型 | ✅ | `step_checkpoint` / `gate_intent` / `gate_outcome` / `budget` / `failure` 等 |
+| pause_reason 分型 | ✅ | `step_checkpoint` / `gate_intent` / `gate_outcome` / `worker_lost` / `budget` / `failure` 等 |
+| executor registry / orphan running reconcile | ✅ | `graph_run_registry.py` 跟踪活跃执行器；`mission_worker_lost.py` 把孤儿 `MISSION_RUNNING` 收敛为 `MISSION_PAUSED(worker_lost)` |
 | client_display | ✅ | `system_lines` / `autonomous_ui` / `client_display` |
 
 ### 5.4 事件账本与事实层增强
@@ -324,6 +327,7 @@ pytest tests/services/test_react_entry.py tests/services/test_react_loop_runner.
 
 | 日期 | 说明 |
 |------|------|
+| 2026-06-03 | 对齐最近 3 次提交：① Mission OMAW 落实为默认长文执行路径，新增 `FactBundle` / `ReviewVerdict` / `WorkerExecutionPolicy` / `turn_kind`；② Mission control 增补 `worker_lost` pause、`graph_run_registry` 活跃执行器跟踪，SSE 刷新不再清 live；③ 文档补齐 `ADR_MISSION_LIFECYCLE_V2.md`、`MISSION_EXECUTION_CONTROL.md`、`MANUSCRIPT_WRITING.md` 的 OMAW / executor 控制语义。 |
 | 2026-06-02 | 检索链路优化：`knowledge.top_k` 提升到 8、默认启用 lexical rerank、关键词检索升级为 BM25 + CJK token（含中文 bigram）、`fetch_k_multiplier` 扩候选池、向量检索前置 tenant/domain 过滤、`max_chunks_per_doc` 去重；文档见 `docs/RETRIEVAL_OPTIMIZATION.md`。 |
 | 2026-06-02 | 近 3 次提交增量对齐：① mission/tools 会话文件工具集（grep/replace/touch/mkdir/ls/read/write/append/move/copy/rm 两阶段 dry_run token）；② Writing Pack 工具白名单扩展 + mission 工具型 work item（`patch_recent_chapter`/`consistency_check`）可选自动注入（`auto_tool_injection` 默认 false，`work_item.params.auto_tools` 可覆盖）；③ Web CLI 增加会话文件侧栏、目录导航/面包屑、双击文件实时预览与保存编辑接口。 |
 | 2026-06-02 | 新增 Web UI 现代化方案文档 `WEB_UI_MODERNIZATION.md`（待实施） |

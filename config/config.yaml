@@ -477,6 +477,11 @@ observability:
   langsmith_api_key: ${LANGCHAIN_API_KEY}
   langsmith_project: agent-langraph
   metrics_enabled: true
+  # 监控页：按 task/session 查看 LLM 请求与响应
+  llm_interaction_log_enabled: true
+  llm_interaction_log_max_chars: 200000           # 单字段最大字符（20 万），超出截断
+  llm_interaction_log_max_per_task: 120           # 超过则删最旧
+  llm_interaction_log_max_bytes_per_task: 1073741824  # 单会话/task 日志总大小 1GB，超过则删最旧
 
 secrets:
   backend: ${SECRETS_BACKEND:env}   # env | k8s | vault
