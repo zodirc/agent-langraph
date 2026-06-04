@@ -19,6 +19,8 @@
 | Engineering bounded delivery + `project_verify` | **stable** | on | ✅ | 路径 B：落盘 + `cpp`/`python`/`web_html_js`/`make_cpp_demo`；[`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) |
 | Session filesystem tools (sandboxed) | **stable** | on | ✅ | [`SESSION_FILE_TOOLS.md`](SESSION_FILE_TOOLS.md)；`session_fs_tools`；`rm_path` 两阶段确认 |
 | Mode switch per turn (`stay`/`switch`/`isolate`) | **stable** | on | ✅ | `mode_resolution`；[`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) §2 · [`SESSION_TURN_POLICY.md`](SESSION_TURN_POLICY.md) |
+| Pre-planning before planning LLM | **stable** | on | ✅ | `pre_planning.py`；`engineering_thin_skip` |
+| Web interaction mode selector (`/chat`) | **stable** | on | ✅ | `interaction_mode`：auto / chat / engineering / writing；[`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) §0 |
 | Reflection + replan on misroute | **stable** | on | ✅ | `retry_planning`；`reflection.route_audit_on_misroute` |
 | Artifact content profiles | **stable** | on | ✅ | `source_code` / `manuscript_prose` / `outline` in `artifact_content` |
 | Controlled SRDL / bounded ReAct | **stable** | on | ✅ | `react_loop.enabled=true`；single runtime 受控 think-act-observe |

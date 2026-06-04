@@ -9,6 +9,7 @@ from app.runtime.state import AgentState
 from app.services.manuscript_service import WRITING_TOOL_NAMES, resolve_manuscript
 from app.services.mission_schema import should_use_mission_runtime
 from app.services.route_audit.config import RouteAuditConfig, load_route_audit_config
+from app.services.manuscript_service import _coerce_dict
 from app.services.route_audit.inference import infer_task_kind
 
 
@@ -25,8 +26,10 @@ def detect_planned_route(
 ) -> str:
     cfg = cfg or load_route_audit_config()
     payload = state.get("input_payload") or {}
-    intent = payload.get("writing_intent") or {}
-    mission = payload.get("mission") or state.get("mission") or {}
+    if str(payload.get("target_mode") or "") == "engineering_mode":
+        return "engineering_bounded"
+    intent = _coerce_dict(payload.get("writing_intent"))
+    mission = _coerce_dict(payload.get("mission") or state.get("mission"))
     tools = list(state.get("selected_tools") or [])
 
     if should_use_mission_runtime(payload, str(state.get("execution_mode") or "")):
@@ -178,7 +181,7 @@ def _should_allow_mixed_qa_writing(
         return False
     structural = dict(inference.get("structural") or {})
     payload = state.get("input_payload") or {}
-    intent = payload.get("writing_intent") or {}
+    intent = _coerce_dict(payload.get("writing_intent"))
     has_manuscript_signal = bool(
         structural.get("manuscript_body_exists") or structural.get("manuscript_default_body")
     )

@@ -59,7 +59,9 @@ def apply_route_corrections(
         payload = _attach_delivery_metadata(state, audit, payload)
         return merge_state(state, input_payload=payload)
 
-    intent = dict(payload.get("writing_intent") or {})
+    from app.services.manuscript_service import _coerce_dict
+
+    intent = dict(_coerce_dict(payload.get("writing_intent")))
     tools = list(state.get("selected_tools") or [])
 
     if "disable_writing_intent" in corrections:

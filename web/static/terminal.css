@@ -170,7 +170,8 @@ body.theme-light .title {
   gap: 6px;
 }
 
-.theme-select {
+.theme-select,
+.interaction-mode-select {
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text);
@@ -179,6 +180,30 @@ body.theme-light .title {
   font: inherit;
   font-size: 12px;
   margin-right: 6px;
+  max-width: 11rem;
+}
+
+.interaction-mode-select {
+  cursor: pointer;
+}
+
+.interaction-mode-select[data-mode="chat"] {
+  border-color: color-mix(in srgb, var(--cyan) 45%, var(--border));
+  color: var(--cyan);
+}
+
+.interaction-mode-select[data-mode="engineering"] {
+  border-color: color-mix(in srgb, var(--green) 50%, var(--border));
+  color: var(--green);
+}
+
+.interaction-mode-select[data-mode="writing"] {
+  border-color: color-mix(in srgb, var(--yellow) 45%, var(--border));
+  color: var(--yellow);
+}
+
+.interaction-mode-select[data-mode="auto"] {
+  color: var(--text-secondary);
 }
 
 .header-badges {

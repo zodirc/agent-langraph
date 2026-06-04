@@ -63,7 +63,13 @@ Agent 对文件的读写**限定在当前 task 的会话根目录**，不能访�
 
 ---
 
-## 5. 测试与文档索引
+## 5. Web 侧栏预览
+
+`/chat` 右侧「文件」列表对常见工程/文本后缀可双击预览（`web/static/app.js` → `SESSION_TEXT_FILE_RE`），包括 `.cpp`、`.py`、`.html`、`.js`、`.css` 等；编辑仍经 `PUT /tasks/{id}/files/content`。
+
+---
+
+## 6. 测试与文档索引
 
 - 安全：`tests/services/test_project_verify_security.py`
 - 工程写盘：`tests/services/test_engineering_execution.py`、`tests/integration/test_engineering_mode_flow.py`

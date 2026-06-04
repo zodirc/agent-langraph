@@ -1,6 +1,6 @@
 # 实现状态追踪（对齐代码库）
 
-> **最后更新**：2026-06-04（文档补齐：[`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md)、[`SESSION_FILE_TOOLS.md`](SESSION_FILE_TOOLS.md)）  
+> **最后更新**：2026-06-04（`pre_planning` + Web 交互模式 + planning 健壮性；见 [`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md)）  
 > **对照文档**：[`CAPABILITY_MATRIX.md`](CAPABILITY_MATRIX.md)  
 > **图例**：✅ 已实现并有用例覆盖 · 🔶 部分实现 / 默认关 · ❌ 未实现
 
@@ -190,6 +190,9 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 | 项 | 状态 | 说明 |
 |----|------|------|
 | Route audit（规划后） | ✅ | `app/services/route_audit/`；规划完成后审计任务类型 vs 执行路径 |
+| Pre-planning（先模式后规划） | ✅ | `pre_planning.py`；`interaction_mode`；`engineering_thin_skip` 跳过 planning LLM |
+| Web `/chat` 交互模式切换 | ✅ | 顶栏 + `/mode` → `input_payload.interaction_mode`；`web/static/app.js` |
+| Planning payload 健壮性 | ✅ | `manuscript_service._coerce_dict`；工程文件名不再误走 text-artifact 扩展名校验 |
 | Intent → Mode 路由（工程沙箱） | ✅ | `mode_router` / `mode_registry` / `mode_resolution`；见 [`ENGINEERING_AGENT_SANDBOX_PROPOSAL.md`](ENGINEERING_AGENT_SANDBOX_PROPOSAL.md) |
 | `engineering_mode` + `engineering_bounded` | ✅ | `engineering_execution` 节点；`project_verify`：`cpp` / `python` / `web_html_js` / `make_cpp_demo` |
 | `code_artifact` 推理侧编译（路径 A） | ✅ | 临时 `code_verify` workspace；与工程落盘路径分离，见 [`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) |
@@ -291,6 +294,7 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 | SRDL | v0.13- | ✅ | ✅ | — |
 | Session 文件工具集（会话目录隔离） | v0.13- | ✅ | ✅ | — · [`SESSION_FILE_TOOLS.md`](SESSION_FILE_TOOLS.md) |
 | 代码双路径 + 模式切换文档 | v0.13- | ✅ | — | — · [`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) |
+| Pre-planning + Web 模式 + 工程 thin plan | v0.13- | ✅ | ✅ | `test_pre_planning.py`、`test_planning_engineering_thin.py` |
 | Mission 工具白名单扩展（writing pack） | v0.13- | ✅ | ✅ | — |
 | Mission 自动工具注入开关（默认关） | v0.13- | ✅ | ✅ | — |
 | Web 会话文件侧栏 + 实时预览编辑 | v0.13- | ✅ | ✅ API | — |
@@ -343,6 +347,7 @@ pytest tests/services/test_react_entry.py tests/services/test_react_loop_runner.
 
 | 日期 | 说明 |
 |------|------|
+| 2026-06-04 | 落地 Cursor 式交互：`pre_planning`（planning 前 `mode_resolution`）、`engineering_thin_skip`、显式/API/Web `interaction_mode`；`/chat` 顶栏四档模式 + `/mode`；修复 planning 对非 dict `manuscript`/`mission` 与工程扩展名误杀；文档与能力矩阵、验收表、单测同步。 |
 | 2026-06-04 | 文档补齐代码/工程能力：新增 [`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md)（`code_artifact` vs `engineering_mode`、模式 `stay/switch/isolate`、`project_verify` 四类 backend）；新增 [`SESSION_FILE_TOOLS.md`](SESSION_FILE_TOOLS.md)；README 子系统表、能力矩阵、§5.1/§十命令与 `CODE_ARTIFACT_PIPELINE` / `ROUTE_AUDIT` 交叉引用同步。 |
 | 2026-06-04 | 对齐最近提交：① Context Governance 正式收敛为统一长期上下文架构，新增 `prompt_context_gateway` / `context_policy` / `context_assembler` / composition trace 与 `/chat` 上下文治理面板；② 文档同步明确字符压缩与 `context_compressor` 已退居 transcript / semantic summary 子能力，不再作为 prompt 主路径；③ README、能力矩阵、实现状态、Mission 文档统一补齐“执行治理 + 上下文治理”双主线。 |
 | 2026-06-03 | 对齐最近 3 次提交：① Mission OMAW 落实为默认长文执行路径，新增 `FactBundle` / `ReviewVerdict` / `WorkerExecutionPolicy` / `turn_kind`；② Mission control 增补 `worker_lost` pause、`graph_run_registry` 活跃执行器跟踪，SSE 刷新不再清 live；③ 文档补齐 `ADR_MISSION_LIFECYCLE_V2.md`、`MISSION_EXECUTION_CONTROL.md`、`MANUSCRIPT_WRITING.md` 的 OMAW / executor 控制语义。 |

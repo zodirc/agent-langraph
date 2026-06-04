@@ -19,8 +19,9 @@ Route audit 在 **planning 完成之后、tool/writing 执行之前** 插入审�
 
 | 模块 | 时机 | 职责 |
 |------|------|------|
-| `route_audit` | planning 后 | 推断 `inferred_kind`、比对 `planned_route`、纠正写作误路由 |
-| `mode_resolution` | route_audit 之后 | `intent_kind` → `target_mode`，加载 `mode_contracts`，写入 trace |
+| `pre_planning` | **planning LLM 之前** | 由 goal 种子 `inferred_kind` + `mode_resolution`（含 Web/API `interaction_mode`） |
+| `route_audit` | planning 后（或 thin-skip 后） | 比对 `planned_route`（含 `engineering_bounded`）、纠正写作误路由 |
+| `mode_resolution` | pre_planning 与 post-plan 各一次 | `intent_kind` → `target_mode`，加载 `mode_contracts`，写入 trace |
 
 工程类 kind（`interactive_app` / `small_project` / `code`）在 `mode_routing` 中统一映射到 `engineering_mode`，由主图 `engineering_execution` 节点执行，不再依赖 planner 自觉落盘。
 

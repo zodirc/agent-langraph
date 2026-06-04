@@ -14,6 +14,27 @@ from app.services.artifact_tools import list_task_artifacts, read_artifact_tail,
 
 WRITING_TOOL_NAMES = frozenset({"write_text_artifact", "append_text_artifact"})
 
+
+def _coerce_dict(value: Any) -> dict[str, Any]:
+    """Normalize payload fragments; ignore mistaken string scalars from clients."""
+    return value if isinstance(value, dict) else {}
+
+
+def _promote_text_artifact_basename(raw: Any) -> str | None:
+    """
+    Sanitize a basename for write_text_artifact / append_text_artifact only.
+
+    Code and web assets (.cpp, .html, …) use engineering_mode session paths;
+    return None instead of raising so planning can continue to route_audit.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return sanitize_artifact_basename(text)
+    except ValueError:
+        return None
+
 _CONTINUE_GOAL_RE = re.compile(
     r"(续写|继续写|继续|追加|下一章|接着写|写下去|\bappend\b|\bcontinue\b)",
     re.IGNORECASE,
@@ -182,7 +203,7 @@ def apply_planner_artifact_names(
 ) -> dict[str, Any]:
     """Lift planner-chosen basenames into mission.step_policy and payload."""
     out = dict(payload)
-    manuscript = out.get("manuscript") or out.get("session_artifacts") or {}
+    manuscript = _coerce_dict(out.get("manuscript") or out.get("session_artifacts"))
     if manuscript.get("body_path") or manuscript.get("outline_path"):
         return sync_payload_artifact_names(out)
 
@@ -192,9 +213,12 @@ def apply_planner_artifact_names(
         if isinstance(raw, dict):
             plan_intent = raw
 
-    intent = dict(out.get("writing_intent") or plan_intent or {})
-    mission = out.get("mission")
-    if isinstance(mission, dict) and str(mission.get("kind") or "") == "writing":
+    intent = dict(_coerce_dict(out.get("writing_intent")) or plan_intent or {})
+    raw_mission = out.get("mission")
+    mission = _coerce_dict(raw_mission)
+    if raw_mission is not None and not isinstance(raw_mission, dict):
+        out.pop("mission", None)
+    if mission and str(mission.get("kind") or "") == "writing":
         policy = dict(mission.get("step_policy") or {})
         body = _pick_artifact_basename(
             policy.get("body_artifact"),
@@ -227,10 +251,10 @@ def sync_payload_artifact_names(
 ) -> dict[str, Any]:
     """Promote intent/mission artifact names onto payload before manuscript bind."""
     out = dict(payload)
-    intent = dict(intent or out.get("writing_intent") or {})
-    manuscript = out.get("manuscript") or out.get("session_artifacts") or {}
-    mission = out.get("mission") or {}
-    policy = mission.get("step_policy") if isinstance(mission.get("step_policy"), dict) else {}
+    intent = dict(_coerce_dict(intent) or _coerce_dict(out.get("writing_intent")))
+    manuscript = _coerce_dict(out.get("manuscript") or out.get("session_artifacts"))
+    mission = _coerce_dict(out.get("mission"))
+    policy = _coerce_dict(mission.get("step_policy"))
 
     if not manuscript.get("outline_path"):
         outline_raw = (
@@ -238,8 +262,9 @@ def sync_payload_artifact_names(
             or out.get("outline_filename")
             or policy.get("outline_artifact")
         )
-        if outline_raw:
-            out["outline_filename"] = sanitize_artifact_basename(outline_raw)
+        promoted = _promote_text_artifact_basename(outline_raw)
+        if promoted:
+            out["outline_filename"] = promoted
 
     if not manuscript.get("body_path"):
         body_raw = (
@@ -250,8 +275,9 @@ def sync_payload_artifact_names(
             or policy.get("body_artifact")
             or policy.get("artifact_path")
         )
-        if body_raw:
-            out["novel_filename"] = sanitize_artifact_basename(body_raw)
+        promoted = _promote_text_artifact_basename(body_raw)
+        if promoted:
+            out["novel_filename"] = promoted
 
     return out
 
@@ -333,6 +359,9 @@ def resolve_manuscript(task_id: str, stored: Optional[dict[str, Any]] = None) ->
     """Resolve canonical body/outline paths from state or artifact directory."""
     files = list_task_artifacts(task_id)
     ms = Manuscript(task_id=task_id, files=files)
+
+    if stored is not None and not isinstance(stored, dict):
+        stored = None
 
     if stored:
         body = stored.get("body_path")

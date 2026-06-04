@@ -107,6 +107,7 @@ agent:
 session:
   enabled: true
   one_task_per_window: true   # 同一会话窗 = 一个 task_id（与 session_id 相同）
+  # Web /chat: interaction_mode in input_payload (chat|engineering|writing) — see docs/CODE_AND_ENGINEERING_PATHS.md
   max_history_turns: 40
   max_history_chars: 48000
   compress_enabled: true      # 超出上限时自动裁剪较早消息

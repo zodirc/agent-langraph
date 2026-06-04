@@ -1,7 +1,7 @@
 # 基于意图驱动的 Agent 执行模式与安全沙箱一期方案
 
 > 本文给出**唯一的长期工程化方案**，并允许围绕 runtime 做必要的架构重构。方案核心不是给“工程任务”补一条特例链路，而是把系统正式改造成**基于意图切换执行模式**的 Agent Runtime：系统先识别用户意图，再切换到匹配模式；模式再决定工具面、执行路径、交付形态、校验方式与安全边界。2048 只是 [`engineering_mode`](docs/ENGINEERING_AGENT_SANDBOX_PROPOSAL.md) 的验收样例，长期目标是建立统一的 **Intent → Mode → Contract → Execution** 框架。  
-> **速查（路径 B vs 推理侧 `code_artifact`、模式切换）**：[`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) · **会话文件工具**：[`SESSION_FILE_TOOLS.md`](SESSION_FILE_TOOLS.md)
+> **速查（路径 B vs 推理侧 `code_artifact`、模式切换）**：[`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) · **会话文件工具**：[`SESSION_FILE_TOOLS.md`](SESSION_FILE_TOOLS.md) · **Web 模式切换**：`/chat` 顶栏 `interaction_mode`（见 CODE_AND_ENGINEERING_PATHS §0）
 
 ---
 

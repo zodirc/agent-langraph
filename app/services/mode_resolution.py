@@ -13,6 +13,7 @@ from app.services.mode_router import (
     is_engineering_mode,
     resolve_target_mode,
 )
+from app.services.manuscript_service import _coerce_dict
 from app.services.mode_execution import (
     apply_manuscript_mode_contract,
     apply_qa_mode_contract,
@@ -54,7 +55,7 @@ def apply_mode_contract_to_state(
     payload["delivery_plan"] = delivery
 
     tools = list(state.get("selected_tools") or [])
-    intent = dict(payload.get("writing_intent") or {})
+    intent = dict(_coerce_dict(payload.get("writing_intent")))
 
     if contract.guards.forbid_routes:
         for route in contract.guards.forbid_routes:

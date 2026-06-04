@@ -59,8 +59,10 @@ def _outline_status_for_planning(state: AgentState, payload: dict[str, Any]) -> 
     """Tell planning when outline is already materialized (steer should patch, not rewrite)."""
     from app.config.settings import settings
 
-    ms = resolve_manuscript(state["task_id"], state.get("manuscript") or payload.get("manuscript"))
-    stored = state.get("manuscript") or payload.get("manuscript") or {}
+    from app.services.manuscript_service import _coerce_dict
+
+    stored = _coerce_dict(state.get("manuscript") or payload.get("manuscript"))
+    ms = resolve_manuscript(state["task_id"], stored or None)
     outline_bytes = max(int(ms.outline_bytes or 0), int(stored.get("outline_bytes") or 0))
     min_outline = int(getattr(settings, "MANUSCRIPT_MIN_OUTLINE_CHARS", 80))
     body_bytes = max(int(ms.body_bytes or 0), int(stored.get("body_bytes") or 0))
@@ -126,6 +128,63 @@ def planning_node(state: AgentState) -> AgentState:
             )
         )
         payload.pop("turn_contract", None)
+        state = merge_state(state, input_payload=payload, manuscript=ms.to_dict())
+
+        from app.services.pre_planning import (
+            engineering_thin_plan,
+            engineering_thin_tools,
+            run_pre_planning_pipeline,
+            should_skip_planning_llm,
+        )
+
+        state = run_pre_planning_pipeline(state)
+        payload = dict(state.get("input_payload") or {})
+
+        if should_skip_planning_llm(state):
+            intent = {
+                "enabled": False,
+                "blocked_by": "engineering_mode",
+                "source": "thin_planning",
+            }
+            payload["writing_intent"] = intent
+            plan = engineering_thin_plan()
+            tools = engineering_thin_tools(state)
+            report_plan_trace(
+                plan,
+                tools,
+                meta={
+                    "planning": "engineering_thin_skip",
+                    "target_mode": payload.get("target_mode"),
+                    "intent_kind": payload.get("intent_kind"),
+                    "skip_retrieval": True,
+                },
+            )
+            updated = merge_state(
+                state,
+                input_payload=payload,
+                plan=plan,
+                selected_tools=tools,
+                manuscript=ms.to_dict(),
+                skip_retrieval=True,
+                review_required=False,
+                status=TaskStatus.PLANNED.value,
+                current_node="planning",
+                audit_log=append_audit(
+                    state,
+                    "planning",
+                    "engineering_thin_skip",
+                    {
+                        "target_mode": payload.get("target_mode"),
+                        "intent_kind": payload.get("intent_kind"),
+                    },
+                ),
+            )
+            from app.services.route_audit.pipeline import run_route_audit_pipeline
+
+            updated = run_route_audit_pipeline(updated)
+            get_state_store().save(updated)
+            return updated
+
         from app.services.mission_steer import complete_steer_planning, steer_requires_planning
 
         steer_planning_turn = steer_requires_planning(payload)
@@ -485,7 +544,8 @@ def planning_node(state: AgentState) -> AgentState:
                 mission_step=int(state.get("mission_step") or 0),
             )
 
-        payload = apply_planner_artifact_names(payload, planning_result=result)
+        if str(payload.get("target_mode") or "") != "engineering_mode":
+            payload = apply_planner_artifact_names(payload, planning_result=result)
 
         payload["tool_params"] = tool_params
 

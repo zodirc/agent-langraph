@@ -163,7 +163,7 @@ export SERVICE_API_KEY=your-service-key
 | [`docs/MISSION_EXECUTION_CONTROL.md`](docs/MISSION_EXECUTION_CONTROL.md) | execution grant、pause_reason、resume / steer 控制面 |
 | [`docs/SESSION_TURN_POLICY.md`](docs/SESSION_TURN_POLICY.md) | session turn 规划闸门、机械续写、mission active 场景决策 |
 | [`docs/RETRIEVAL_OPTIMIZATION.md`](docs/RETRIEVAL_OPTIMIZATION.md) | 知识检索优化：BM25、CJK token、候选扩展、rerank 默认开启 |
-| [`docs/CODE_AND_ENGINEERING_PATHS.md`](docs/CODE_AND_ENGINEERING_PATHS.md) | **代码双路径对照**：`code_artifact`（推理临时编译）vs `engineering_mode`（落盘 + `project_verify`）；模式切换规则 |
+| [`docs/CODE_AND_ENGINEERING_PATHS.md`](docs/CODE_AND_ENGINEERING_PATHS.md) | **代码双路径 + 交互模式**：`pre_planning`、`interaction_mode`、Web `/chat` 四档模式、模式切换规则 |
 | [`docs/CODE_ARTIFACT_PIPELINE.md`](docs/CODE_ARTIFACT_PIPELINE.md) | 路径 A：编译校验、stderr 驱动 LLM 修复、composed_at_end 流式 |
 | [`docs/ENGINEERING_AGENT_SANDBOX_PROPOSAL.md`](docs/ENGINEERING_AGENT_SANDBOX_PROPOSAL.md) | 路径 B：Intent → Mode → Contract；`engineering_bounded` 落盘与白名单校验 |
 | [`docs/SESSION_FILE_TOOLS.md`](docs/SESSION_FILE_TOOLS.md) | 会话目录文件工具（read/write/grep/rm 等）、沙箱路径规则、与三模式契约关系 |
@@ -190,6 +190,7 @@ export SERVICE_API_KEY=your-service-key
 | 输出治理 | `output_guard` 仅对 **prose** 段做 PII 扫描，代码块内长数字不误杀 |
 | 路径审计 | [`route_audit`](docs/ROUTE_AUDIT.md)：规划后比对任务类型与执行路径，误入手稿写作时自动纠正 |
 | 代码 / 工程 / 模式 | [`CODE_AND_ENGINEERING_PATHS.md`](docs/CODE_AND_ENGINEERING_PATHS.md)：双路径 + `stay`/`switch`/`isolate`；2048/可编译 demo → `engineering_mode` |
+| Web 交互模式切换 | `/chat` 顶栏：**自动 / Ask / Agent 工程交付 / 写作** → `input_payload.interaction_mode`；`/mode` 命令 |
 | 工程 Golden / CI | `SUITE=engineering ./scripts/ci_eval.sh`（integration golden：2048 / cpp / Makefile / 手稿→工程隔离 / qa 阻断写作） |
 | 工程 Live E2E | `ENGINEERING_E2E_LIVE=1 pytest tests/e2e/test_engineering_mode_live.py -v`（需真实 LLM 凭据；默认 CI 跳过） |
 | 多轮推理隔离 | [`REASONING_SHORTCUT.md`](docs/REASONING_SHORTCUT.md)：每轮清零；问答不走「只报文件大小」 |
@@ -199,9 +200,14 @@ export SERVICE_API_KEY=your-service-key
 {
   "session_id": "uuid-from-client",
   "new_session": false,
-  "input_payload": { "goal": "续写上一章" }
+  "input_payload": {
+    "goal": "续写上一章",
+    "interaction_mode": "writing"
+  }
 }
 ```
+
+`interaction_mode`（可选，主流「先选模式再执行」）：`chat`（问答）| `engineering`（落盘+校验）| `writing`（手稿/Mission）。未指定时由 `pre_planning` 根据 goal 推断。
 
 ## Mission Steer 与确认（长篇）
 

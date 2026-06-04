@@ -6,7 +6,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/static/favicon.svg" />
   <title>对话 — Agent Runtime</title>
-  <link rel="stylesheet" href="/static/terminal.css?v=ui-26" />
+  <link rel="stylesheet" href="/static/terminal.css?v=ui-27" />
   <link rel="stylesheet" href="/static/platform.css?v=ui-22" />
 </head>
 <body class="platform-shell chat-page-shell" data-active-page="chat">
@@ -61,6 +61,17 @@
             </div>
           </div>
           <div class="header-actions">
+            <select
+              id="interaction-mode-select"
+              class="interaction-mode-select"
+              title="交互模式（Cursor 式）：自动=服务端推断；工程=会话落盘+白名单编译（无任意 shell）"
+              aria-label="交互模式"
+            >
+              <option value="auto">模式 · 自动</option>
+              <option value="chat">Ask · 问答</option>
+              <option value="engineering">Agent · 工程交付</option>
+              <option value="writing">写作 · 长篇</option>
+            </select>
             <select id="skill-select" class="theme-select" title="任务 Skill" hidden aria-hidden="true">
               <option value="">Skill: 无</option>
             </select>

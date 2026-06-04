@@ -46,6 +46,7 @@ const stateDebugCloseBtnEl = document.getElementById("state-debug-close-btn");
 const stateDebugLiveEl = document.getElementById("state-debug-live");
 const stateDebugSourceTabsEl = document.getElementById("state-debug-source-tabs");
 const themeSelectEl = document.getElementById("theme-select");
+const interactionModeSelectEl = document.getElementById("interaction-mode-select");
 const commandSlashMenuEl = document.getElementById("command-slash-menu");
 
 let running = false;
@@ -112,7 +113,8 @@ let sessionFilesTextIndex = [];
 /** @type {string | null} `taskId:relativeDir` */
 let sessionFilesTextIndexCacheKey = null;
 let sessionFileViewerPollTimer = null;
-const SESSION_TEXT_FILE_RE = /\.(txt|md|markdown|json|yaml|yml|log)$/i;
+const SESSION_TEXT_FILE_RE =
+  /\.(txt|md|markdown|json|yaml|yml|log|cpp|cc|cxx|hpp|h|c|py|js|css|html|htm)$/i;
 const CHAPTER_HEADER_RE = /^(?:#{1,3}\s*)?第\s*([一二三四五六七八九十百零两\d]+)\s*章[^\n]*/gm;
 const CN_DIGITS = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 百: 100 };
 const POPUP_VIEWER_FONT_KEY = "session_file_viewer_font_px";
@@ -129,6 +131,7 @@ const COMMAND_SUGGESTIONS = [
   { cmd: "/stop-all", hint: "停止所有 in-flight 任务" },
   { cmd: "/append ", hint: "向运行中任务追加消息（不抢占）" },
   { cmd: "/session", hint: "打印当前 session_id" },
+  { cmd: "/mode", hint: "查看或切换交互模式 auto|chat|engineering|writing" },
   { cmd: "/history", hint: "在终端列出最近任务" },
   { cmd: "/status ", hint: "查看任务状态（后跟 task_id）" },
   { cmd: "/audit ", hint: "查看审计日志" },
@@ -700,7 +703,34 @@ const PIPELINE_QUIET_NODES = new Set([
 ]);
 const TOKEN_KEY = "agent_access_token";
 const SESSION_KEY = "agent_session_id";
+const INTERACTION_MODE_KEY = "agent_interaction_mode";
 const THEME_KEY = "agent_theme";
+
+/** @type {Record<string, { label: string, hint: string, placeholder: string }>} */
+const INTERACTION_MODE_META = {
+  auto: {
+    label: "自动",
+    hint: "由服务端根据 goal 推断 Ask / 工程交付 / 写作（pre_planning）",
+    placeholder: "描述任务；模式选「自动」时由系统推断…",
+  },
+  chat: {
+    label: "Ask · 问答",
+    hint: "对话与推理为主，代码可走 code_artifact 校验；不落盘工程交付",
+    placeholder: "提问、解释、讨论方案…",
+  },
+  engineering: {
+    label: "Agent · 工程交付",
+    hint: "会话目录落盘 + 白名单编译/构建（g++/py_compile/make demo/node --check）；禁止任意 shell",
+    placeholder: "例如：做 2048 网页游戏并落盘、写可编译的 C++ main.cpp…",
+  },
+  writing: {
+    label: "写作 · 长篇",
+    hint: "手稿 / Mission 写作路径；与工程交付隔离",
+    placeholder: "例如：续写小说、生成大纲、审阅章节…",
+  },
+};
+
+const VALID_INTERACTION_MODES = new Set(["auto", "chat", "engineering", "writing"]);
 /** Next stream submit uses new_session=true once (after /new). */
 let pendingNewSession = false;
 let sessionHasInFlightMission = false;
@@ -744,6 +774,58 @@ function updateSessionBadge(sessionId) {
   const short = `${id.slice(0, 8)}…`;
   sessionBadgeEl.textContent = `session ${short}`;
   sessionBadgeEl.title = `会话 ID（完整）: ${id}\n点击查看；新会话请用侧栏「新会话」或 /new`;
+}
+
+function normalizeInteractionMode(raw) {
+  const key = String(raw || "auto").trim().toLowerCase();
+  return VALID_INTERACTION_MODES.has(key) ? key : "auto";
+}
+
+function getInteractionMode() {
+  const stored = localStorage.getItem(INTERACTION_MODE_KEY);
+  return normalizeInteractionMode(stored || interactionModeSelectEl?.value || "auto");
+}
+
+function setInteractionMode(mode, { announce = true, persist = true } = {}) {
+  const normalized = normalizeInteractionMode(mode);
+  if (persist) localStorage.setItem(INTERACTION_MODE_KEY, normalized);
+  syncInteractionModeUi(normalized);
+  if (announce) {
+    const meta = INTERACTION_MODE_META[normalized];
+    appendLine(`交互模式: ${meta.label} — ${meta.hint}`, "system");
+  }
+  return normalized;
+}
+
+function syncInteractionModeUi(mode) {
+  const normalized = normalizeInteractionMode(mode);
+  if (interactionModeSelectEl) {
+    interactionModeSelectEl.value = normalized;
+    interactionModeSelectEl.dataset.mode = normalized;
+    const meta = INTERACTION_MODE_META[normalized];
+    interactionModeSelectEl.title = `${meta.label}\n${meta.hint}`;
+  }
+  if (inputEl) {
+    const ph = INTERACTION_MODE_META[normalized]?.placeholder;
+    if (ph) inputEl.placeholder = ph;
+  }
+}
+
+function applyInteractionModeToPayload(payload) {
+  const out = { ...(payload || {}) };
+  const mode = getInteractionMode();
+  if (mode !== "auto") {
+    out.interaction_mode = mode;
+  } else {
+    delete out.interaction_mode;
+  }
+  if (mode === "writing") {
+    out.mission_auto = true;
+  } else if (mode === "engineering" || mode === "chat") {
+    out.mission_auto = false;
+    out.disable_mission_auto = mode === "engineering";
+  }
+  return out;
 }
 
 function showSessionIdInfo() {
@@ -3700,11 +3782,11 @@ function buildDefaultTaskBody(goal, riskLevel = "LOW") {
   const body = attachSessionFlags({
     task_type: "qa",
     user_id: "web",
-    input_payload: {
+    input_payload: applyInteractionModeToPayload({
       goal,
       risk_level: riskLevel,
       mission_auto: true,
-    },
+    }),
   });
   const skillId = activeSkillId || document.getElementById("skill-select")?.value || "";
   if (skillId) {
@@ -3753,6 +3835,11 @@ async function runTaskStream(
     appendLine(`> ${goal}`, "user");
   }
   const requestBody = body || buildTaskRequestBody(goal, riskLevel);
+  const mode = getInteractionMode();
+  if (mode !== "auto" && !opts.suppressUserEcho) {
+    const meta = INTERACTION_MODE_META[mode];
+    appendLine(`[模式 ${meta.label}]`, "system");
+  }
   const taskIdRef = { id: null };
   const sseAbort = new AbortController();
   bindActiveSseAbort(sseAbort);
@@ -3802,6 +3889,7 @@ function printHelp() {
   appendLine("  /stop-all        Stop all in-flight missions in recent task list", "system");
   appendLine("  /append <text>   Add follow-up steer without replacing current goal", "system");
   appendLine("  /session         Show current session id (also in header)", "system");
+  appendLine("  /mode [auto|chat|engineering|writing]  Interaction mode (header dropdown)", "system");
   appendLine("  /help            Show this help", "system");
   appendLine("  /history         List recent tasks", "system");
   appendLine("  /status <id>     Query task status + errors", "system");
@@ -3821,6 +3909,18 @@ async function handleCommand(raw) {
 
   if (text === "/help") {
     printHelp();
+    return;
+  }
+  if (text === "/mode" || text.startsWith("/mode ")) {
+    const arg = text === "/mode" ? "" : text.slice("/mode ".length).trim().toLowerCase();
+    if (!arg) {
+      const cur = getInteractionMode();
+      const meta = INTERACTION_MODE_META[cur];
+      appendLine(`当前交互模式: ${cur} (${meta.label})`, "system");
+      appendLine(meta.hint, "system");
+      return;
+    }
+    setInteractionMode(arg);
     return;
   }
   if (text === "/new") {
@@ -4132,6 +4232,12 @@ if (sessionBadgeEl) {
   });
 }
 
+if (interactionModeSelectEl) {
+  interactionModeSelectEl.addEventListener("change", () => {
+    setInteractionMode(interactionModeSelectEl.value, { announce: true });
+  });
+}
+
 if (historyListEl) {
   historyListEl.addEventListener("click", async (ev) => {
     const newInline = ev.target.closest("#history-new-session-inline");
@@ -4242,8 +4348,13 @@ window.AgentChatRuntime = {
 };
 
 updateSessionBadge(getSessionId());
+syncInteractionModeUi(getInteractionMode());
 applyTheme(localStorage.getItem(THEME_KEY) || "dark");
 appendLine("Agent LangGraph Web CLI ready. Type /help for commands.", "system");
+appendLine(
+  `交互模式: ${INTERACTION_MODE_META[getInteractionMode()].label}（顶栏可切换；工程交付仅在沙箱内编译）`,
+  "system"
+);
 refreshCommandSuggestions("");
 updateStopButtonState();
 warnIfSessionMissionInFlight();

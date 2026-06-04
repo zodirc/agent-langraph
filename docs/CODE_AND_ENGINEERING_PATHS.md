@@ -7,6 +7,38 @@
 
 ---
 
+## 0. 主流式交互：先定模式，再规划（`pre_planning`）
+
+自 2026-06 重构起，**planning LLM 之前** 执行 `run_pre_planning_pipeline`：
+
+1. 从 goal + 结构信号推断 `route_audit.inferred_kind`（无需 planner 输出）
+2. `mode_resolution` 写入 `target_mode` / 契约 / `writing_intent` 阻断
+3. 可选 **显式** `input_payload.interaction_mode`：`chat` | `engineering` | `writing`（对齐 Cursor 的 Ask / Agent-deliver / Writing）
+
+`target_mode == engineering_mode` 且非 steer/replan 时 → **跳过完整 planning LLM**（`engineering_thin_skip`），直接进入 `engineering_execution`（薄计划 + 白名单工具列表）。
+
+```json
+{
+  "goal": "做一个 2048 网页游戏并落盘",
+  "interaction_mode": "engineering"
+}
+```
+
+### Web UI（`/chat`）
+
+顶栏下拉与 `/mode` 命令写入同一字段，并持久化到 `localStorage`（`agent_interaction_mode`）：
+
+| UI 选项 | `interaction_mode` | 行为 |
+|---------|-------------------|------|
+| 自动 | （不传） | 仅 `pre_planning` + goal 推断 |
+| Ask · 问答 | `chat` | `qa_mode`；`mission_auto: false` |
+| Agent · 工程交付 | `engineering` | `engineering_mode` + thin planning；**沙箱内**白名单校验 |
+| 写作 · 长篇 | `writing` | `manuscript_mode`；`mission_auto: true` |
+
+**安全说明（相对 Cursor 的「放开」边界）**：工程模式可在会话目录自由落盘多种源码/静态资源，但**不能**在服务端执行用户任意 shell；编译/构建仅 `project_verify` 模板。侧栏「文件」预览已支持 `.cpp/.py/.html/.js` 等。
+
+---
+
 ## 1. 两条代码路径（不要混用）
 
 | 维度 | **A. 推理侧 `code_artifact`** | **B. 工程侧 `engineering_mode`** |
@@ -130,7 +162,7 @@ ENGINEERING_E2E_LIVE=1 pytest tests/e2e/test_engineering_mode_live.py -v
 
 ---
 
-## 5. 相关文档
+## 5. 相关文档与测试
 
 | 文档 | 内容 |
 |------|------|
@@ -139,3 +171,10 @@ ENGINEERING_E2E_LIVE=1 pytest tests/e2e/test_engineering_mode_live.py -v
 | [`SESSION_FILE_TOOLS.md`](SESSION_FILE_TOOLS.md) | 会话目录文件工具与 API |
 | [`ROUTE_AUDIT.md`](ROUTE_AUDIT.md) | `inferred_kind` 与 planning 后纠偏 |
 | [`DISPLAY_AND_DELIVERY.md`](DISPLAY_AND_DELIVERY.md) | 展示、流式、`delivery.by_kind` |
+
+| 测试 | 覆盖 |
+|------|------|
+| `tests/services/test_pre_planning.py` | `interaction_mode`、thin-skip 判定 |
+| `tests/integration/test_planning_engineering_thin.py` | planning 不调用 LLM |
+| `tests/services/test_manuscript_payload_coerce.py` | 非 dict payload、工程 basename |
+| `tests/integration/test_engineering_mode_flow.py` | 图路由工程交付 |
