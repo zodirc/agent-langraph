@@ -43,8 +43,12 @@ knowledge:
     common: knowledge/common
     code: knowledge/code
     writing: knowledge/writing
-  embedding_model: voyage-3   # voyage-3 | local_minilm | default (local hash fallback)
-  embedding_api_key: ${VOYAGE_API_KEY}
+  # local_minilm: sentence-transformers（Docker 镜像内已预置）| openai_compat / voyage-3: 可选外接 API
+  embedding_model: ${EMBEDDING_MODEL:local_minilm}
+  embedding_base_url: ${EMBEDDING_BASE_URL:}
+  embedding_api_model: ${EMBEDDING_API_MODEL:}
+  embedding_api_key: ${EMBEDDING_API_KEY:}
+  embedding_timeout_sec: 120
   local_embedding_model_name: sentence-transformers/all-MiniLM-L6-v2
   local_embedding_device: cpu
   local_embedding_cache_dir: ./data/models/sentence-transformers

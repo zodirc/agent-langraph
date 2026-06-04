@@ -20,6 +20,31 @@ def test_embed_texts_batch():
     assert len(vectors[0]) == len(vectors[1])
 
 
+def test_openai_compat_branch(monkeypatch):
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": [
+                    {"index": 0, "embedding": [0.1, 0.2]},
+                    {"index": 1, "embedding": [0.3, 0.4]},
+                ]
+            }
+
+    monkeypatch.setattr("app.services.embedding_service.settings.EMBEDDING_MODEL", "openai_compat")
+    monkeypatch.setattr(
+        "app.services.embedding_service.settings.EMBEDDING_BASE_URL", "http://embed.local/v1"
+    )
+    monkeypatch.setattr("app.services.embedding_service.settings.EMBEDDING_API_MODEL", "bge-m3")
+    monkeypatch.setattr("app.services.embedding_service.settings.EMBEDDING_API_KEY", "tok")
+    monkeypatch.setattr("app.services.embedding_service.httpx.post", lambda *a, **k: _Resp())
+
+    vectors = embedding_service.embed_texts(["a", "b"])
+    assert vectors == [[0.1, 0.2], [0.3, 0.4]]
+
+
 def test_local_minilm_branch(monkeypatch):
     class _Vec:
         def __init__(self, values):

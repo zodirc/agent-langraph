@@ -1,0 +1,3 @@
+{"doc_id": "doc-1", "title": "Vitamin D and immune response", "content": "Vitamin D supplementation modulates innate and adaptive immune responses and may reduce respiratory infection severity in deficient populations."}
+{"doc_id": "doc-2", "title": "Hybrid retrieval systems", "content": "Hybrid search combines dense vector retrieval with sparse BM25 keyword scoring using reciprocal rank fusion to improve recall."}
+{"doc_id": "doc-9", "title": "SciFact claim verification", "content": "Scientific claim verification requires retrieving evidence passages that support or refute a given biomedical statement."}

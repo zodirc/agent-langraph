@@ -1,0 +1,2 @@
+{"id": "beir-scifact-sample-q1", "domain": "common", "query": "Does vitamin D affect immune response?", "relevant_doc_ids": ["doc-1"]}
+{"id": "beir-scifact-sample-q2", "domain": "common", "query": "How does hybrid search combine vector and keyword retrieval?", "relevant_doc_ids": ["doc-2"]}

@@ -46,6 +46,9 @@ def evaluate_domain_tasks(
     *,
     top_k: int = 5,
     search_fn: Callable[[str, str, int], list[dict[str, Any]]],
+    query_fn: Callable[[dict[str, Any]], str] | None = None,
+    progress_every: int = 0,
+    progress_prefix: str = "[rag-eval]",
 ) -> dict[str, Any]:
     """
     Evaluate retrieval quality by domain.
@@ -60,9 +63,10 @@ def evaluate_domain_tasks(
     """
     per_task: list[dict[str, Any]] = []
     bucket: dict[str, list[dict[str, float]]] = {d: [] for d in sorted(_VALID_DOMAINS)}
-    for task in tasks:
+    total = len(tasks)
+    for idx, task in enumerate(tasks, start=1):
         domain = _normalize_domain(str(task.get("domain") or "common"))
-        query = str(task.get("query") or "").strip()
+        query = query_fn(task) if query_fn else str(task.get("query") or "").strip()
         relevant = [str(x) for x in (task.get("relevant_doc_ids") or []) if str(x)]
         hits = search_fn(query, domain, top_k)
         metrics = evaluate_retrieval(hits, relevant, k=top_k)
@@ -76,6 +80,8 @@ def evaluate_domain_tasks(
         }
         per_task.append(task_result)
         bucket[domain].append(task_result["metrics"])
+        if progress_every > 0 and (idx % progress_every == 0 or idx == total):
+            print(f"{progress_prefix} queries {idx}/{total}", flush=True)
 
     def _avg(items: list[dict[str, float]], key: str) -> float:
         if not items:

@@ -1,0 +1,45 @@
+# Writing-domain RAG eval tasks (hand-curated; run convert_writing_knowledge.py to refresh corpus)
+#
+# enrich_writing: true → append the same retrieval suffix as enrich_retrieval_query_for_writing()
+
+tasks:
+  - id: w-guidelines-structure
+    query: "新章开篇 场景锚点 伏笔 剧情连贯"
+    relevant_doc_ids: ["builtin-writing-guidelines"]
+    enrich_writing: true
+
+  - id: w-guidelines-dialogue
+    query: "人物对话 口吻一致 避免空洞寒暄"
+    relevant_doc_ids: ["builtin-writing-guidelines"]
+    enrich_writing: true
+
+  - id: w-prose-anti-ai
+    query: "去AI化 禁用套话 展示替代告知"
+    relevant_doc_ids: ["builtin-prose-voice-format"]
+    enrich_writing: true
+
+  - id: w-prose-txt-format
+    query: "TXT排版 全角标点 章题 页脚"
+    relevant_doc_ids: ["builtin-prose-voice-format"]
+    enrich_writing: false
+
+  - id: w-prose-rhythm
+    query: "句式节奏 短句 长句交替"
+    relevant_doc_ids: ["builtin-prose-voice-format"]
+    enrich_writing: true
+
+  - id: w-guidelines-chapter-end
+    query: "章末收束 情节钩子 第N章完"
+    relevant_doc_ids: ["builtin-writing-guidelines"]
+    enrich_writing: false
+
+  - id: w-both-voice-and-structure
+    query: "长文写作 削弱AI感 结构节奏"
+    relevant_doc_ids: ["builtin-writing-guidelines", "builtin-prose-voice-format"]
+    enrich_writing: true
+
+  # Corpus includes common-domain decoys; writing filter must still return writing docs.
+  - id: w-decoy-domain-filter
+    query: "规划节点 检索 记忆写回"
+    relevant_doc_ids: ["builtin-writing-guidelines"]
+    enrich_writing: true

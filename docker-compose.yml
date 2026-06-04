@@ -77,9 +77,12 @@ services:
       RATE_LIMIT_REDIS: ${RATE_LIMIT_REDIS:-false}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       LOCAL_EMBEDDING_CACHE_DIR: /data/models/sentence-transformers
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-local_minilm}
     volumes:
       # 整卷挂载 /data：Chroma、artifact、日志、embedding 缓存（/data/models/sentence-transformers）
       - agent_data:/data
+      # open RAG 评测（convert / run_open_rag_eval）；dev 叠加时同源挂载
+      - ./tests/eval:/app/tests/eval:rw
     restart: unless-stopped
     healthcheck:
       # 勿用 /health：写作高峰会跑向量/知识库检查，易超时误判 unhealthy

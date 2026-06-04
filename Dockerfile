@@ -28,6 +28,8 @@ COPY app/ ./app/
 COPY config/ ./config/
 COPY web/ ./web/
 COPY knowledge/ ./knowledge/
+# Open RAG benchmark（convert + run_open_rag_eval，可在容器内 exec 执行）
+COPY tests/eval/ ./tests/eval/
 
 RUN mkdir -p /app/models-baked/sentence-transformers
 

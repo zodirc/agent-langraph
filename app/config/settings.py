@@ -252,9 +252,22 @@ class Settings:
         knowledge = raw.get("knowledge", {})
         self.KNOWLEDGE_BACKEND = str(knowledge.get("backend", "chroma"))
         self.EMBEDDING_MODEL = str(knowledge.get("embedding_model", "default"))
-        self.EMBEDDING_API_KEY = secrets.get("VOYAGE_API_KEY") or str(
-            knowledge.get("embedding_api_key", "")
-        ).strip()
+        self.EMBEDDING_API_KEY = (
+            secrets.get("EMBEDDING_API_KEY")
+            or secrets.get("VOYAGE_API_KEY")
+            or str(knowledge.get("embedding_api_key", "")).strip()
+        )
+        self.EMBEDDING_BASE_URL = (
+            os.environ.get("EMBEDDING_BASE_URL", "").strip()
+            or str(knowledge.get("embedding_base_url", "")).strip()
+        )
+        self.EMBEDDING_API_MODEL = (
+            os.environ.get("EMBEDDING_API_MODEL", "").strip()
+            or str(knowledge.get("embedding_api_model", "")).strip()
+        )
+        self.EMBEDDING_TIMEOUT_SEC = float(
+            os.environ.get("EMBEDDING_TIMEOUT_SEC", knowledge.get("embedding_timeout_sec", 60))
+        )
         self.RETRIEVAL_TOP_K = int(knowledge.get("top_k", 5))
         self.SIMILARITY_THRESHOLD = float(knowledge.get("similarity_threshold", 0.3))
         self.KNOWLEDGE_COLLECTION = str(knowledge.get("collection_name", "agent_knowledge"))

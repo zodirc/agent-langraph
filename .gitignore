@@ -15,3 +15,15 @@ answer.log
 
 # Private / internal notes (local only; not pushed to GitHub)
 docs-private/
+
+# Open RAG benchmark: raw downloads stay local; full normalized sets are generated
+tests/eval/open_rag/raw/*
+!tests/eval/open_rag/raw/.gitkeep
+tests/eval/open_rag/normalized/scifact_corpus.jsonl
+tests/eval/open_rag/normalized/scifact_tasks.jsonl
+tests/eval/open_rag/normalized/qrecc_*_corpus.jsonl
+tests/eval/open_rag/normalized/qrecc_*_*_tasks.jsonl
+tests/eval/open_rag/raw/qrecc/*.json
+tests/eval/open_rag/raw/qrecc/*.zip
+tests/eval/reports/*
+!tests/eval/reports/.gitkeep

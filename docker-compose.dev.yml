@@ -19,6 +19,8 @@ services:
       - ./config:/app/config:ro
       - ./web:/app/web:ro
       - ./knowledge:/app/knowledge:ro
+      # open RAG 评测脚本与报告（可写 normalized/、reports/）
+      - ./tests/eval:/app/tests/eval:rw
     command:
       - uvicorn
       - app.main:app

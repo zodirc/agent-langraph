@@ -41,8 +41,8 @@ app:
 knowledge:
   backend: chroma
   content_dir: knowledge
-  embedding_model: local_minilm
-  embedding_api_key: ${VOYAGE_API_KEY:}
+  # 镜像构建时已预置 all-MiniLM-L6-v2（见 Dockerfile + docker-entrypoint.sh 复制到 /data）
+  embedding_model: ${EMBEDDING_MODEL:local_minilm}
   local_embedding_model_name: sentence-transformers/all-MiniLM-L6-v2
   local_embedding_device: cpu
   local_embedding_cache_dir: /data/models/sentence-transformers
