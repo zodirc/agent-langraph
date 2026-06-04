@@ -19,6 +19,24 @@
     diagnostics: { title: "诊断信息", desc: "报错、测试失败、终端输出等" },
   };
 
+  const SCOPE_HELP = {
+    transcript: {
+      title: "transcript（对话历史）",
+      desc:
+        "压缩 conversation_history：对较早轮次做语义摘要或字符裁剪，保留最近若干轮。适合聊天原文过长、想减负 transcript 桶。",
+    },
+    all_compressible: {
+      title: "all_compressible（可压缩项）",
+      desc:
+        "当前实现会先压缩对话历史（与 transcript 相同）；设计上还会压缩标记为 compressible 的工作记忆、工具输出等。组包预览使用 reasoning 策略。",
+    },
+    aggressive: {
+      title: "aggressive（强力）",
+      desc:
+        "同样先压缩对话历史，但组包预览改用 summarization 策略、更紧的 token 预算（约为配置值一半），更容易丢弃低优先级片段。",
+    },
+  };
+
   const PURPOSE_HELP = {
     reasoning: "推理节点",
     planning: "规划节点",
@@ -37,7 +55,8 @@
   const dropdownEl = document.getElementById("ctx-gov-dropdown");
   const badgeEl = document.getElementById("ctx-gov-badge");
   const hintEl = document.getElementById("ctx-gov-hint");
-  const summaryEl = document.getElementById("ctx-gov-summary");
+  const summaryPanelEl = document.getElementById("ctx-gov-summary");
+  const summaryEl = document.getElementById("ctx-gov-summary-body");
   const bucketsEl = document.getElementById("ctx-gov-buckets");
   const keptEl = document.getElementById("ctx-gov-kept");
   const compressedEl = document.getElementById("ctx-gov-compressed");
@@ -46,6 +65,7 @@
   const droppedCountEl = document.getElementById("ctx-gov-dropped-count");
   const purposeEl = document.getElementById("ctx-gov-purpose");
   const scopeEl = document.getElementById("ctx-gov-scope");
+  const scopeHintEl = document.getElementById("ctx-gov-scope-hint");
   const tokenBudgetEl = document.getElementById("ctx-gov-token-budget");
   const compressBtnEl = document.getElementById("ctx-gov-compress-btn");
   const compressStatusEl = document.getElementById("ctx-gov-compress-status");
@@ -144,29 +164,67 @@
       (dropped ? `，丢弃 ${dropped} 条` : "");
   }
 
-  function renderSummary(comp, taskId, purpose) {
+  function formatSessionTokens(comp, sessionMeta) {
+    const used =
+      sessionMeta?.session_tokens_used ??
+      comp?.session_tokens_used ??
+      comp?.trace?.session_tokens_used ??
+      0;
+    const limit =
+      sessionMeta?.session_token_limit ??
+      comp?.session_token_limit ??
+      comp?.trace?.session_token_limit ??
+      0;
+    let text = `${used} tok（本会话 LLM 累计消耗）`;
+    if (limit > 0) text += ` / 任务限额 ${limit}`;
+    return text;
+  }
+
+  function renderScopeHint() {
+    if (!scopeHintEl || !scopeEl) return;
+    const key = scopeEl.value || "transcript";
+    const info = SCOPE_HELP[key] || SCOPE_HELP.transcript;
+    scopeHintEl.innerHTML =
+      `<strong>${escapeHtml(info.title)}</strong>：${escapeHtml(info.desc)}`;
+  }
+
+  function renderSummary(comp, taskId, purpose, sessionMeta, options = {}) {
     if (!summaryEl) return;
     if (!comp) {
-      summaryEl.hidden = true;
+      const msg = options.loading
+        ? "正在加载会话摘要…"
+        : "暂无组包数据。请先在本会话发送一条任务，或切换已有历史会话。";
+      summaryEl.innerHTML = `<p class="ctx-gov-empty">${escapeHtml(msg)}</p>`;
       return;
     }
-    summaryEl.hidden = false;
     const trace = comp.trace || {};
-    const budget = trace.token_budget_total ?? trace.budget_total ?? DEFAULT_TOKEN_BUDGET;
-    const model = trace.model_name || "";
+    const budget =
+      comp.token_budget_total ?? trace.token_budget_total ?? trace.budget_total ?? DEFAULT_TOKEN_BUDGET;
+    const assembly =
+      comp.assembly_tokens ?? trace.assembly_tokens ?? countAssemblyTokens(comp.buckets);
+    const model =
+      sessionMeta?.model_name ?? comp.model_name ?? trace.model_name ?? "";
     const msgCount = comp.rendered_message_count ?? (comp.rendered_roles || []).length;
     const roleSummary = summarizeRoles(comp.rendered_roles);
     const purposeZh = PURPOSE_HELP[purpose] || purpose;
+    const sessionTok = formatSessionTokens(comp, sessionMeta);
     summaryEl.innerHTML =
-      `<dl class="ctx-gov-dl">` +
+      `<dl class="ctx-gov-dl" role="list">` +
       `<dt>当前会话</dt><dd><code>${escapeHtml(taskId.slice(0, 12))}…</code>（任务 ID）</dd>` +
+      `<dt>当前模型</dt><dd><strong>${escapeHtml(model || "—")}</strong></dd>` +
+      `<dt>会话已消耗 token</dt><dd>${escapeHtml(sessionTok)}</dd>` +
       `<dt>预览场景</dt><dd><strong>${escapeHtml(purposeZh)}</strong>（${escapeHtml(purpose)}）` +
-      ` — 模拟该节点下次调模型时的组包结果，并非正在执行的节点</dd>` +
-      `<dt>总 token 预算</dt><dd>${escapeHtml(String(budget))}（约 64.8K 上限，各桶之和受此约束）</dd>` +
-      `<dt>绑定模型</dt><dd>${escapeHtml(model || "未记录（预览接口未绑定具体模型名）")}</dd>` +
+      ` — 模拟该节点下次调模型时的组包，非正在执行的节点</dd>` +
+      `<dt>本轮组包预算</dt><dd>${escapeHtml(String(budget))} tok（单次 prompt 上限）</dd>` +
+      `<dt>本轮组包估算</dt><dd>${escapeHtml(String(assembly))} tok（各桶保留之和）</dd>` +
       `<dt>最终消息条数</dt><dd>${escapeHtml(String(msgCount))} 条</dd>` +
-      `<dt>消息角色构成</dt><dd>${escapeHtml(roleSummary)}（按顺序统计，非重复粘贴）</dd>` +
+      `<dt>消息角色构成</dt><dd>${escapeHtml(roleSummary)}</dd>` +
       `</dl>`;
+  }
+
+  function countAssemblyTokens(buckets) {
+    if (!Array.isArray(buckets)) return 0;
+    return buckets.reduce((n, b) => n + (Number(b.final_tokens) || 0), 0);
   }
 
   function renderBuckets(comp) {
@@ -278,9 +336,10 @@
   function applyComposition(comp, meta) {
     const taskId = meta?.taskId || getTaskId();
     const purpose = meta?.purpose || purposeEl?.value || "reasoning";
+    const sessionMeta = meta?.session || null;
     if (hintEl) hintEl.hidden = Boolean(comp);
     renderBadge(comp);
-    renderSummary(comp, taskId, purpose);
+    renderSummary(comp, taskId, purpose, sessionMeta);
     renderBuckets(comp);
     renderKept(comp);
     renderItemList(compressedEl, comp?.compressed, compressedCountEl);
@@ -309,7 +368,22 @@
       return { error: `http_${res.status}`, detail: text.slice(0, 200) };
     }
     const body = await res.json();
-    return { composition: body.composition, purpose: body.purpose, taskId: body.task_id };
+    return {
+      composition: body.composition,
+      purpose: body.purpose,
+      taskId: body.task_id,
+      session: body.session || null,
+    };
+  }
+
+  function sessionMetaFromState(state) {
+    if (!state || typeof state !== "object") return null;
+    const tb = state.token_budget || {};
+    return {
+      model_name: "",
+      session_tokens_used: Number(tb.used) || 0,
+      session_token_limit: Number(tb.limit) || 0,
+    };
   }
 
   async function fetchStateComposition(taskId) {
@@ -321,29 +395,38 @@
     const body = await res.json();
     const view = body.sources?.merged || body;
     const state = view.state || view;
-    return compositionFromStatePayload(state);
+    const composition = compositionFromStatePayload(state);
+    if (!composition) return null;
+    return { composition, session: sessionMetaFromState(state) };
   }
 
   async function refreshPanel(options = {}) {
     if (refreshInFlight && !options.force) return;
     const taskId = (options.taskId || getTaskId() || "").trim();
     if (!taskId) {
+      renderSummary(null, "", purposeEl?.value || "reasoning", null);
       applyComposition(null, {});
       return;
     }
     const purpose = purposeEl?.value || "reasoning";
     refreshInFlight = true;
+    renderSummary(null, taskId, purpose, null, { loading: true });
     try {
       const result = await fetchComposition(taskId, purpose);
       if (result.error === "not_found") {
         applyComposition(null, { taskId, purpose });
+        renderSummary(null, taskId, purpose, null);
         if (compressStatusEl) compressStatusEl.textContent = "任务尚无状态";
         return;
       }
       if (result.error) {
         const fallback = await fetchStateComposition(taskId);
-        if (fallback) {
-          applyComposition(fallback, { taskId, purpose });
+        if (fallback?.composition) {
+          applyComposition(fallback.composition, {
+            taskId,
+            purpose,
+            session: fallback.session,
+          });
           return;
         }
         if (compressStatusEl) compressStatusEl.textContent = result.detail || "加载失败";
@@ -352,6 +435,7 @@
       applyComposition(result.composition, {
         taskId: result.taskId || taskId,
         purpose: result.purpose || purpose,
+        session: result.session,
       });
       if (compressStatusEl) compressStatusEl.textContent = "";
     } finally {
@@ -393,7 +477,11 @@
       }
       const data = await res.json();
       if (data.composition) {
-        applyComposition(data.composition, { taskId, purpose: purposeEl?.value || "reasoning" });
+        applyComposition(data.composition, {
+          taskId,
+          purpose: purposeEl?.value || "reasoning",
+          session: data.session,
+        });
       } else {
         await refreshPanel({ force: true });
       }
@@ -427,6 +515,10 @@
       if (isExpanded()) refreshPanel({ force: true });
     });
   }
+  if (scopeEl) {
+    scopeEl.addEventListener("change", renderScopeHint);
+  }
+  renderScopeHint();
   if (compressBtnEl) {
     compressBtnEl.addEventListener("click", () => runCompress());
   }

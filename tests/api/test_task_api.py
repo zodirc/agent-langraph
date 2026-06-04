@@ -107,6 +107,9 @@ def test_get_task_context_composition(isolated_stores, monkeypatch):
     assert body["task_id"] == state["task_id"]
     assert body["purpose"] == "planning"
     assert "composition" in body
+    assert "session" in body
+    assert "model_name" in body["session"]
+    assert "session_tokens_used" in body["session"]
 
 
 def test_post_task_context_compress(isolated_stores, monkeypatch):

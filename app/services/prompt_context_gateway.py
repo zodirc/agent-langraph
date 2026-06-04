@@ -513,14 +513,72 @@ def governed_mission_observation_context(state: AgentState | dict[str, Any]) -> 
     return governed
 
 
+def resolve_context_panel_meta(state: AgentState | dict[str, Any]) -> dict[str, Any]:
+    """Runtime model + cumulative session token usage for Web context panel."""
+    from app.services.llm_client import _resolve_model_name
+    from app.services.resource_budget import budget_context_from_state
+
+    raw = state if isinstance(state, dict) else dict(state)
+    tb = raw.get("token_budget") or {}
+    if not isinstance(tb, dict):
+        tb = {}
+    used = int(tb.get("used") or 0)
+    limit = int(tb.get("limit") or 0)
+    try:
+        model = _resolve_model_name(budget_context_from_state(raw))  # type: ignore[arg-type]
+    except Exception:
+        model = str(getattr(settings, "MODEL_NAME", "") or "")
+    return {
+        "model_name": model,
+        "session_tokens_used": used,
+        "session_token_limit": limit,
+    }
+
+
+def _enrich_composition_view(
+    composition: dict[str, Any],
+    *,
+    envelope: ContextEnvelope,
+    panel_meta: dict[str, Any],
+) -> dict[str, Any]:
+    out = dict(composition)
+    assembly_tokens = sum(int(a.final_tokens) for a in envelope.bucket_allocations)
+    model = str(panel_meta.get("model_name") or envelope.model_name or "")
+    out["model_name"] = model
+    out["token_budget_total"] = envelope.token_budget_total
+    out["assembly_tokens"] = assembly_tokens
+    out["session_tokens_used"] = int(panel_meta.get("session_tokens_used") or 0)
+    out["session_token_limit"] = int(panel_meta.get("session_token_limit") or 0)
+    trace = dict(out.get("trace") or {})
+    trace.update(
+        {
+            "model_name": model,
+            "token_budget_total": envelope.token_budget_total,
+            "assembly_tokens": assembly_tokens,
+            "session_tokens_used": out["session_tokens_used"],
+            "session_token_limit": out["session_token_limit"],
+        }
+    )
+    out["trace"] = trace
+    return out
+
+
 def build_prompt_composition_for_state(
     state: AgentState | dict[str, Any],
     *,
     purpose: ContextPurpose = "reasoning",
 ) -> dict[str, Any]:
     """On-demand prompt composition view (ADR §11.3)."""
-    envelope = build_context_envelope(state, purpose=purpose)
-    return envelope.trace.get("composition_view") or envelope.to_debug_dict()
+    panel_meta = resolve_context_panel_meta(state)
+    envelope = build_context_envelope(
+        state,
+        purpose=purpose,
+        model_name=str(panel_meta.get("model_name") or ""),
+    )
+    raw = envelope.trace.get("composition_view") or envelope.to_debug_dict()
+    if not isinstance(raw, dict):
+        raw = {}
+    return _enrich_composition_view(raw, envelope=envelope, panel_meta=panel_meta)
 
 
 def attach_context_trace_to_state(

@@ -561,11 +561,15 @@ def get_task_context_composition(
         "code_agent",
     }
     p = purpose if purpose in allowed else "reasoning"
+    from app.services.prompt_context_gateway import resolve_context_panel_meta
+
     composition = build_prompt_composition_for_state(state, purpose=p)  # type: ignore[arg-type]
+    session_meta = resolve_context_panel_meta(state)
     return {
         "task_id": task_id,
         "purpose": p,
         "composition": composition,
+        "session": session_meta,
     }
 
 
@@ -599,6 +603,12 @@ def post_task_context_compress(
         token_budget=body.token_budget,
     )
     get_state_store().save(updated)
+    from app.services.prompt_context_gateway import (
+        build_prompt_composition_for_state,
+        resolve_context_panel_meta,
+    )
+
+    composition = build_prompt_composition_for_state(updated, purpose="reasoning")  # type: ignore[arg-type]
     return {
         "task_id": task_id,
         "scope": body.scope,
@@ -606,7 +616,8 @@ def post_task_context_compress(
         "kept": len(envelope.items_kept),
         "dropped": len(envelope.items_dropped),
         "compressed": len(envelope.items_compressed),
-        "composition": envelope.trace.get("composition_view"),
+        "composition": composition,
+        "session": resolve_context_panel_meta(updated),
     }
 
 

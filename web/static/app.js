@@ -24,6 +24,7 @@ const flowOpenBtnEl = document.getElementById("flow-open-btn");
 const stateDebugBtnEl = document.getElementById("state-debug-btn");
 const historyListEl = document.getElementById("history-list");
 const historyRefreshBtnEl = document.getElementById("history-refresh-btn");
+const historyNewSessionBtnEl = document.getElementById("history-new-session-btn");
 const rightRailPaneEl = document.getElementById("right-rail-pane");
 const rightRailTabEl = document.getElementById("right-rail-tab");
 const rightRailPinEl = document.getElementById("right-rail-pin");
@@ -45,7 +46,7 @@ const stateDebugCloseBtnEl = document.getElementById("state-debug-close-btn");
 const stateDebugLiveEl = document.getElementById("state-debug-live");
 const stateDebugSourceTabsEl = document.getElementById("state-debug-source-tabs");
 const themeSelectEl = document.getElementById("theme-select");
-const commandSuggestionsEl = document.getElementById("command-suggestions");
+const commandSlashMenuEl = document.getElementById("command-slash-menu");
 
 let running = false;
 let activeTaskId = null;
@@ -119,26 +120,27 @@ const POPUP_VIEWER_FONT_MIN = 10;
 const POPUP_VIEWER_FONT_MAX = 28;
 const POPUP_VIEWER_FONT_DEFAULT = 13;
 const COMMAND_SUGGESTIONS = [
-  "/help",
-  "/new",
-  "/clear",
-  "/confirm",
-  "/resume",
-  "/stop",
-  "/stop-all",
-  "/append ",
-  "/session",
-  "/history",
-  "/status ",
-  "/audit ",
-  "/result ",
-  "/approve ",
-  "/reject ",
-  "/supervisor ",
-  "/risk high ",
-  "/login ",
-  "/logout",
+  { cmd: "/help", hint: "显示命令帮助" },
+  { cmd: "/new", hint: "开启新会话" },
+  { cmd: "/clear", hint: "清空终端输出" },
+  { cmd: "/confirm", hint: "确认并 resume（confirm:true）" },
+  { cmd: "/resume", hint: "继续暂停的任务" },
+  { cmd: "/stop", hint: "停止当前任务" },
+  { cmd: "/stop-all", hint: "停止所有 in-flight 任务" },
+  { cmd: "/append ", hint: "向运行中任务追加消息（不抢占）" },
+  { cmd: "/session", hint: "打印当前 session_id" },
+  { cmd: "/history", hint: "在终端列出最近任务" },
+  { cmd: "/status ", hint: "查看任务状态（后跟 task_id）" },
+  { cmd: "/audit ", hint: "查看审计日志" },
+  { cmd: "/result ", hint: "查看任务结果" },
+  { cmd: "/approve ", hint: "审批通过" },
+  { cmd: "/reject ", hint: "审批拒绝" },
+  { cmd: "/supervisor ", hint: "Supervisor 任务" },
+  { cmd: "/risk high ", hint: "高风险任务运行" },
+  { cmd: "/login ", hint: "登录获取 JWT" },
+  { cmd: "/logout", hint: "退出登录" },
 ];
+let slashMenuActiveIndex = -1;
 const FLOW_PREFERRED_ORDER = [
   "planning",
   "retrieval",
@@ -741,7 +743,18 @@ function updateSessionBadge(sessionId) {
   const id = sessionId || getSessionId();
   const short = `${id.slice(0, 8)}…`;
   sessionBadgeEl.textContent = `session ${short}`;
-  sessionBadgeEl.title = `会话 ID（完整）: ${id}\n/new 可开启新会话`;
+  sessionBadgeEl.title = `会话 ID（完整）: ${id}\n点击查看；新会话请用侧栏「新会话」或 /new`;
+}
+
+function showSessionIdInfo() {
+  const id = getSessionId();
+  appendLine(`session_id: ${id}`, "system");
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(id).then(
+      () => appendLine("（session_id 已复制到剪贴板）", "system"),
+      () => {}
+    );
+  }
 }
 
 function applyTheme(theme) {
@@ -766,14 +779,26 @@ function applyTheme(theme) {
   }
 }
 
-function startNewSession() {
+function requestNewSession(sourceLabel) {
+  if (running && activeTaskId) {
+    appendLine("当前有任务运行中，无法新建会话。请先 Stop 或 /stop。", "error");
+    return null;
+  }
+  sessionHasInFlightMission = false;
+  return startNewSession(sourceLabel);
+}
+
+function startNewSession(sourceLabel) {
   const id = newSessionId();
   localStorage.setItem(SESSION_KEY, id);
   pendingNewSession = true;
+  activeTaskId = null;
   sessionFilesCurrentPath = ".";
   updateSessionBadge(id);
   clearScreen();
-  appendLine(`new session: ${id.slice(0, 8)}… (server task isolated)`, "system");
+  const via = sourceLabel ? ` (${sourceLabel})` : "";
+  appendLine(`new session: ${id.slice(0, 8)}… (server task isolated)${via}`, "system");
+  refreshFlowPanel(id);
   refreshHistorySidebar();
   refreshSessionFilesPane();
   skillsRailEnabled.clear();
@@ -863,7 +888,10 @@ function escapeAttr(value) {
 
 function selectHistorySession(taskId) {
   if (!taskId) return;
-  if (getSessionId() === taskId) return;
+  if (getSessionId() === taskId) {
+    requestNewSession("再次点击当前会话");
+    return;
+  }
   if (running && activeTaskId && activeTaskId !== taskId) {
     appendLine("当前有任务运行中，无法切换会话。请先 /stop。", "error");
     return;
@@ -937,7 +965,8 @@ async function refreshHistorySidebar() {
     if (seq !== historyRefreshSeq) return;
     const tasks = Array.isArray(data.tasks) ? data.tasks : [];
     if (!tasks.length) {
-      renderHistorySidebarError("暂无历史会话。");
+      historyListEl.innerHTML = `<p class="flow-empty">暂无历史会话。</p>
+        <button type="button" class="flow-btn flow-btn-primary history-new-inline" id="history-new-session-inline">开启新会话</button>`;
       return;
     }
     const current = getSessionId();
@@ -3220,19 +3249,81 @@ function formatNodeEvent(payload) {
   }
 }
 
-function refreshCommandSuggestions(value) {
-  if (!commandSuggestionsEl) return;
-  const input = String(value || "");
-  const normalized = input.trimStart().toLowerCase();
-  if (!normalized.startsWith("/")) {
-    commandSuggestionsEl.innerHTML = "";
+function getSlashCommandLine(value) {
+  const raw = String(value || "");
+  const line = raw.split("\n")[0];
+  const trimmed = line.trimStart();
+  if (!trimmed.startsWith("/")) return null;
+  if (raw.includes("\n") && raw.trim() !== trimmed) return null;
+  return trimmed;
+}
+
+function filterSlashCommands(line) {
+  const normalized = line.toLowerCase();
+  const filtered = COMMAND_SUGGESTIONS.filter((entry) => entry.cmd.toLowerCase().startsWith(normalized));
+  return filtered.length ? filtered : COMMAND_SUGGESTIONS;
+}
+
+function hideSlashCommandMenu() {
+  slashMenuActiveIndex = -1;
+  if (!commandSlashMenuEl) return;
+  commandSlashMenuEl.hidden = true;
+  commandSlashMenuEl.replaceChildren();
+  if (inputEl) inputEl.setAttribute("aria-expanded", "false");
+}
+
+function applySlashCommand(cmd) {
+  if (!inputEl) return;
+  inputEl.value = cmd;
+  hideSlashCommandMenu();
+  autoResizeCommandInput();
+  inputEl.focus();
+}
+
+function renderSlashCommandMenu(value) {
+  if (!commandSlashMenuEl || !inputEl) return;
+  const line = getSlashCommandLine(value);
+  if (!line) {
+    hideSlashCommandMenu();
     return;
   }
-  const filtered = COMMAND_SUGGESTIONS.filter((cmd) => cmd.startsWith(normalized)).slice(0, 10);
-  const candidates = filtered.length ? filtered : COMMAND_SUGGESTIONS.slice(0, 10);
-  commandSuggestionsEl.innerHTML = candidates
-    .map((cmd) => `<option value="${escapeAttr(cmd)}"></option>`)
+  const candidates = filterSlashCommands(line);
+  if (!candidates.length) {
+    hideSlashCommandMenu();
+    return;
+  }
+  if (slashMenuActiveIndex >= candidates.length) slashMenuActiveIndex = candidates.length - 1;
+  if (slashMenuActiveIndex < 0 && candidates.length) slashMenuActiveIndex = 0;
+
+  commandSlashMenuEl.hidden = false;
+  inputEl.setAttribute("aria-expanded", "true");
+  commandSlashMenuEl.innerHTML = candidates
+    .map((entry, idx) => {
+      const selected = idx === slashMenuActiveIndex ? " is-selected" : "";
+      return `<button type="button" class="command-slash-item${selected}" role="option" data-slash-cmd="${escapeAttr(entry.cmd)}" aria-selected="${idx === slashMenuActiveIndex}">
+        <span class="command-slash-cmd">${escapeHtml(entry.cmd)}</span>
+        <span class="command-slash-hint">${escapeHtml(entry.hint)}</span>
+      </button>`;
+    })
     .join("");
+}
+
+function refreshCommandSuggestions(value) {
+  slashMenuActiveIndex = -1;
+  renderSlashCommandMenu(value);
+}
+
+function moveSlashMenuSelection(delta, value) {
+  const line = getSlashCommandLine(value);
+  if (!line || !commandSlashMenuEl || commandSlashMenuEl.hidden) return false;
+  const candidates = filterSlashCommands(line);
+  if (!candidates.length) return false;
+  if (slashMenuActiveIndex < 0) slashMenuActiveIndex = 0;
+  else slashMenuActiveIndex = (slashMenuActiveIndex + delta + candidates.length) % candidates.length;
+  renderSlashCommandMenu(value);
+  const selected = commandSlashMenuEl.querySelector(".command-slash-item.is-selected");
+  selected?.scrollIntoView({ block: "nearest" });
+  return true;
 }
 
 /**
@@ -3706,9 +3797,9 @@ async function handleCommand(raw) {
     return;
   }
   if (text === "/new") {
-    sessionHasInFlightMission = false;
-    startNewSession();
-    appendLine("tip: use /stop-all if you want to stop old in-flight missions", "system");
+    if (requestNewSession("/new")) {
+      appendLine("tip: use /stop-all if you want to stop old in-flight missions", "system");
+    }
     return;
   }
   if (text === "/clear") {
@@ -3871,13 +3962,46 @@ if (inputEl) {
     refreshCommandSuggestions(inputEl.value);
   });
   inputEl.addEventListener("keydown", (e) => {
+    const menuOpen = commandSlashMenuEl && !commandSlashMenuEl.hidden;
+    if (menuOpen && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault();
+      moveSlashMenuSelection(e.key === "ArrowDown" ? 1 : -1, inputEl.value);
+      return;
+    }
+    if (menuOpen && e.key === "Tab") {
+      e.preventDefault();
+      const selected = commandSlashMenuEl.querySelector(".command-slash-item.is-selected");
+      const cmd = selected?.getAttribute("data-slash-cmd");
+      if (cmd) applySlashCommand(cmd);
+      return;
+    }
+    if (e.key === "Escape" && menuOpen) {
+      e.preventDefault();
+      hideSlashCommandMenu();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      hideSlashCommandMenu();
       formEl.requestSubmit();
     }
   });
   autoResizeCommandInput();
 }
+
+if (commandSlashMenuEl) {
+  commandSlashMenuEl.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-slash-cmd]");
+    if (!btn) return;
+    applySlashCommand(String(btn.getAttribute("data-slash-cmd") || ""));
+  });
+}
+
+document.addEventListener("click", (ev) => {
+  if (!commandSlashMenuEl || commandSlashMenuEl.hidden) return;
+  if (ev.target.closest(".command-input-wrap")) return;
+  hideSlashCommandMenu();
+});
 
 if (stopBtnEl) {
   stopBtnEl.addEventListener("click", async () => {
@@ -3961,8 +4085,25 @@ if (historyRefreshBtnEl) {
   });
 }
 
+if (historyNewSessionBtnEl) {
+  historyNewSessionBtnEl.addEventListener("click", () => {
+    requestNewSession("侧栏");
+  });
+}
+
+if (sessionBadgeEl) {
+  sessionBadgeEl.addEventListener("click", () => {
+    showSessionIdInfo();
+  });
+}
+
 if (historyListEl) {
   historyListEl.addEventListener("click", async (ev) => {
+    const newInline = ev.target.closest("#history-new-session-inline");
+    if (newInline) {
+      requestNewSession("侧栏");
+      return;
+    }
     const deleteBtn = ev.target.closest("[data-history-delete]");
     if (deleteBtn) {
       ev.stopPropagation();

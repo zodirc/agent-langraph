@@ -45,7 +45,15 @@ context_governance:
 | GET | `/tasks/{id}/context-composition?purpose=writing` | 按需 composition view |
 | POST | `/tasks/{id}/context/compress` | 受策略约束的手动压缩 `{scope, token_budget?}` |
 
-`scope`: `transcript` | `all_compressible` | `aggressive`
+`scope`（手动压缩）:
+
+| scope | 含义 |
+|-------|------|
+| `transcript` | 压缩 `conversation_history`（语义摘要或字符裁剪） |
+| `all_compressible` | 当前同 transcript；规划上含可压缩的工作记忆/工具输出等 |
+| `aggressive` | 先压历史，再以 `summarization` 策略、更紧预算组包预览 |
+
+`GET …/context-composition` 与压缩接口均返回 `session.model_name`、`session.session_tokens_used`（任务 `token_budget.used` 累计）。
 
 ## Web UI（对话页内嵌，非独立导航）
 

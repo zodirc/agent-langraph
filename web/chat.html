@@ -6,7 +6,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/static/favicon.svg" />
   <title>对话 — Agent Runtime</title>
-  <link rel="stylesheet" href="/static/terminal.css?v=ui-24" />
+  <link rel="stylesheet" href="/static/terminal.css?v=ui-26" />
   <link rel="stylesheet" href="/static/platform.css?v=ui-22" />
 </head>
 <body class="platform-shell chat-page-shell" data-active-page="chat">
@@ -63,12 +63,16 @@
                   </select>
                 </label>
               </div>
+              <section id="ctx-gov-summary" class="ctx-gov-summary-panel" aria-label="会话摘要">
+                <h4 class="ctx-gov-summary-title">会话摘要</h4>
+                <div id="ctx-gov-summary-body" class="ctx-gov-summary-body">
+                  <p class="ctx-gov-empty">展开后加载…</p>
+                </div>
+              </section>
               <div id="ctx-gov-body" class="ctx-gov-body">
                 <p id="ctx-gov-hint" class="ctx-gov-hint">
-                  说明：这里展示的是<strong>「若此刻以所选场景调用模型，会把哪些信息塞进 prompt」</strong>的模拟结果，不是聊天窗口里你看到的对话原文。
-                  按钮上的数字表示<strong>保留片段数</strong>（如「保留16」= 16 条上下文片段进入模型；「压/丢」仅在发生压缩或丢弃时出现）。
+                  说明：以下为<strong>所选场景</strong>下的 prompt 组包模拟（非聊天原文）。按钮数字 = 保留/压缩/丢弃片段数。
                 </p>
-                <div id="ctx-gov-summary" class="ctx-gov-summary" hidden></div>
                 <div id="ctx-gov-buckets" class="ctx-gov-buckets" aria-label="桶预算"></div>
                 <details class="ctx-gov-details" id="ctx-gov-kept-details">
                   <summary>保留项（按 bucket）</summary>
@@ -82,21 +86,25 @@
                   <summary>丢弃项 <span id="ctx-gov-dropped-count" class="ctx-gov-count"></span></summary>
                   <ul id="ctx-gov-dropped" class="ctx-gov-ul"></ul>
                 </details>
-                <footer class="ctx-gov-compress-row">
+                <footer class="ctx-gov-compress-block">
+                  <p class="ctx-gov-section-cap">手动压缩</p>
                   <label class="ctx-gov-label">
                     压缩 scope
-                    <select id="ctx-gov-scope" class="ctx-gov-select">
-                      <option value="transcript">transcript</option>
-                      <option value="all_compressible">all_compressible</option>
-                      <option value="aggressive">aggressive</option>
+                    <select id="ctx-gov-scope" class="ctx-gov-select" title="选择要压缩的范围">
+                      <option value="transcript">transcript — 对话历史</option>
+                      <option value="all_compressible">all_compressible — 可压缩项</option>
+                      <option value="aggressive">aggressive — 强力压缩</option>
                     </select>
                   </label>
+                  <p id="ctx-gov-scope-hint" class="ctx-gov-scope-hint"></p>
+                  <div class="ctx-gov-compress-row">
                   <label class="ctx-gov-label">
                     token_budget
                     <input type="number" id="ctx-gov-token-budget" class="ctx-gov-input-num" min="1024" max="64800" step="512" placeholder="64800" />
                   </label>
                   <button type="button" id="ctx-gov-compress-btn" class="flow-btn ctx-gov-compress-btn">执行压缩</button>
                   <span id="ctx-gov-compress-status" class="ctx-gov-status-msg" role="status"></span>
+                  </div>
                 </footer>
               </div>
             </div>
@@ -107,7 +115,7 @@
             </select>
             <span id="skill-active-badge" class="badge badge-skill" title="下一条任务使用的 Skill" hidden>—</span>
             <span id="terminal-run-status" class="terminal-run-status" hidden></span>
-            <span id="session-badge" class="badge badge-session" title="当前会话 ID">session …</span>
+            <button type="button" id="session-badge" class="badge badge-session badge-session-btn" title="点击查看完整会话 ID">session …</button>
             <button id="state-debug-btn" type="button" class="flow-btn" title="查看当前会话 AgentState">State</button>
             <button id="flow-open-btn" type="button" class="flow-btn">Flow</button>
           </div>
@@ -117,15 +125,20 @@
         </div>
         <form id="command-form" class="terminal-input-row" autocomplete="off">
           <label for="command-input" class="prompt">&gt;</label>
-          <textarea
-            id="command-input"
-            rows="1"
-            placeholder="输入任务目标，或 /help 查看命令（Shift+Enter 换行）"
-            autofocus
-          ></textarea>
+          <div class="command-input-wrap">
+            <textarea
+              id="command-input"
+              rows="1"
+              placeholder="输入任务目标，或输入 / 查看命令（Shift+Enter 换行）"
+              autofocus
+              autocomplete="off"
+              aria-autocomplete="list"
+              aria-controls="command-slash-menu"
+            ></textarea>
+            <div id="command-slash-menu" class="command-slash-menu" role="listbox" hidden></div>
+          </div>
           <button id="stop-btn" type="button" class="stop-btn" disabled>Stop</button>
         </form>
-        <datalist id="command-suggestions"></datalist>
       </div>
     </div>
     <aside class="right-rail-pane" id="right-rail-pane" aria-label="历史会话与会话文件">
@@ -144,7 +157,10 @@
         <section id="history-panel" class="right-rail-panel is-active" data-panel="history" role="tabpanel">
           <div class="history-head">
             <h3 class="history-title">历史会话</h3>
-            <button id="history-refresh-btn" type="button" class="flow-btn">刷新</button>
+            <div class="history-head-actions">
+              <button id="history-new-session-btn" type="button" class="flow-btn flow-btn-primary">新会话</button>
+              <button id="history-refresh-btn" type="button" class="flow-btn">刷新</button>
+            </div>
           </div>
           <div class="history-list" id="history-list">
             <p class="flow-empty">暂无历史会话。</p>
@@ -209,7 +225,7 @@
   <script src="/static/platform-nav.js?v=6"></script>
   <script src="/static/platform-auth.js?v=7"></script>
   <script src="/static/skill_form.js?v=1"></script>
-  <script src="/static/app.js?v=ui-25"></script>
-  <script src="/static/context_governance_panel.js?v=3"></script>
+  <script src="/static/app.js?v=ui-26"></script>
+  <script src="/static/context_governance_panel.js?v=5"></script>
 </body>
 </html>
