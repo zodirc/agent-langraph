@@ -709,6 +709,12 @@ def invoke_structured(
     trace_state: Any | None = None,
 ) -> dict[str, Any]:
     from app.services.resource_budget import BudgetExceededError
+    from app.services.prompt_context_gateway import apply_governance_to_user_content
+
+    if isinstance(trace_state, dict):
+        user_content = apply_governance_to_user_content(
+            purpose, user_content, trace_state
+        )
 
     if budget_ctx is not None:
         budget_ctx.before_invoke(purpose, system_prompt, user_content)
@@ -814,6 +820,12 @@ def stream_structured(
     stream_phase: str = "",
 ) -> Iterator[str]:
     from app.services.resource_budget import BudgetExceededError
+    from app.services.prompt_context_gateway import apply_governance_to_user_content
+
+    if isinstance(trace_state, dict):
+        user_content = apply_governance_to_user_content(
+            purpose, user_content, trace_state
+        )
 
     if budget_ctx is not None:
         budget_ctx.before_invoke(purpose, system_prompt, user_content)

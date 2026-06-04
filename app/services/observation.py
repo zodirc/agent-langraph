@@ -115,6 +115,14 @@ def attach_observation(state: AgentState) -> AgentState:
 
 def reasoning_context_from_observation(state: AgentState) -> dict[str, Any]:
     """Build reasoning context using observation as ground truth."""
+    from app.services.prompt_context_gateway import (
+        context_governance_enabled,
+        governed_mission_observation_context,
+    )
+
+    if context_governance_enabled():
+        return governed_mission_observation_context(state)
+
     payload = state.get("input_payload") or {}
     obs = state.get("observation") or build_observation(state)
     memory_hits = state.get("memory_hits") or []

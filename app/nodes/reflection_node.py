@@ -92,7 +92,12 @@ def reflection_node(state: AgentState) -> AgentState:
         }
         user_json = json.dumps(payload, ensure_ascii=False)
         try:
-            result = invoke_structured("reflection", REFLECTION_SYSTEM, user_json)
+            result = invoke_structured(
+                "reflection",
+                REFLECTION_SYSTEM,
+                user_json,
+                trace_state=state,
+            )
             reflection = {
                 "critique": str(result.get("critique", "")),
                 "retry_reasoning": bool(result.get("retry_reasoning", False)),

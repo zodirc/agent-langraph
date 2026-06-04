@@ -379,19 +379,39 @@ def report_planning_input(state: dict[str, Any]) -> None:
         f"会话轮次: {state.get('session_turn', '?')}",
         f"风险: {payload.get('risk_level', 'LOW')}",
     ]
-    from app.services.conversation_context import (
-        conversation_history_for_llm,
-        conversation_history_from_state,
-    )
+    trace_ctx = state.get("trace_context") or {}
+    composition = trace_ctx.get("last_context_composition")
+    if composition:
+        lines.append("上下文治理 (ContextEnvelope):")
+        lines.append(f"  kept: {composition.get('kept_count', '?')}")
+        lines.append(f"  dropped: {composition.get('dropped_count', '?')}")
+        lines.append(f"  compressed: {composition.get('compressed_count', '?')}")
+        by_bucket = composition.get("items_by_bucket") or {}
+        if by_bucket:
+            lines.append(f"  buckets: {', '.join(sorted(by_bucket.keys()))}")
+    else:
+        from app.services.prompt_context_gateway import (
+            context_governance_enabled,
+            build_prompt_composition_for_state,
+        )
 
-    history = conversation_history_for_llm(conversation_history_from_state(state))
-    if history:
-        lines.append(f"对话历史: {len(history)} 条")
-        if trace_verbose() and history:
-            last = history[-1]
-            role = last.get("role", "?")
-            content = str(last.get("content", ""))[:160]
-            lines.append(f"  最近一条 [{role}]: {content}")
+        if context_governance_enabled():
+            comp = build_prompt_composition_for_state(state, purpose="planning")
+            lines.append(f"对话历史(治理): kept={comp.get('kept_count', '?')}")
+        else:
+            from app.services.conversation_context import (
+                conversation_history_for_llm,
+                conversation_history_from_state,
+            )
+
+            history = conversation_history_for_llm(conversation_history_from_state(state))
+            if history:
+                lines.append(f"对话历史: {len(history)} 条")
+                if trace_verbose() and history:
+                    last = history[-1]
+                    role = last.get("role", "?")
+                    content = str(last.get("content", ""))[:160]
+                    lines.append(f"  最近一条 [{role}]: {content}")
     report_block("planning", "input", "\n".join(lines), field="input")
 
 

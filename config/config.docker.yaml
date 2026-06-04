@@ -123,6 +123,10 @@ session:
       min_confidence: 0.55
       max_goal_chars: 2000
 
+context_governance:
+  enabled: true
+  default_token_budget: 64800
+
 performance:
   fast_reasoning_enabled: false
   skip_retrieval_when_no_tools: true

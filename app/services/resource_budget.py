@@ -129,3 +129,22 @@ def init_task_budget(state: AgentState) -> AgentState:
 
 def budget_context_from_state(state: AgentState) -> BudgetContext:
     return BudgetContext.from_state(state)
+
+
+def resolve_prompt_token_budget(
+    state: AgentState | dict[str, Any],
+    *,
+    policy_default: int,
+) -> int:
+    """
+    Unify task BudgetContext with Context Governance envelope budget (ADR §14).
+    """
+    from app.config.settings import settings
+
+    ctx = BudgetContext.from_state(state)  # type: ignore[arg-type]
+    gov_default = int(getattr(settings, "CONTEXT_GOVERNANCE_DEFAULT_BUDGET", 0) or 0)
+    limit = ctx.token_limit or gov_default or policy_default
+    if limit <= 0:
+        return policy_default
+    remaining = max(512, limit - ctx.tokens_used)
+    return min(policy_default, remaining)

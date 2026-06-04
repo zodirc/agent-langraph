@@ -282,13 +282,20 @@ def apply_writing_phase_from_decision(state: AgentState) -> AgentState:
     return merge_state(state, input_payload={**payload, "writing_intent": intent})
 
 
-def _invoke_phase_structured(system: str, user_payload: dict[str, Any]) -> dict[str, Any]:
+def _invoke_phase_structured(
+    state: AgentState,
+    system: str,
+    user_payload: dict[str, Any],
+    *,
+    purpose: str = "reviewing",
+) -> dict[str, Any]:
     from app.services.llm_client import invoke_structured
 
     return invoke_structured(
-        "reflection",
+        purpose,
         system,
         json.dumps(user_payload, ensure_ascii=False),
+        trace_state=state,
     )
 
 
@@ -353,6 +360,7 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
 
     if action == "consistency_check":
         result = _invoke_phase_structured(
+            state,
             "Return JSON: issues (list), severity (low|medium|high), pass (bool), summary (string).",
             {
                 "phase": "consistency_check",
@@ -379,8 +387,10 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
                 prev_chapter_text=prev_text,
                 outline_slice=outline_slice or "",
                 story_bible_excerpt=bible,
+                trace_state=state,
             )
             llm_review = _invoke_phase_structured(
+                state,
                 "Return JSON: issues (list of strings), pass (bool), "
                 "summary (string), polish_recommended (bool).",
                 {
@@ -473,6 +483,7 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
 
             before_bytes = body_path.stat().st_size if body_path.exists() else 0
             polish = _invoke_phase_structured(
+                state,
                 "Return JSON with key polished_text: full revised chapter in Chinese, same header, "
                 "fix issues only, keep plot beats.",
                 {
@@ -509,6 +520,7 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
                 prev_chapter_text=prev_text,
                 outline_slice=outline_slice or "",
                 story_bible_excerpt=bible,
+                trace_state=state,
             )
             gate_rubric = rubric.to_dict()
             gate_passed = rubric_passes_gate(rubric)
@@ -557,6 +569,7 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
             story_bible=bible,
             outcome_use_llm=True,
             persist=True,
+            trace_state=state,
         )
         sync_story_bible_from_outcome(task_id, outcome)
         from app.services.writing_knowledge_index import upsert_chapter_facts_for_outcome

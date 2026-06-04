@@ -181,6 +181,50 @@ class MetricsService:
                     buckets=(0.1, 0.25, 0.4, 0.5, 0.6, 0.75, 0.9, 1.0),
                     **prom_kwargs,
                 )
+                self._histograms["context_bucket_tokens"] = Histogram(
+                    "agent_context_bucket_tokens",
+                    "Final tokens per context bucket after governance",
+                    ["purpose", "bucket"],
+                    buckets=(50, 200, 500, 1000, 2000, 4000, 8000, 16000, 32000),
+                    **prom_kwargs,
+                )
+                self._histograms["context_assembly_latency_ms"] = Histogram(
+                    "agent_context_assembly_latency_ms",
+                    "Context governance assembly latency (ms)",
+                    ["purpose"],
+                    buckets=(1, 5, 10, 25, 50, 100, 250, 500),
+                    **prom_kwargs,
+                )
+                self._prometheus["context_drop_total"] = Counter(
+                    "agent_context_drop_total",
+                    "Context items dropped by governance",
+                    ["purpose", "bucket", "reason"],
+                    **prom_kwargs,
+                )
+                self._prometheus["context_compress_total"] = Counter(
+                    "agent_context_compress_total",
+                    "Context items compressed by governance",
+                    ["purpose", "bucket", "method"],
+                    **prom_kwargs,
+                )
+                self._prometheus["context_overflow_prevented_total"] = Counter(
+                    "agent_context_overflow_prevented_total",
+                    "Global budget overflow prevented",
+                    ["purpose"],
+                    **prom_kwargs,
+                )
+                self._prometheus["context_recall_total"] = Counter(
+                    "agent_context_recall_total",
+                    "Context items recalled from registry/sources",
+                    ["source"],
+                    **prom_kwargs,
+                )
+                self._prometheus["context_quality_regression_total"] = Counter(
+                    "agent_context_quality_regression_total",
+                    "Critical context dropped (quality regression signal)",
+                    ["purpose"],
+                    **prom_kwargs,
+                )
                 self._prometheus["react_loop_outcomes"] = Counter(
                     "agent_react_loop_outcomes_total",
                     "SRDL loop completions",
@@ -583,6 +627,73 @@ class MetricsService:
         if not samples:
             return None
         return sum(samples) / len(samples)
+
+    def observe_context_bucket_tokens(
+        self, purpose: str, bucket: str, tokens: float
+    ) -> None:
+        key = f"context_bucket_{purpose}_{bucket}"
+        with self._lock:
+            self._counters[key] = float(tokens)
+        if "context_bucket_tokens" in self._histograms:
+            self._histograms["context_bucket_tokens"].labels(
+                purpose=(purpose or "unknown")[:24],
+                bucket=(bucket or "unknown")[:24],
+            ).observe(float(tokens))
+
+    def inc_context_drop(self, purpose: str, bucket: str, reason: str) -> None:
+        key = f"context_drop_{purpose}_{bucket}"
+        with self._lock:
+            self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "context_drop_total" in self._prometheus:
+            self._prometheus["context_drop_total"].labels(
+                purpose=(purpose or "unknown")[:24],
+                bucket=(bucket or "unknown")[:24],
+                reason=(reason or "unknown")[:32],
+            ).inc()
+
+    def inc_context_compress(self, purpose: str, bucket: str, method: str) -> None:
+        key = f"context_compress_{purpose}_{bucket}_{method}"
+        with self._lock:
+            self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "context_compress_total" in self._prometheus:
+            self._prometheus["context_compress_total"].labels(
+                purpose=(purpose or "unknown")[:24],
+                bucket=(bucket or "unknown")[:24],
+                method=(method or "unknown")[:24],
+            ).inc()
+
+    def inc_context_overflow_prevented(self, purpose: str) -> None:
+        key = f"context_overflow_prevented_{purpose}"
+        with self._lock:
+            self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "context_overflow_prevented_total" in self._prometheus:
+            self._prometheus["context_overflow_prevented_total"].labels(
+                purpose=(purpose or "unknown")[:24],
+            ).inc()
+
+    def observe_context_assembly_latency_ms(self, purpose: str, elapsed_ms: float) -> None:
+        if "context_assembly_latency_ms" in self._histograms:
+            self._histograms["context_assembly_latency_ms"].labels(
+                purpose=(purpose or "unknown")[:24],
+            ).observe(max(0.0, float(elapsed_ms)))
+
+    def inc_context_recall(self, source: str, count: int = 1) -> None:
+        key = f"context_recall_{source}"
+        with self._lock:
+            self._counters[key] = self._counters.get(key, 0) + max(1, int(count))
+        if self._prometheus and "context_recall_total" in self._prometheus:
+            self._prometheus["context_recall_total"].labels(
+                source=(source or "unknown")[:24],
+            ).inc(max(1, int(count)))
+
+    def inc_context_quality_regression(self, purpose: str) -> None:
+        key = f"context_quality_regression_{purpose}"
+        with self._lock:
+            self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "context_quality_regression_total" in self._prometheus:
+            self._prometheus["context_quality_regression_total"].labels(
+                purpose=(purpose or "unknown")[:24],
+            ).inc()
 
     def observe_rag_rerank_latency(self, seconds: float, *, backend: str = "lexical") -> None:
         if "rag_rerank_latency" not in self._histograms:

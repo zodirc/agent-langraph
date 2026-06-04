@@ -730,6 +730,14 @@ class Settings:
             ctx_compress.get("min_ratio", 0.5)
         )
 
+        ctx_gov = raw.get("context_governance", {})
+        if not isinstance(ctx_gov, dict):
+            ctx_gov = {}
+        self.CONTEXT_GOVERNANCE_ENABLED = _coerce_bool(ctx_gov.get("enabled", True))
+        self.CONTEXT_GOVERNANCE_DEFAULT_BUDGET = int(
+            ctx_gov.get("default_token_budget", 64800)
+        )
+
         self.CHECKPOINT_CORRUPTION_DETECTION_ENABLED = _coerce_bool(
             checkpoint_cfg.get("corruption_detection_enabled", True)
         )

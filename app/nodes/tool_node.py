@@ -173,6 +173,9 @@ def tool_execution_node(state: AgentState) -> AgentState:
                 },
             ),
         )
+        from app.services.context_registry import persist_tool_context
+
+        updated = persist_tool_context(updated, results)
         for event_type, subject, detail in pending_events:
             updated = record_turn_event(
                 updated,

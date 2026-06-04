@@ -521,6 +521,11 @@ context_compress:
   summary_max_chars: 1200
   min_ratio: 0.5   # CI gate: mean compression ratio must be >= this for long histories
 
+# ADR: docs/ADR_CONTEXT_GOVERNANCE.md — unified prompt context gateway
+context_governance:
+  enabled: true
+  default_token_budget: 64800
+
 rag:
   chunk_enabled: true
   domains: [project_rules, story_bible, outline, chapter_facts, external_reference]

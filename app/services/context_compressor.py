@@ -159,7 +159,12 @@ def build_semantic_context_summary(
                 },
                 ensure_ascii=False,
             )[:16000]
-            result = invoke_structured("summarization", CONTEXT_SUMMARY_SYSTEM, user)
+            result = invoke_structured(
+                "summarization",
+                CONTEXT_SUMMARY_SYSTEM,
+                user,
+                trace_state=state if isinstance(state, dict) else None,
+            )
             keep = settings.CONTEXT_COMPRESS_KEEP_RECENT_TURNS
             return SemanticContextSummary(
                 goal=str(result.get("goal") or _extract_goal(state, history)).strip(),

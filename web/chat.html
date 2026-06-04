@@ -6,7 +6,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/static/favicon.svg" />
   <title>对话 — Agent Runtime</title>
-  <link rel="stylesheet" href="/static/terminal.css?v=ui-22" />
+  <link rel="stylesheet" href="/static/terminal.css?v=ui-24" />
   <link rel="stylesheet" href="/static/platform.css?v=ui-22" />
 </head>
 <body class="platform-shell chat-page-shell" data-active-page="chat">
@@ -42,6 +42,65 @@
           <span class="dot yellow"></span>
           <span class="dot green"></span>
           <span class="title">对话</span>
+          <div id="context-governance-panel" class="ctx-gov-anchor is-collapsed" aria-label="上下文治理观测">
+            <button type="button" id="ctx-gov-toggle" class="ctx-gov-trigger flow-btn" aria-expanded="false" aria-controls="ctx-gov-dropdown" title="展开/收起上下文治理">
+              上下文
+              <span id="ctx-gov-badge" class="ctx-gov-badge-inline">—</span>
+            </button>
+            <div id="ctx-gov-dropdown" class="ctx-gov-dropdown">
+              <div class="ctx-gov-dropdown-toolbar">
+                <label class="ctx-gov-label">
+                  预览场景
+                  <select id="ctx-gov-purpose" class="ctx-gov-select" title="选择要预览的节点类型（不同节点组包策略不同）">
+                    <option value="reasoning">推理 reasoning</option>
+                    <option value="planning">规划 planning</option>
+                    <option value="writing">写作 writing</option>
+                    <option value="reviewing">审阅 reviewing</option>
+                    <option value="reflection">反思 reflection</option>
+                    <option value="routing">路由 routing</option>
+                    <option value="summarization">摘要 summarization</option>
+                    <option value="code_agent">代码 code_agent</option>
+                  </select>
+                </label>
+              </div>
+              <div id="ctx-gov-body" class="ctx-gov-body">
+                <p id="ctx-gov-hint" class="ctx-gov-hint">
+                  说明：这里展示的是<strong>「若此刻以所选场景调用模型，会把哪些信息塞进 prompt」</strong>的模拟结果，不是聊天窗口里你看到的对话原文。
+                  按钮上的数字表示<strong>保留片段数</strong>（如「保留16」= 16 条上下文片段进入模型；「压/丢」仅在发生压缩或丢弃时出现）。
+                </p>
+                <div id="ctx-gov-summary" class="ctx-gov-summary" hidden></div>
+                <div id="ctx-gov-buckets" class="ctx-gov-buckets" aria-label="桶预算"></div>
+                <details class="ctx-gov-details" id="ctx-gov-kept-details">
+                  <summary>保留项（按 bucket）</summary>
+                  <div id="ctx-gov-kept" class="ctx-gov-item-list"></div>
+                </details>
+                <details class="ctx-gov-details">
+                  <summary>压缩项 <span id="ctx-gov-compressed-count" class="ctx-gov-count"></span></summary>
+                  <ul id="ctx-gov-compressed" class="ctx-gov-ul"></ul>
+                </details>
+                <details class="ctx-gov-details">
+                  <summary>丢弃项 <span id="ctx-gov-dropped-count" class="ctx-gov-count"></span></summary>
+                  <ul id="ctx-gov-dropped" class="ctx-gov-ul"></ul>
+                </details>
+                <footer class="ctx-gov-compress-row">
+                  <label class="ctx-gov-label">
+                    压缩 scope
+                    <select id="ctx-gov-scope" class="ctx-gov-select">
+                      <option value="transcript">transcript</option>
+                      <option value="all_compressible">all_compressible</option>
+                      <option value="aggressive">aggressive</option>
+                    </select>
+                  </label>
+                  <label class="ctx-gov-label">
+                    token_budget
+                    <input type="number" id="ctx-gov-token-budget" class="ctx-gov-input-num" min="1024" max="64800" step="512" placeholder="64800" />
+                  </label>
+                  <button type="button" id="ctx-gov-compress-btn" class="flow-btn ctx-gov-compress-btn">执行压缩</button>
+                  <span id="ctx-gov-compress-status" class="ctx-gov-status-msg" role="status"></span>
+                </footer>
+              </div>
+            </div>
+          </div>
           <div class="header-actions">
             <select id="skill-select" class="theme-select" title="任务 Skill" hidden aria-hidden="true">
               <option value="">Skill: 无</option>
@@ -150,6 +209,7 @@
   <script src="/static/platform-nav.js?v=6"></script>
   <script src="/static/platform-auth.js?v=7"></script>
   <script src="/static/skill_form.js?v=1"></script>
-  <script src="/static/app.js?v=ui-24"></script>
+  <script src="/static/app.js?v=ui-25"></script>
+  <script src="/static/context_governance_panel.js?v=3"></script>
 </body>
 </html>

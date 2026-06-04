@@ -83,6 +83,9 @@ def retrieval_node(state: AgentState) -> AgentState:
             "retrieval",
             {"knowledge_count": len(knowledge), "memory_count": len(memories), "sanitized": True},
         )
+        from app.services.context_registry import persist_retrieval_context
+
+        updated = persist_retrieval_context(updated, knowledge=knowledge, memories=memories)
         # 检索 trace 由 graph_runner.trace_after_node(retrieval) 统一发出，避免重复
         get_state_store().save(updated)
         return updated

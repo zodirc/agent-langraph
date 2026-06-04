@@ -279,6 +279,7 @@ def writing_node(state: AgentState) -> AgentState:
                             last_chapter_index=int(ms.last_chapter_index or 0),
                             user_goal=str(payload.get("goal") or ""),
                             outline_diff=diff,
+                            trace_state=state,
                         )
                         payload["outline_body_alignment"] = decision.to_dict()
                         reconcile_state = merge_state(

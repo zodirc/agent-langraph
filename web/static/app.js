@@ -4059,6 +4059,12 @@ async function warnIfSessionMissionInFlight() {
   updateStopButtonState();
 }
 
+window.AgentChatRuntime = {
+  getTaskId: () => activeTaskId || getSessionId(),
+  apiFetch,
+  appendSystemLine: (text) => appendLine(text, "system"),
+};
+
 updateSessionBadge(getSessionId());
 applyTheme(localStorage.getItem(THEME_KEY) || "dark");
 appendLine("Agent LangGraph Web CLI ready. Type /help for commands.", "system");

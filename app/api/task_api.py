@@ -520,6 +520,96 @@ def get_task_state_debug(
     )
 
 
+@router.get("/{task_id}/context-composition")
+def get_task_context_composition(
+    task_id: str,
+    purpose: str = Query("reasoning", description="Context policy purpose"),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> dict[str, Any]:
+    """
+    Prompt composition debug view (ADR Context Governance §11.3).
+
+    Builds a fresh envelope from current store+live state without invoking the LLM.
+    """
+    from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
+    from app.services.prompt_context_gateway import build_prompt_composition_for_state
+    from app.services.state_debug_view import build_merged_debug_state
+
+    store_state = get_state_store().load(task_id, read_only=True)
+    live_entry = get_live(task_id)
+    if not store_state and not live_entry:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    if store_state:
+        store_state = enrich_agent_state_manuscript(store_state)
+    if live_entry is not None:
+        live_state = enrich_agent_state_manuscript(live_entry.state)
+        state = (
+            build_merged_debug_state(store_state, live_state)
+            if store_state
+            else live_state
+        )
+    else:
+        state = store_state
+    allowed = {
+        "planning",
+        "reasoning",
+        "writing",
+        "reviewing",
+        "reflection",
+        "routing",
+        "summarization",
+        "code_agent",
+    }
+    p = purpose if purpose in allowed else "reasoning"
+    composition = build_prompt_composition_for_state(state, purpose=p)  # type: ignore[arg-type]
+    return {
+        "task_id": task_id,
+        "purpose": p,
+        "composition": composition,
+    }
+
+
+class ContextCompressRequest(BaseModel):
+    scope: str = Field(
+        default="transcript",
+        description="transcript | all_compressible | aggressive",
+    )
+    token_budget: Optional[int] = Field(default=None, ge=1024, le=64800)
+
+
+@router.post("/{task_id}/context/compress")
+def post_task_context_compress(
+    task_id: str,
+    body: ContextCompressRequest,
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> dict[str, Any]:
+    """
+    Policy-constrained manual context compress (ADR §1.1 #6).
+    """
+    from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
+    from app.services.prompt_context_gateway import manual_compress_context
+
+    state = get_state_store().load(task_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    state = enrich_agent_state_manuscript(state)
+    updated, envelope = manual_compress_context(
+        state,
+        scope=body.scope,
+        token_budget=body.token_budget,
+    )
+    get_state_store().save(updated)
+    return {
+        "task_id": task_id,
+        "scope": body.scope,
+        "token_budget": envelope.token_budget_total,
+        "kept": len(envelope.items_kept),
+        "dropped": len(envelope.items_dropped),
+        "compressed": len(envelope.items_compressed),
+        "composition": envelope.trace.get("composition_view"),
+    }
+
+
 @router.get("/{task_id}/status", response_model=TaskStatusResponse)
 def get_task_status(
     task_id: str,

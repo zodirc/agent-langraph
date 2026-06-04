@@ -18,12 +18,20 @@ from app.services.state_store import get_state_store
 
 
 def _build_merge_context(state: AgentState) -> str:
+    from app.services.conversation_context import (
+        conversation_history_for_llm,
+        conversation_history_from_state,
+    )
+
     worker_results = state.get("worker_results") or {}
     return json.dumps(
         {
             "goal": state.get("input_payload", {}).get("goal"),
             "subtasks": state.get("subtasks", []),
             "worker_results": worker_results,
+            "conversation_history": conversation_history_for_llm(
+                conversation_history_from_state(state)
+            ),
         },
         ensure_ascii=False,
     )
@@ -107,6 +115,7 @@ def supervisor_merge_node(state: AgentState) -> AgentState:
             "reasoning",
             REASONING_SYSTEM,
             _build_merge_context(state),
+            trace_state=state,
         )
         worker_results = state.get("worker_results") or {}
         summaries = [

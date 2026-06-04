@@ -73,6 +73,7 @@ def _llm_step_decision(
             "routing",
             prompt,
             json.dumps(payload, ensure_ascii=False),
+            trace_state=state,
         )
         decision = StepDecision.from_dict(result)
         if decision.action not in ("continue", "finish", "pause", "escalate", "retry"):

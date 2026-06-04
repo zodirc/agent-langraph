@@ -221,29 +221,38 @@ def planning_node(state: AgentState) -> AgentState:
             pack_tools=pack_tools,
             state=state,
         )
-        user_content = json.dumps(
-            {
-                "task_type": state.get("task_type"),
-                "goal": payload.get("goal") or payload.get("query") or payload.get("question"),
-                "context": payload.get("context", {}),
-                "conversation_history": conversation_history_for_llm(
-                    conversation_history_from_state(state)
-                ),
-                "session_turn": state.get("session_turn"),
-                "manuscript": payload.get("manuscript"),
-                "outline_status": _outline_status_for_planning(state, payload),
-                "writing_instruction": payload.get("writing_instruction"),
-                "previous_artifact_summary": payload.get("previous_artifact_summary"),
-                "risk_level": payload.get("risk_level", "LOW"),
-                "use_tools": payload.get("use_tools", True),
-                "needs_search": payload.get("needs_search", True),
-                "runtime_capabilities": runtime_caps,
-                "existing_mission": payload.get("mission") or state.get("mission"),
-                "route_audit_replan_feedback": replan_feedback,
-                "plan_validation_feedback": plan_validation_feedback,
-            },
-            ensure_ascii=False,
+        planning_payload = {
+            "task_type": state.get("task_type"),
+            "goal": payload.get("goal") or payload.get("query") or payload.get("question"),
+            "context": payload.get("context", {}),
+            "conversation_history": [],
+            "session_turn": state.get("session_turn"),
+            "manuscript": payload.get("manuscript"),
+            "outline_status": _outline_status_for_planning(state, payload),
+            "writing_instruction": payload.get("writing_instruction"),
+            "previous_artifact_summary": payload.get("previous_artifact_summary"),
+            "risk_level": payload.get("risk_level", "LOW"),
+            "use_tools": payload.get("use_tools", True),
+            "needs_search": payload.get("needs_search", True),
+            "runtime_capabilities": runtime_caps,
+            "existing_mission": payload.get("mission") or state.get("mission"),
+            "route_audit_replan_feedback": replan_feedback,
+            "plan_validation_feedback": plan_validation_feedback,
+        }
+        from app.services.prompt_context_gateway import (
+            context_governance_enabled,
+            prepare_governed_user_json,
         )
+
+        if context_governance_enabled():
+            user_content = prepare_governed_user_json(
+                state, "planning", planning_payload
+            )
+        else:
+            planning_payload["conversation_history"] = conversation_history_for_llm(
+                conversation_history_from_state(state)
+            )
+            user_content = json.dumps(planning_payload, ensure_ascii=False)
         from app.services.turn_contract import planning_fallback_from_state
         from app.services.turn_contract_lifecycle import contract_replan_required
 

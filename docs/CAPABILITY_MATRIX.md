@@ -39,6 +39,7 @@
 | Context compress (character) | **stable** | on | ✅ | `session.compress_enabled` |
 | Session turn policy / planning gate | **stable** | on | ✅ | [`SESSION_TURN_POLICY.md`](SESSION_TURN_POLICY.md)；mission active 时的机械续写、intent classifier、planning gate |
 | Semantic context compress | **beta** | off | 🔶 | Code ✅；压缩率 hard gate 未齐 |
+| Context Governance (unified) | **stable** | on | ✅ | [`ADR_CONTEXT_GOVERNANCE.md`](ADR_CONTEXT_GOVERNANCE.md)、[`CONTEXT_GOVERNANCE.md`](CONTEXT_GOVERNANCE.md)；`context_governance.enabled` |
 | Skill runtime | **beta** | off | ✅ | `skill.enabled=false`；registry + yaml |
 | MCP tools + ops | **beta** | off | ✅ | probe/evict；resources/prompts；HTTP stub E2E |
 | Embedding governance | **stable** | on | ✅ | meta table + reindex + compatibility check |

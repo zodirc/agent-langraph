@@ -116,6 +116,7 @@ def _evaluate_active_mission_turn(
         manuscript=state.get("manuscript") if isinstance(state.get("manuscript"), dict) else None,
         turn_cfg=turn_cfg,
         route_cfg=route_cfg,
+        trace_state=state,
     )
     llm_intent = str(llm.get("turn_intent") or "qa_side_turn")
     llm_conf = float(llm.get("confidence") or 0.0)

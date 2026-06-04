@@ -48,7 +48,7 @@ def explore_hypothesize_node(state: AgentState) -> AgentState:
     user_json = json.dumps({"goal": goal, "allowed_probe_tools": allowed}, ensure_ascii=False)
     system = agent_system_prompt(EXPLORE_HYPOTHESIZE_ROLE + f"\nAllowed tools: {allowed}")
     try:
-        result = invoke_structured("planning", system, user_json)
+        result = invoke_structured("planning", system, user_json, trace_state=state)
         raw = result.get("hypotheses", [])
         hypotheses: list[dict] = []
         if isinstance(raw, list):
@@ -161,6 +161,8 @@ def _llm_score_hypothesis(
     hypothesis: dict,
     probes: list[dict],
     success_metric: str,
+    *,
+    trace_state: AgentState | None = None,
 ) -> float:
     from app.config.settings import settings
     from app.services.llm_client import invoke_structured
@@ -185,6 +187,7 @@ def _llm_score_hypothesis(
                 },
                 ensure_ascii=False,
             ),
+            trace_state=trace_state,
         )
         return max(0.0, min(1.0, float(result.get("score", _rule_score(hypothesis)))))
     except Exception:
@@ -198,7 +201,9 @@ def explore_score_node(state: AgentState) -> AgentState:
     success_metric = str(exploration.get("success_metric") or (state.get("input_payload") or {}).get("goal", ""))
     for hyp in exploration.get("hypotheses") or []:
         hid = hyp["id"]
-        scores[hid] = _llm_score_hypothesis(hyp, probes, success_metric)
+        scores[hid] = _llm_score_hypothesis(
+            hyp, probes, success_metric, trace_state=state
+        )
     exploration["scores"] = scores
     updated = merge_state(
         state,

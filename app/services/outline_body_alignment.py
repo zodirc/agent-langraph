@@ -128,6 +128,7 @@ def decide_outline_body_alignment(
     user_goal: str = "",
     extra: Optional[dict[str, Any]] = None,
     outline_diff: Optional[OutlineDiffResult] = None,
+    trace_state: Optional[dict[str, Any]] = None,
 ) -> AlignmentDecision:
     diff = outline_diff or compute_outline_diff_heuristic(
         outline_before_excerpt,
@@ -151,7 +152,12 @@ def decide_outline_body_alignment(
         "extra": extra or {},
     }
     try:
-        result = invoke_structured("routing", _SYSTEM, json.dumps(payload, ensure_ascii=False))
+        result = invoke_structured(
+            "routing",
+            _SYSTEM,
+            json.dumps(payload, ensure_ascii=False),
+            trace_state=trace_state,
+        )
         return _merge_llm_decision(rule_decision, result)
     except Exception:
         return rule_decision

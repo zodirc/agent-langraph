@@ -332,7 +332,17 @@ def write_turn_memories(state: AgentState) -> AgentState:
         memory_store.write_structured_episode(turn_state)
 
         history = conversation_history_from_state(turn_state)
-        llm_history = conversation_history_for_llm(history)
+        from app.services.prompt_context_gateway import (
+            context_governance_enabled,
+            governed_conversation_history,
+        )
+
+        if context_governance_enabled():
+            llm_history = governed_conversation_history(
+                turn_state, purpose="summarization"
+            )
+        else:
+            llm_history = conversation_history_for_llm(history)
         if llm_history:
             snippets: list[str] = []
             for item in llm_history[-6:]:

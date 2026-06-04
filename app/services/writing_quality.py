@@ -131,6 +131,7 @@ def score_chapter_quality(
     outline_slice: str = "",
     story_bible_excerpt: Optional[dict[str, Any]] = None,
     use_llm: Optional[bool] = None,
+    trace_state: Optional[dict[str, Any]] = None,
 ) -> ChapterQualityRubric:
     """
     Score chapter quality. Default path uses LLM when quality_score_use_llm is enabled.
@@ -160,6 +161,7 @@ def score_chapter_quality(
             "reflection",
             _QUALITY_LLM_SYSTEM,
             json.dumps(payload, ensure_ascii=False),
+            trace_state=trace_state,
         )
         if not isinstance(result, dict):
             return heuristic

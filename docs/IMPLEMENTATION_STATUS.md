@@ -1,6 +1,6 @@
 # 实现状态追踪（对齐代码库）
 
-> **最后更新**：2026-06-03（Skill 平台全量对齐 `plans/SKILL_DRIVEN_AGENT_PLATFORM.md` §8–§16）  
+> **最后更新**：2026-06-04（Context Governance 全量落地，见 [`CONTEXT_GOVERNANCE.md`](CONTEXT_GOVERNANCE.md)）  
 > **对照文档**：[`CAPABILITY_MATRIX.md`](CAPABILITY_MATRIX.md)  
 > **图例**：✅ 已实现并有用例覆盖 · 🔶 部分实现 / 默认关 · ❌ 未实现
 
@@ -39,7 +39,8 @@
 | 项 | 状态 | 说明 |
 |----|------|------|
 | `context_compressor.py` | ✅ | `SemanticContextSummary`、字符 / 语义双路径 |
-| `conversation_context` 模块 | ✅ | history 读写、`finalize_turn_history`、草稿 answer、memory 写回 |
+| **Context Governance（ADR §13 DoD）** | ✅ | 网关 + registry + API + DoD eval；**Web** `/chat` 内嵌上下文治理面板（§1.1 #6）；见 [`CONTEXT_GOVERNANCE.md`](CONTEXT_GOVERNANCE.md) |
+| `conversation_context` 模块 | ✅ | transcript 生命周期；治理启用时不再作为直接 prompt 主路径 |
 | `session_turn` 接入 | ✅ | `prepare_session_turn`；压缩见 `compress_session_history()` |
 | session turn 策略闸门 | ✅ | `SESSION_TURN_POLICY.md` 对齐：mission active 时的 intent classifier、机械续写与 planning gate |
 | 配置 `session.memory_retrieval_enabled` | ✅ | 多轮 QA 在 `skip_retrieval` 时仍走 session memory |

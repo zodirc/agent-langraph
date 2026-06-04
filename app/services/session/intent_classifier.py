@@ -77,6 +77,7 @@ def classify_turn_intent_llm(
     manuscript: dict[str, Any] | None = None,
     turn_cfg: SessionTurnPolicyConfig | None = None,
     route_cfg: RouteAuditConfig | None = None,
+    trace_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Classify gray-zone goals while a writing mission is active.
@@ -111,6 +112,7 @@ def classify_turn_intent_llm(
             "session_turn",
             _SYSTEM,
             json.dumps(payload, ensure_ascii=False),
+            trace_state=trace_state,
         )
     except Exception:
         return _local_pattern_fallback(text, turn_cfg=turn_cfg, route_cfg=route_cfg)

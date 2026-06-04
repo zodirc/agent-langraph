@@ -88,6 +88,7 @@ def extract_chapter_outcome(
     use_llm: Optional[bool] = None,
     outcome_use_llm: Optional[bool] = None,
     persist: bool = True,
+    trace_state: Optional[dict[str, Any]] = None,
 ) -> ChapterOutcome:
     from app.services.writing_quality import chapter_outcome_use_llm, quality_score_use_llm
 
@@ -100,6 +101,7 @@ def extract_chapter_outcome(
             outline_slice=outline_slice,
             story_bible_excerpt=story_bible,
             use_llm=quality_llm,
+            trace_state=trace_state,
         )
     narrative_llm = (
         outcome_use_llm if outcome_use_llm is not None else chapter_outcome_use_llm()
@@ -127,6 +129,7 @@ def extract_chapter_outcome(
                 "reflection",
                 system,
                 json.dumps(payload, ensure_ascii=False),
+                trace_state=trace_state,
             )
             summary = str(raw.get("chapter_summary") or raw.get("summary") or "")[:400]
             ending = str(raw.get("ending_state") or "")[:300]

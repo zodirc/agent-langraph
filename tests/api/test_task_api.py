@@ -82,6 +82,56 @@ def test_get_task_state_debug(isolated_stores, monkeypatch):
     assert body["live_available"] is False
 
 
+def test_get_task_context_composition(isolated_stores, monkeypatch):
+    from app.api import task_api
+    from app.runtime.state import create_initial_state, merge_state
+
+    store = isolated_stores
+    state = merge_state(
+        create_initial_state(
+            session_id="sess-cg",
+            input_payload={"goal": "composition test"},
+        ),
+        conversation_history=[{"role": "user", "content": "hi", "at": "t0"}],
+    )
+    store.save(state)
+    monkeypatch.setattr(task_api, "get_state_store", lambda: store)
+
+    client = TestClient(app)
+    resp = client.get(
+        f"/tasks/{state['task_id']}/context-composition",
+        params={"purpose": "planning"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["task_id"] == state["task_id"]
+    assert body["purpose"] == "planning"
+    assert "composition" in body
+
+
+def test_post_task_context_compress(isolated_stores, monkeypatch):
+    from app.api import task_api
+    from app.runtime.state import create_initial_state, merge_state
+
+    store = isolated_stores
+    state = merge_state(
+        create_initial_state(session_id="sess-cc"),
+        conversation_history=[{"role": "user", "content": "long " * 200, "at": "t"}],
+    )
+    store.save(state)
+    monkeypatch.setattr(task_api, "get_state_store", lambda: store)
+
+    client = TestClient(app)
+    resp = client.post(
+        f"/tasks/{state['task_id']}/context/compress",
+        json={"scope": "transcript", "token_budget": 8000},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["task_id"] == state["task_id"]
+    assert "kept" in body
+
+
 def test_get_task_state_debug_not_found(isolated_stores, monkeypatch):
     from app.api import task_api
 

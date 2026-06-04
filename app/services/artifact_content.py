@@ -218,6 +218,16 @@ def generate_artifact_content(
         "writing_context": writing_ctx,
         "mission": {k: mission.get(k) for k in ("kind", "objective", "step_policy") if mission},
     }
+    from app.services.prompt_context_gateway import (
+        context_governance_enabled,
+        mutate_state_context_trace,
+        prepare_governed_payload,
+    )
+
+    if context_governance_enabled():
+        user_payload, envelope = prepare_governed_payload(state, "writing", user_payload)
+        if isinstance(state, dict):
+            mutate_state_context_trace(state, envelope)
     report_status_trace("writing", f"gateway: 生成 {filename}（约 {chars} 字）…")
     if trace_enabled() or writing_stream_enabled():
         draft = stream_artifact_draft(

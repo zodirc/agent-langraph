@@ -134,6 +134,7 @@ def llm_decision(state: AgentState, loop: ReactLoopState) -> ReactDecision | Non
             "routing",
             REACT_DELIBERATE_SYSTEM,
             json.dumps(payload, ensure_ascii=False),
+            trace_state=state,
         )
         decision = ReactDecision.from_dict(raw)
         if decision.action not in loop.allowed_actions:
@@ -286,6 +287,7 @@ def _execute_reason(state: AgentState, decision: ReactDecision) -> tuple[AgentSt
                 "routing",
                 REACT_INTERMEDIATE_REASON_SYSTEM,
                 json.dumps(payload, ensure_ascii=False),
+                trace_state=state,
             )
             summary = str(raw.get("summary") or raw.get("answer") or "")
             confidence = float(raw.get("confidence") or 0.6)

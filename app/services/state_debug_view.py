@@ -117,6 +117,9 @@ def build_state_debug_view(
         for key in sorted(raw.keys())
     }
 
+    trace_ctx = raw.get("trace_context") if isinstance(raw.get("trace_context"), dict) else {}
+    context_composition = trace_ctx.get("last_context_composition")
+
     return {
         "task_id": str(raw.get("task_id", "")),
         "session_id": str(raw.get("session_id", "")),
@@ -127,6 +130,7 @@ def build_state_debug_view(
         "truncated": bool(truncated_fields),
         "truncated_fields": truncated_fields,
         "field_summary": field_summary,
+        "context_composition": context_composition,
         "state": raw,
     }
 

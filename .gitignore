@@ -27,3 +27,7 @@ tests/eval/open_rag/raw/qrecc/*.json
 tests/eval/open_rag/raw/qrecc/*.zip
 tests/eval/reports/*
 !tests/eval/reports/.gitkeep
+tests/eval/reports/baselines/*
+!tests/eval/reports/baselines/.gitkeep
+tests/eval/open_rag/normalized/writing_corpus.jsonl
+tests/eval/open_rag/normalized/writing_tasks.jsonl
