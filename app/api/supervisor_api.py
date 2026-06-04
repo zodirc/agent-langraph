@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_principal
 from app.api.task_api import CreateTaskResponse, TaskStatusResponse, _prepare_task_request
-from app.api.task_api import CreateTaskRequest
+from app.api.task_api import CreateTaskRequest, wrap_task_sse_stream
 from app.services.auth_service import AuthPrincipal
 from app.services.graph_runner import get_graph_runner
 from app.services.state_store import get_state_store
@@ -86,7 +86,10 @@ def stream_supervisor_task(
             input_payload=prepared,
             execution_mode="supervisor",
         )
-        return StreamingResponse(generator, media_type="text/event-stream")
+        return StreamingResponse(
+            wrap_task_sse_stream(generator),
+            media_type="text/event-stream",
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

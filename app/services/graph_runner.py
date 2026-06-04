@@ -586,6 +586,10 @@ class GraphRunner:
         new_session: bool = False,
     ) -> Iterator[str]:
         """SSE-formatted stream of node execution events."""
+        # Flush headers immediately so proxies/browsers do not treat long
+        # prepare_session_turn / mission prep as a dead connection.
+        yield _format_stream_event("stream_open", {"phase": "accepted", "message": "connected"})
+
         payload = dict(input_payload or {})
         mode = execution_mode or payload.get("execution_mode", "single")
         if mode == "supervisor" or task_type == "supervisor":

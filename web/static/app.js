@@ -949,6 +949,33 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
   }
 }
 
+/** True when /health responds (same origin as chat). */
+async function probeRuntimeHealth(timeoutMs = 8000) {
+  try {
+    const res = await fetchWithTimeout("/health", { method: "GET" }, timeoutMs);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function formatStreamFetchError(err) {
+  const msg = String(err?.message || err || "unknown");
+  if (!msg.includes("Failed to fetch")) {
+    return `stream error: ${msg}`;
+  }
+  const origin = window.location.origin || "(当前页面)";
+  const lines = [
+    `stream error: ${msg}`,
+    "浏览器在收到 HTTP 响应前断开（多为服务未启动、TLS/证书、或网络不可达）。",
+    `排查：在部署机执行 make ps && make logs；curl -sk ${origin}/health 应返回 200。`,
+    "若用局域网 IP 访问，请把该 IP 写入 .env 的 PUBLIC_DOMAIN 后 make up，并在浏览器接受自签证书。",
+    "写作/工程/自动模式均走 POST /tasks/stream；若仅写作失败，请打开 DevTools → Network 查看该请求。",
+    "可试侧栏「新会话」(/new) 排除旧 session 状态干扰。",
+  ];
+  return lines.join("\n");
+}
+
 function formatHistoryTime(raw) {
   if (!raw) return "-";
   const d = new Date(raw);
@@ -3200,6 +3227,12 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
     }
   } else if (eventType === "worker") {
     appendLine(`  worker ${payload.domain}: ${payload.status} — ${payload.summary || ""}`, "node");
+  } else if (eventType === "stream_open") {
+    updateProgressLine({
+      message: payload.message || "已连接服务端…",
+      phase: payload.phase || "connecting",
+      elapsed_sec: 0,
+    });
   } else if (eventType === "progress") {
     updateProgressLine(payload);
   } else if (eventType === "trace") {
@@ -3845,6 +3878,15 @@ async function runTaskStream(
   bindActiveSseAbort(sseAbort);
 
   try {
+    const healthy = await probeRuntimeHealth();
+    if (!healthy) {
+      for (const line of formatStreamFetchError(new TypeError("Failed to fetch")).split("\n")) {
+        appendLine(line, "error");
+      }
+      appendLine("（/health 不可达，已跳过 POST /tasks/stream）", "error");
+      return;
+    }
+
     const res = await apiFetch(endpoint, {
       method: "POST",
       headers: getAuthHeaders(),
@@ -3862,7 +3904,9 @@ async function runTaskStream(
     await consumeSseStream(res, taskIdRef, { signal: sseAbort.signal });
   } catch (err) {
     if (!isSseAbortError(err)) {
-      appendLine(`stream error: ${err}`, "error");
+      for (const line of formatStreamFetchError(err).split("\n")) {
+        appendLine(line, "error");
+      }
     }
   } finally {
     if (activeSseAbortController === sseAbort) {

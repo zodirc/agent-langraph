@@ -9,5 +9,16 @@ data/
 .cursor
 *.md
 !README.md
-tests/
+# 单元/集成测试不进镜像；保留 tests/eval（Dockerfile COPY + open RAG 脚本）
+tests/*
+!tests/eval/
+# 大体积 benchmark 产物（本地生成，勿 bake 进镜像）
+tests/eval/open_rag/raw/*
+tests/eval/reports/*
+tests/eval/open_rag/normalized/qrecc_*_corpus.jsonl
+tests/eval/open_rag/normalized/qrecc_*_*_tasks.jsonl
+tests/eval/open_rag/normalized/scifact_corpus.jsonl
+tests/eval/open_rag/normalized/scifact_tasks.jsonl
+tests/eval/open_rag/normalized/writing_corpus.jsonl
+tests/eval/open_rag/normalized/writing_tasks.jsonl
 agent-transcripts

@@ -12,6 +12,7 @@ _prepare_task_request sanitizes input and attaches skill policy to payload only.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -94,6 +95,15 @@ class TaskListResponse(BaseModel):
 class TaskDeleteResponse(BaseModel):
     task_id: str
     deleted: bool
+
+
+def wrap_task_sse_stream(generator: Iterator[str]) -> Iterator[str]:
+    """Yield SSE from graph runner; convert setup failures to error events."""
+    try:
+        yield from generator
+    except Exception as exc:
+        payload = {"detail": str(exc), "status": "STREAM_ERROR"}
+        yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 def _prepare_task_request(
@@ -211,7 +221,10 @@ def stream_task(
             session_id=request.session_id,
             new_session=request.new_session,
         )
-        return StreamingResponse(generator, media_type="text/event-stream")
+        return StreamingResponse(
+            wrap_task_sse_stream(generator),
+            media_type="text/event-stream",
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
