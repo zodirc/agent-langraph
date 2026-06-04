@@ -268,6 +268,8 @@ def should_enter_mission_runtime(
 
 def apply_qa_turn_isolation(payload: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
     """Mark payload so this turn runs single-graph QA without mission writing."""
+    from app.services.manuscript_service import sanitize_manuscript_bindings
+
     out = dict(payload)
     out["execution_mode"] = "single"
     out["disable_mission_auto"] = True
@@ -276,6 +278,12 @@ def apply_qa_turn_isolation(payload: dict[str, Any], existing: dict[str, Any]) -
     mission = existing.get("mission")
     if isinstance(mission, dict) and mission:
         out["archived_mission"] = mission
+    for key in ("manuscript", "session_artifacts"):
+        raw = out.get(key) or existing.get(key) or (existing.get("input_payload") or {}).get(
+            key
+        )
+        if raw:
+            out[key] = sanitize_manuscript_bindings(raw)
     wi = out.get("writing_intent")
     if isinstance(wi, dict):
         out["writing_intent"] = {**wi, "enabled": False, "source": "qa_turn_isolation"}

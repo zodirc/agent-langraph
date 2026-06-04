@@ -9,7 +9,14 @@ from app.services.project_verify.config import allowed_backend_ids
 
 
 def handle_verify_backend(params: dict[str, Any]) -> dict[str, Any]:
-    task_id = str(params["task_id"])
+    task_id = str(params.get("task_id") or "").strip()
+    if not task_id:
+        return {
+            "status": "error",
+            "ok": False,
+            "backend": "",
+            "issues": ["missing_task_id"],
+        }
     intent_kind = str(params.get("intent_kind") or "code")
     goal = str(params.get("goal") or "")
     requested = str(params.get("backend_id") or "").strip() or None

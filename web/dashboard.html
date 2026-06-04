@@ -8,7 +8,7 @@
   <title>监控 — Agent Runtime</title>
   <link rel="stylesheet" href="/static/terminal.css?v=ui-8" />
   <link rel="stylesheet" href="/static/platform.css?v=ui-8" />
-  <link rel="stylesheet" href="/static/dashboard.css?v=ui-10" />
+  <link rel="stylesheet" href="/static/dashboard.css?v=ui-11" />
 </head>
 <body class="platform-shell" data-active-page="dashboard">
   <div id="platform-nav"></div>
@@ -63,6 +63,15 @@
             <option value="">加载中…</option>
           </select>
           <span class="llm-filter-label">次</span>
+          <button
+            type="button"
+            id="llm-panel-refresh"
+            class="llm-refresh-btn"
+            title="重新加载交互列表与当前问答内容"
+            aria-label="刷新 LLM 交互"
+          >
+            刷新
+          </button>
           <span id="llm-filter-hint" class="llm-filter-hint"></span>
         </div>
         <div id="llm-interactions-list" class="llm-interactions-list"></div>
@@ -79,6 +88,6 @@
   </div>
   <script src="/static/platform-nav.js?v=6"></script>
   <script src="/static/platform-auth.js?v=7"></script>
-  <script src="/static/dashboard.js?v=5"></script>
+  <script src="/static/dashboard.js?v=6"></script>
 </body>
 </html>

@@ -152,7 +152,22 @@ def tool_execution_node(state: AgentState) -> AgentState:
                 )
                 get_state_store().save(updated)
                 return updated
-            raise KeyError(failures[0].get("error", "all tools failed"))
+            msg = str(failures[0].get("error") or "all tools failed")
+            updated = merge_state(
+                state,
+                tool_results=results,
+                errors=list(state.get("errors", [])) + [f"tool_execution: {msg}"],
+                status=TaskStatus.TOOL_FAILED.value,
+                current_node="tool_execution",
+                audit_log=append_audit(
+                    state,
+                    "tool_execution",
+                    "all_tools_failed",
+                    {"tools": tools, "error": msg},
+                ),
+            )
+            get_state_store().save(updated)
+            return updated
 
         payload_updates = _build_artifact_registry_updates(state, payload, results)
         updated = merge_state(
@@ -312,7 +327,17 @@ def _build_tool_params(tool_name: str, state: AgentState) -> dict[str, Any]:
                 )
             params["content"] = content
         return params
-    return tool_params
+    if tool_name == "verify_backend":
+        audit = payload.get("route_audit") or {}
+        return {
+            "task_id": task_id,
+            "intent_kind": str(
+                payload.get("intent_kind") or audit.get("inferred_kind") or "code"
+            ),
+            "goal": goal,
+            **tool_params,
+        }
+    return {"task_id": task_id, **tool_params}
 
 
 def _build_artifact_registry_updates(
@@ -360,9 +385,11 @@ def _resolve_artifact_filename(
         return resolve_read_paths(state, last_written)
 
     # 2) active manuscript pointer (for writing sessions)
+    from app.services.artifact_tools import is_text_artifact_filename
+
     manuscript = payload.get("manuscript") or payload.get("session_artifacts") or {}
     body = str(manuscript.get("body_path") or payload.get("novel_filename") or "").strip()
-    if body:
+    if body and is_text_artifact_filename(body):
         return resolve_read_paths(state, body)
 
     # 3) path map from previous writes in this or previous turns
@@ -371,9 +398,9 @@ def _resolve_artifact_filename(
         for name in preferred:
             if name in known:
                 return resolve_read_paths(state, name)
-        # deterministic fallback: lexical first key
-        first_name = sorted(known.keys())[0]
-        return resolve_read_paths(state, first_name)
+        text_keys = sorted(k for k in known if is_text_artifact_filename(k))
+        if text_keys:
+            return resolve_read_paths(state, text_keys[0])
 
     # 4) latest tool result path in current runtime state
     latest = collect_file_artifacts(state.get("tool_results"))
@@ -389,9 +416,9 @@ def _resolve_artifact_filename(
         for name in preferred:
             if name in names:
                 return resolve_read_paths(state, name)
-        first_name = sorted(names)[0]
-        if first_name:
-            return resolve_read_paths(state, first_name)
+        text_names = sorted(n for n in names if n and is_text_artifact_filename(n))
+        if text_names:
+            return resolve_read_paths(state, text_names[0])
 
     mission = state.get("mission") or payload.get("mission") or {}
     if str(mission.get("kind") or "").lower() == "writing" and tool_name == "read_text_artifact":

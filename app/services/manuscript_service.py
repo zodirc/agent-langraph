@@ -10,7 +10,12 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app.config.settings import settings
-from app.services.artifact_tools import list_task_artifacts, read_artifact_tail, task_artifact_dir
+from app.services.artifact_tools import (
+    is_text_artifact_filename,
+    list_task_artifacts,
+    read_artifact_tail,
+    task_artifact_dir,
+)
 
 WRITING_TOOL_NAMES = frozenset({"write_text_artifact", "append_text_artifact"})
 
@@ -18,6 +23,42 @@ WRITING_TOOL_NAMES = frozenset({"write_text_artifact", "append_text_artifact"})
 def _coerce_dict(value: Any) -> dict[str, Any]:
     """Normalize payload fragments; ignore mistaken string scalars from clients."""
     return value if isinstance(value, dict) else {}
+
+
+def sanitize_manuscript_bindings(raw: Any) -> dict[str, Any]:
+    """
+    Drop code/session filenames wrongly stored as manuscript text-artifact pointers.
+
+    Engineering turns may leave main.cpp on disk; stale body_path causes
+    read_text_artifact / enrich_payload to raise Extension not allowed.
+    """
+    ms = _coerce_dict(raw)
+    if not ms:
+        return {}
+    out = dict(ms)
+    for path_key, bytes_key in (
+        ("body_path", "body_bytes"),
+        ("outline_path", "outline_bytes"),
+        ("novel_filename", None),
+        ("outline_filename", None),
+    ):
+        path = out.get(path_key)
+        if path and not is_text_artifact_filename(str(path)):
+            out.pop(path_key, None)
+            if bytes_key:
+                out.pop(bytes_key, None)
+    return out
+
+
+def _finalize_text_manuscript_pointers(ms: Manuscript) -> Manuscript:
+    """Clear body/outline pointers that are not text-artifact extensions."""
+    if ms.body_path and not is_text_artifact_filename(ms.body_path):
+        ms.body_path = None
+        ms.body_bytes = 0
+    if ms.outline_path and not is_text_artifact_filename(ms.outline_path):
+        ms.outline_path = None
+        ms.outline_bytes = 0
+    return ms
 
 
 def _promote_text_artifact_basename(raw: Any) -> str | None:
@@ -134,7 +175,7 @@ def resolve_outline_filename(
     intent: Optional[dict[str, Any]] = None,
 ) -> str:
     """Bound outline path, else model/mission names, else default."""
-    if manuscript.outline_path:
+    if manuscript.outline_path and is_text_artifact_filename(manuscript.outline_path):
         return str(manuscript.outline_path)
     intent = intent or {}
     mission = payload.get("mission") or {}
@@ -155,7 +196,7 @@ def resolve_body_filename(
     intent: Optional[dict[str, Any]] = None,
 ) -> str:
     """Bound body path, else model/mission names, else default."""
-    if manuscript.body_path:
+    if manuscript.body_path and is_text_artifact_filename(manuscript.body_path):
         return str(manuscript.body_path)
     intent = intent or {}
     mission = payload.get("mission") or {}
@@ -192,7 +233,10 @@ def normalize_writing_intent_filenames(
         out["body_filename"] = str(policy["body_artifact"]).strip()
     for key in ("outline_filename", "body_filename"):
         if out.get(key):
-            out[key] = sanitize_artifact_basename(out[key])
+            try:
+                out[key] = sanitize_artifact_basename(out[key])
+            except ValueError:
+                out.pop(key, None)
     return out
 
 
@@ -364,6 +408,7 @@ def resolve_manuscript(task_id: str, stored: Optional[dict[str, Any]] = None) ->
         stored = None
 
     if stored:
+        stored = sanitize_manuscript_bindings(stored)
         body = stored.get("body_path")
         outline = stored.get("outline_path")
         ms.chapter_cursor = int(stored.get("chapter_cursor") or 0)
@@ -372,14 +417,18 @@ def resolve_manuscript(task_id: str, stored: Optional[dict[str, Any]] = None) ->
         ms.outline_revision = int(stored.get("outline_revision") or 0)
         ms.body_revision = int(stored.get("body_revision") or 0)
         ms.body_outline_revision_seen = int(stored.get("body_outline_revision_seen") or 0)
-        if body and any(f.get("filename") == body for f in files):
+        if body and is_text_artifact_filename(str(body)) and any(
+            f.get("filename") == body for f in files
+        ):
             ms.body_path = str(body)
             ms.body_bytes = int(stored.get("body_bytes") or 0)
-        if outline and any(f.get("filename") == outline for f in files):
+        if outline and is_text_artifact_filename(str(outline)) and any(
+            f.get("filename") == outline for f in files
+        ):
             ms.outline_path = str(outline)
             ms.outline_bytes = int(stored.get("outline_bytes") or 0)
-        if ms.body_path:
-            return _refresh_bytes(ms)
+        if ms.body_path or ms.outline_path:
+            return _finalize_text_manuscript_pointers(_refresh_bytes(ms))
 
     outline_candidates: list[dict[str, Any]] = []
     body_candidates: list[dict[str, Any]] = []
@@ -388,8 +437,9 @@ def resolve_manuscript(task_id: str, stored: Optional[dict[str, Any]] = None) ->
         if not name:
             continue
         if _is_outline_name(name):
-            outline_candidates.append(item)
-        else:
+            if is_text_artifact_filename(name):
+                outline_candidates.append(item)
+        elif is_text_artifact_filename(name):
             body_candidates.append(item)
 
     if outline_candidates:
@@ -409,7 +459,7 @@ def resolve_manuscript(task_id: str, stored: Optional[dict[str, Any]] = None) ->
         ms.body_path = str(pick["filename"])
         ms.body_bytes = int(pick.get("bytes") or 0)
 
-    return ms
+    return _finalize_text_manuscript_pointers(ms)
 
 
 def _sync_chapter_from_disk(ms: Manuscript) -> None:
@@ -618,17 +668,21 @@ def enrich_payload(
     enriched = {**payload, "manuscript": ms.to_dict(), "session_artifacts": ms.to_dict()}
     enriched = sync_payload_artifact_names(enriched, intent=payload.get("writing_intent"))
 
-    if ms.body_path:
+    if ms.body_path and is_text_artifact_filename(ms.body_path):
         enriched["novel_filename"] = ms.body_path
         tail = read_artifact_tail(task_id, ms.body_path, max_chars=tail_chars)
         if tail:
             enriched["previous_artifact_excerpt"] = tail
         enriched["previous_artifact_summary"] = f"{ms.body_path}（约 {ms.body_bytes} 字节）"
 
-    if ms.outline_path:
+    if ms.outline_path and is_text_artifact_filename(ms.outline_path):
         enriched["outline_filename"] = ms.outline_path
 
-    if (session_turn > 1 or is_continue_writing_goal(goal)) and ms.body_path:
+    if (
+        (session_turn > 1 or is_continue_writing_goal(goal))
+        and ms.body_path
+        and is_text_artifact_filename(ms.body_path)
+    ):
         enriched["longform_mode"] = True
         enriched["writing_instruction"] = (
             f"续写手稿正文「{ms.body_path}」；由 Writing 节点生成并 append；"
@@ -644,8 +698,8 @@ def resolve_read_paths(state: dict[str, Any], filename: str) -> str:
     outline = manuscript.get("outline_path") or payload.get("outline_filename")
     name = filename
     lower = name.lower()
-    if lower in ("novel.txt", "body.txt") and body:
+    if lower in ("novel.txt", "body.txt") and body and is_text_artifact_filename(str(body)):
         return str(body)
-    if lower in ("outline.txt",) and outline:
+    if lower in ("outline.txt",) and outline and is_text_artifact_filename(str(outline)):
         return str(outline)
     return name

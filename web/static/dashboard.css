@@ -213,6 +213,28 @@
   font-size: 0.82rem;
 }
 
+.llm-refresh-btn {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  padding: 0.38rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+}
+
+.llm-refresh-btn:hover:not(:disabled) {
+  background: var(--panel-hover);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.llm-refresh-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 .llm-filter-hint {
   flex: 1 1 100%;
   font-size: 0.75rem;

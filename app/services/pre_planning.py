@@ -59,6 +59,11 @@ def _apply_explicit_mode_override(
     explicit = parse_explicit_interaction_mode(payload)
     if not explicit:
         return resolution
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    from app.services.interaction_goal import explicit_mode_should_apply
+
+    if not explicit_mode_should_apply(explicit, goal):
+        return resolution
     kind_override, mode_override = _EXPLICIT_MODE_MAP[explicit]
     intent_kind = (
         normalize_intent_kind(kind_override)
@@ -157,6 +162,11 @@ def should_skip_planning_llm(state: AgentState) -> bool:
     if not payload.get("pre_planning_completed"):
         return False
     if str(payload.get("target_mode") or "") != "engineering_mode":
+        return False
+    from app.services.interaction_goal import goal_is_conversational_qa
+
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    if goal_is_conversational_qa(goal):
         return False
     if payload.get("route_audit_replan") or payload.get("route_audit_replan_feedback"):
         return False

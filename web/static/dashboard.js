@@ -127,6 +127,51 @@ async function loadLlmInteractionDetail(index) {
   renderLlmPanelMeta(data.task_id, data.session_id, data.count, item.index);
 }
 
+const LLM_EMPTY_MSG =
+  '<p class="dashboard-sub">暂无 LLM 交互记录（需 observability.llm_interaction_log_enabled=true）。</p>';
+
+async function refreshLlmPanel({ preserveIndex = true } = {}) {
+  const list = document.getElementById("llm-interactions-list");
+  const sel = document.getElementById("llm-index-select");
+  const refreshBtn = document.getElementById("llm-panel-refresh");
+  if (!llmPanelTaskId || !list) return;
+
+  const prevIndex = preserveIndex && sel ? parseInt(sel.value, 10) : NaN;
+  if (refreshBtn) refreshBtn.disabled = true;
+
+  try {
+    setDashboardStatus("");
+    const summaryData = await fetchJson(
+      `/tasks/${llmPanelTaskId}/llm-interactions?summary=true`
+    );
+    llmSummaries = summaryData.summaries || [];
+    populateLlmIndexSelect(llmSummaries, summaryData.count || 0);
+
+    if (!llmSummaries.length) {
+      list.innerHTML = LLM_EMPTY_MSG;
+      renderLlmPanelMeta(
+        summaryData.task_id,
+        summaryData.session_id,
+        summaryData.count || 0,
+        null
+      );
+      return;
+    }
+
+    const indices = new Set(llmSummaries.map((s) => s.index));
+    const targetIndex =
+      prevIndex && indices.has(prevIndex) ? prevIndex : llmSummaries[0].index;
+    if (sel) sel.value = String(targetIndex);
+    await loadLlmInteractionDetail(targetIndex);
+  } catch (err) {
+    console.error(err);
+    setDashboardStatus(`LLM 交互刷新失败：${err.message || err}`);
+    list.innerHTML = '<p class="dashboard-sub">刷新失败。</p>';
+  } finally {
+    if (refreshBtn) refreshBtn.disabled = false;
+  }
+}
+
 async function openLlmPanel(taskId) {
   const panel = document.getElementById("llm-panel");
   const filters = document.getElementById("llm-panel-filters");
@@ -138,30 +183,7 @@ async function openLlmPanel(taskId) {
   if (filters) filters.hidden = false;
   list.innerHTML = '<p class="dashboard-sub">加载交互列表…</p>';
   panel.scrollIntoView({ behavior: "smooth", block: "start" });
-
-  try {
-    setDashboardStatus("");
-    const summaryData = await fetchJson(
-      `/tasks/${taskId}/llm-interactions?summary=true`
-    );
-    llmSummaries = summaryData.summaries || [];
-    populateLlmIndexSelect(llmSummaries, summaryData.count || 0);
-    renderLlmPanelMeta(summaryData.task_id, summaryData.session_id, summaryData.count, null);
-
-    const sel = document.getElementById("llm-index-select");
-    if (!llmSummaries.length) {
-      list.innerHTML =
-        '<p class="dashboard-sub">暂无 LLM 交互记录（需 observability.llm_interaction_log_enabled=true）。</p>';
-      return;
-    }
-    const firstIndex = llmSummaries[0].index;
-    if (sel) sel.value = String(firstIndex);
-    await loadLlmInteractionDetail(firstIndex);
-  } catch (err) {
-    console.error(err);
-    setDashboardStatus(`LLM 交互加载失败：${err.message || err}`);
-    list.innerHTML = '<p class="dashboard-sub">加载失败。</p>';
-  }
+  await refreshLlmPanel({ preserveIndex: false });
 }
 
 function renderTasks(data) {
@@ -259,6 +281,13 @@ document.getElementById("llm-index-select")?.addEventListener("change", (ev) => 
   loadLlmInteractionDetail(index).catch((err) => {
     console.error(err);
     setDashboardStatus(`加载第 ${index} 次失败：${err.message || err}`);
+  });
+});
+
+document.getElementById("llm-panel-refresh")?.addEventListener("click", () => {
+  refreshLlmPanel({ preserveIndex: true }).catch((err) => {
+    console.error(err);
+    setDashboardStatus(`LLM 交互刷新失败：${err.message || err}`);
   });
 });
 

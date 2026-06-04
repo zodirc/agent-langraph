@@ -72,7 +72,14 @@ def apply_qa_mode_contract(
         "source": "mode_contract",
     }
     audit["writing_blocked"] = True
+    tools = strip_tools_for_mode(tools, allowed=frozenset(), forbid_engineering=True)
     tools = [t for t in tools if t not in WRITING_TOOL_NAMES]
+    if payload.get("tool_params"):
+        payload["tool_params"] = {
+            k: v
+            for k, v in (payload.get("tool_params") or {}).items()
+            if k not in WRITING_TOOL_NAMES and k not in _ENGINEERING_TOOLS
+        }
     payload["writing_intent"] = intent
     payload["disable_mission_auto"] = True
     payload.pop("mission", None)

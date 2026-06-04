@@ -32,7 +32,7 @@
 |---------|-------------------|------|
 | 自动 | （不传） | 仅 `pre_planning` + goal 推断 |
 | Ask · 问答 | `chat` | `qa_mode`；`mission_auto: false` |
-| Agent · 工程交付 | `engineering` | `engineering_mode` + thin planning；**沙箱内**白名单校验 |
+| Agent · 工程交付 | `engineering` | 有交付意图 → `engineering_mode` + thin planning；**闲聊（如「你好」）仍 `qa_mode`** |
 | 写作 · 长篇 | `writing` | `manuscript_mode`；`mission_auto: true` |
 
 **安全说明（相对 Cursor 的「放开」边界）**：工程模式可在会话目录自由落盘多种源码/静态资源，但**不能**在服务端执行用户任意 shell；编译/构建仅 `project_verify` 模板。侧栏「文件」预览已支持 `.cpp/.py/.html/.js` 等。
@@ -78,6 +78,20 @@ flowchart TB
 - 详见 [`CODE_ARTIFACT_PIPELINE.md`](CODE_ARTIFACT_PIPELINE.md)。
 
 **注意**：`engineering_mode` 本轮**不走** `ensure_code_artifacts_quality` 主路径；工程校验由 `project_verify` 完成。
+
+### 1.2 工程交付降级与常见 issues
+
+`engineering_execution` 在固定步数预算（默认 `max_steps: 6`）内执行：规划 → 落盘 → 校验 → 修复。最终答案含 **校验结果** 与 **降级说明**（`degraded` / `failed` 时）。
+
+| issue / 说明 | 含义 | 建议 |
+|----------------|------|------|
+| `no_backend_for_intent` | 未能从 goal + 落盘路径推断 `cpp` / `web_html_js` / `make_cpp_demo` | goal 写明 C++/网页/Makefile；单文件 `main.cpp` 会走 **cpp** 而非 make |
+| `no_files_written` | 规划或落盘失败，无文件可校验 | 看 `engineering_trace.write_errors` / `plan_error` |
+| `engineering_bounded 步数预算已用尽` | 修复循环占满步数 | 简化目标或调高 `mode_contracts.engineering_mode.execution.max_steps` |
+| `verify_concurrency_limit` | 并发校验槽满 | 稍后重试 |
+| `verify_exception` | `verify_project` 内部异常 | 查 agent 日志 |
+
+落盘后会根据 **实际文件路径** 重新推断 `intent_kind` 与 `verify_backend`（避免 `general` + 仅「计算器」类 goal 漏配 cpp）。
 
 ### 1.2 何时走路径 B
 

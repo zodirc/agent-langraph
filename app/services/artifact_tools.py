@@ -73,6 +73,14 @@ def delete_task_artifact_dir(task_id: str) -> bool:
         return False
 
 
+def is_text_artifact_filename(filename: str) -> bool:
+    """True when basename uses manuscript/text-artifact extensions (.md, .txt, …)."""
+    name = Path(str(filename or "")).name.strip()
+    if not name:
+        return False
+    return Path(name).suffix.lower() in _ALLOWED_EXTENSIONS
+
+
 def _safe_filename(filename: str) -> str:
     name = Path(filename).name.strip()
     if not name or name in (".", ".."):

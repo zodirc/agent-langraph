@@ -949,14 +949,26 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
   }
 }
 
-/** True when /health responds (same origin as chat). */
-async function probeRuntimeHealth(timeoutMs = 8000) {
-  try {
-    const res = await fetchWithTimeout("/health", { method: "GET" }, timeoutMs);
-    return res.ok;
-  } catch {
-    return false;
+/**
+ * Liveness before SSE POST. Prefer /health/live (no DB/MCP probes).
+ * Retries cover uvicorn --reload gaps after hot deploy (~2–8s).
+ */
+async function probeRuntimeHealth(timeoutMs = 4000, maxAttempts = 4) {
+  const paths = ["/health/live", "/health"];
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    for (const path of paths) {
+      try {
+        const res = await fetchWithTimeout(path, { method: "GET" }, timeoutMs);
+        if (res.ok) return true;
+      } catch {
+        /* try next path / attempt */
+      }
+    }
+    if (attempt < maxAttempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+    }
   }
+  return false;
 }
 
 function formatStreamFetchError(err) {
@@ -971,7 +983,8 @@ function formatStreamFetchError(err) {
     `排查：在部署机执行 make ps && make logs；curl -sk ${origin}/health 应返回 200。`,
     "若用局域网 IP 访问，请把该 IP 写入 .env 的 PUBLIC_DOMAIN 后 make up，并在浏览器接受自签证书。",
     "写作/工程/自动模式均走 POST /tasks/stream；若仅写作失败，请打开 DevTools → Network 查看该请求。",
-    "可试侧栏「新会话」(/new) 排除旧 session 状态干扰。",
+    "热更新后请等几秒再发首条消息，或 curl -sk …/health/live（比 /health 更快）。",
+    "「新会话」本身不改网络，只是多等几秒或清屏后重试；旧 session_id 不会导致 /health 失败。",
   ];
   return lines.join("\n");
 }
@@ -3883,7 +3896,10 @@ async function runTaskStream(
       for (const line of formatStreamFetchError(new TypeError("Failed to fetch")).split("\n")) {
         appendLine(line, "error");
       }
-      appendLine("（/health 不可达，已跳过 POST /tasks/stream）", "error");
+      appendLine(
+        "（/health/live 不可达，已跳过 POST /tasks/stream；热更新后请等 agent 就绪再试）",
+        "error"
+      );
       return;
     }
 
