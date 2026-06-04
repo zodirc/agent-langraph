@@ -2814,6 +2814,43 @@ async function runAutonomousUi(autonomousUi, taskId) {
   /* Mission pause hints only — resume is always user-initiated (/resume or continue goal). */
 }
 
+function isMissionStatusQuery(text) {
+  const t = String(text || "").trim();
+  if (!t) return false;
+  return /(你正在做什么|你在做什么|你在干嘛|在做什么|正在做什么|写到哪|当前进度|什么进度|任务状态|what are you doing)/i.test(
+    t
+  );
+}
+
+/** Status/meta question during mission: pause + factual snapshot, do not replan append. */
+async function handleMissionStatusInquiry(message, opts = {}) {
+  const taskId = activeTaskId || getSessionId();
+  if (!opts.suppressUserEcho) {
+    appendLine(`> ${message}`, "user");
+  }
+  const ok = await steerActiveMission(message, {
+    preempt: true,
+    priority: 100,
+    replaceGoal: false,
+    suppressUserEcho: true,
+    intervention: {
+      action: "pause",
+      force: true,
+      reason: "status inquiry",
+    },
+  });
+  if (!ok) return false;
+  const statusData = await fetchTaskStatus(taskId);
+  const st = String(statusData?.status || "");
+  const executorActive = Boolean(statusData?.executor_active);
+  if (!executorActive || st === "MISSION_PAUSED" || st === "REASONED") {
+    await runTaskStream(message, "LOW", "/tasks/stream", null, {
+      suppressUserEcho: true,
+    });
+  }
+  return true;
+}
+
 async function steerActiveMission(message, opts = {}) {
   const taskId = activeTaskId || getSessionId();
   const statusData = await fetchTaskStatus(taskId);
@@ -2831,6 +2868,9 @@ async function steerActiveMission(message, opts = {}) {
     priority: Number.isFinite(opts.priority) ? opts.priority : 0,
     replace_goal: Boolean(opts.replaceGoal),
   };
+  if (opts.intervention && typeof opts.intervention === "object") {
+    payload.intervention = opts.intervention;
+  }
   const res = await apiFetch(`/tasks/${taskId}/steer`, {
     method: "POST",
     headers: getAuthHeaders(),
@@ -3376,8 +3416,15 @@ function formatNodeEvent(payload) {
     appendLine("  … 工具执行完成，正在收尾", "system");
   }
   if (node === "writing" && status === "WRITTEN") {
-    const bytes = payload.body_bytes ? `（${payload.body_bytes} B）` : "";
-    appendLine(`  … 已写入文件 ${payload.body_path || "novel.txt"}${bytes}`, "system");
+    const action = String(payload.writing_action || "");
+    const isOutline = action === "write_outline" || action === "rewrite_outline";
+    const path =
+      payload.written_path ||
+      (isOutline ? payload.outline_path : payload.body_path) ||
+      (isOutline ? "outline.txt" : "novel.txt");
+    const nbytes = isOutline ? payload.outline_bytes : payload.body_bytes;
+    const bytes = nbytes ? `（${nbytes} B）` : "";
+    appendLine(`  … 已写入文件 ${path}${bytes}`, "system");
   }
   if (node === "writing" && status === "WRITING_FAILED") {
     appendLine("  … 写入失败，请查看 trace 或 /audit；目标文件可能未生成", "error");
@@ -4093,11 +4140,16 @@ async function handleCommand(raw) {
     sessionHasInFlightMission = st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
     updateStopButtonState();
     if (st === "MISSION_RUNNING" && executorActive) {
-      await steerActiveMission(text, {
-        preempt: true,
-        priority: 80,
-        replaceGoal: true,
-      });
+      appendLine(`> ${text}`, "user");
+      if (isMissionStatusQuery(text)) {
+        await handleMissionStatusInquiry(text, { suppressUserEcho: true });
+      } else {
+        await steerActiveMission(text, {
+          preempt: true,
+          priority: 80,
+          replaceGoal: true,
+        });
+      }
       return;
     }
   }
@@ -4138,11 +4190,15 @@ formEl.addEventListener("submit", async (event) => {
       return;
     }
     appendLine(`> ${value}`, "user");
-    await steerActiveMission(value, {
-      preempt: true,
-      priority: 80,
-      replaceGoal: true,
-    });
+    if (isMissionStatusQuery(value)) {
+      await handleMissionStatusInquiry(value, { suppressUserEcho: true });
+    } else {
+      await steerActiveMission(value, {
+        preempt: true,
+        priority: 80,
+        replaceGoal: true,
+      });
+    }
     return;
   }
   await handleCommand(value);

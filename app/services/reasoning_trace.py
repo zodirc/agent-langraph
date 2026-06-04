@@ -568,6 +568,8 @@ def report_mission_snapshot_trace(state: dict[str, Any]) -> None:
         "turn": obs.get("turn") or state.get("session_turn"),
         "mission_step": obs.get("mission_step") or state.get("mission_step"),
         "body_bytes": manuscript.get("body_bytes"),
+        "outline_bytes": manuscript.get("outline_bytes"),
+        "outline_path": manuscript.get("outline_path"),
         "written_chars": metrics.get("written_chars"),
         "progress_pct": metrics.get("progress_pct"),
         "chapter_cursor": manuscript.get("chapter_cursor"),

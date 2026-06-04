@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from app.config.settings import settings
-from app.runtime.state import AgentState
+from app.runtime.state import AgentState, TaskStatus
 from app.services.mission_intervention import intervention_from_payload
 from app.services.mission_steer_confirm import steer_confirmation_pending
 from app.services.mission_steer_outcome_confirm import steer_outcome_confirmation_pending
@@ -19,6 +19,38 @@ def _orchestration_line(state: AgentState) -> str:
     from app.services.mission_orchestrator import orchestration_summary
 
     return orchestration_summary(state) or ""
+
+
+def build_mission_status_answer(state: AgentState) -> str:
+    """Factual mission snapshot for status/meta questions (no LLM chapter generation)."""
+    from app.services.mission_orchestrator import orchestration_progress_brief
+    from app.services.mission_steer import pending_steer_is_set
+
+    payload = state.get("input_payload") or {}
+    manuscript = state.get("manuscript") or {}
+    status = str(state.get("status") or "unknown")
+    node = str(state.get("current_node") or "")
+    lines = [
+        f"当前任务状态：{status}"
+        + (f"（节点 {node}）" if node else ""),
+        orchestration_progress_brief(state),
+    ]
+    outline = manuscript.get("outline_path")
+    if outline:
+        lines.append(
+            f"大纲文件：{outline}（{int(manuscript.get('outline_bytes') or 0)} 字节）"
+        )
+    body = manuscript.get("body_path")
+    if body:
+        lines.append(f"正文文件：{body}（{int(manuscript.get('body_bytes') or 0)} 字节）")
+    objective = str((state.get("mission") or {}).get("objective") or payload.get("goal") or "")
+    if objective:
+        lines.append(f"写作目标：{objective[:120]}")
+    if pending_steer_is_set(state.get("pending_user_message")):
+        lines.append("已收到你的插入消息；将在当前写作步骤结束后暂停处理（不会自动续写下一章）。")
+    elif status == TaskStatus.MISSION_RUNNING.value:
+        lines.append("Mission 正在执行中；长写作步骤可能仍需数十秒才能安全打断。")
+    return "\n".join(lines)
 
 
 def _turn_contract_display(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -295,10 +327,16 @@ def _pending_steer_preview(pending: dict[str, Any]) -> Optional[str]:
 
 
 def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[str, Any]:
+    from app.services.interaction_goal import goal_is_mission_status_query
+
     payload = state.get("input_payload") or {}
     pending = state.get("pending_user_message") or {}
     depth = len((pending.get("messages") if isinstance(pending, dict) else []) or [])
     intervention = _intervention_display(payload)
+    preview = _pending_steer_preview(pending if isinstance(pending, dict) else {})
+    status_inquiry = bool(payload.get("mission_status_inquiry")) or (
+        preview and goal_is_mission_status_query(preview)
+    )
 
     pause_reason = ""
     mc = state.get("mission_control")
@@ -321,10 +359,12 @@ def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[
         elif str((pending_contract or {}).get("primary_op") or "") == "batch_unit_quality":
             lines.append("queued_intent: 逐章质量审阅（消费后将取消 pending 续写项）")
         else:
-            preview = _pending_steer_preview(pending if isinstance(pending, dict) else {})
             if preview:
                 lines.append(f"queued_goal: {preview}")
-            lines.append("续写已暂停直至队列消费；消费后将重新规划（非自动 append 下一章）。")
+            if status_inquiry:
+                lines.append(build_mission_status_answer(state))
+            else:
+                lines.append("续写已暂停直至队列消费；消费后将重新规划（非自动 append 下一章）。")
     else:
         lines = ["steer_applied: 插入/纠偏已写入任务状态"]
         if contract_line:
@@ -335,6 +375,8 @@ def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[
             )
         elif str(state.get("status") or "") == "MISSION_PAUSED":
             lines.append("任务已暂停：续跑请 /resume 或发送「继续写作」。")
+        if status_inquiry:
+            lines.append(build_mission_status_answer(state))
         if intervention and intervention.get("reason"):
             lines.append(intervention["reason"])
         elif intervention and intervention.get("action"):

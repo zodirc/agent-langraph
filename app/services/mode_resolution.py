@@ -149,4 +149,9 @@ def run_mode_resolution_pipeline(state: AgentState) -> AgentState:
 
 def should_route_engineering_execution(state: AgentState) -> bool:
     payload = state.get("input_payload") or {}
-    return str(payload.get("target_mode") or "") == "engineering_mode"
+    if str(payload.get("target_mode") or "") != "engineering_mode":
+        return False
+    from app.services.interaction_goal import goal_is_conversational_qa
+
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    return not goal_is_conversational_qa(goal)

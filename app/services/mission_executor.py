@@ -361,22 +361,36 @@ def _chapter_index_mismatch_note(
     return None
 
 
-def _mission_writing_reasoning_summary(state: AgentState) -> str:
-    """Deterministic post-write summary — narrative outcome when available."""
+def _mission_writing_reasoning_summary(state: AgentState) -> AgentState:
+    """Deterministic post-write summary — file on disk is source of truth (no LLM regen)."""
     from app.runtime.state import TaskStatus, append_audit, merge_state
+    from app.services.artifact_tools import is_text_artifact_filename, read_artifact_tail
 
     obs = state.get("observation") or {}
     manuscript = state.get("manuscript") or obs.get("manuscript") or {}
     metrics = obs.get("progress_metrics") or (state.get("progress") or {}).get("metrics") or {}
     payload = state.get("input_payload") or {}
     outcome = payload.get("last_chapter_outcome") or {}
-    path = manuscript.get("body_path") or manuscript.get("outline_path") or "artifact"
-    written = metrics.get("written_chars", manuscript.get("body_bytes", 0))
+    intent = payload.get("writing_intent") or {}
+    action = str(intent.get("action") or "")
+    task_id = str(state["task_id"])
+
+    if action in ("write_outline", "rewrite_outline"):
+        path = str(manuscript.get("outline_path") or payload.get("outline_filename") or "outline.txt")
+        written = int(manuscript.get("outline_bytes") or 0)
+        label = "大纲"
+    else:
+        path = str(manuscript.get("body_path") or payload.get("novel_filename") or "novel.txt")
+        written = int(metrics.get("written_chars") or manuscript.get("body_bytes") or 0)
+        label = "正文"
+
     pct = metrics.get("progress_pct", 0)
     chapter = manuscript.get("chapter_cursor") or metrics.get("chapter_cursor")
-    parts = [f"【本轮已执行】继续写作完成：{path}"]
-    if written:
-        parts.append(f"约 {written} 字")
+    parts = [f"【已写入会话文件】`{path}`（{label}，{written} 字节）。"]
+    if path and is_text_artifact_filename(path) and written > 0:
+        preview = read_artifact_tail(task_id, path, max_chars=280).strip()
+        if preview:
+            parts.append(f"预览：{preview[:280]}{'…' if len(preview) >= 280 else ''}")
     if pct:
         parts.append(f"进度 {pct}%")
     if chapter:
@@ -498,6 +512,10 @@ def run_subgraph_writing(state: AgentState) -> AgentState:
     current = update_progress_from_observation(current)
 
     payload = current.get("input_payload") or {}
+    from app.services.writing_delivery import writing_persisted_on_state
+
+    if str(current.get("status", "")) == "WRITTEN" and writing_persisted_on_state(current):
+        return _mission_writing_reasoning_summary(current)
     if payload.get("force_slow_reasoning") or payload.get("revision_intent"):
         return reasoning_node(current)
     if str(current.get("status", "")) == "WRITTEN":

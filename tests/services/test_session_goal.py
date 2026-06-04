@@ -82,6 +82,14 @@ def test_resolve_session_turn_default_suspend():
     assert decision.source in ("default_suspend", "pattern_fallback", "llm")
 
 
+def test_status_query_isolates_not_resume():
+    state = {"mission": {"kind": "writing", "objective": "长篇"}}
+    payload = {"goal": "你正在做什么"}
+    decision = resolve_session_turn(state, payload, payload["goal"], incoming=payload)
+    assert decision.intent == "isolate_qa"
+    assert decision.source == "status_query"
+
+
 def test_qa_isolation_payload():
     existing = {"task_id": "t1", "mission": {"kind": "writing", "objective": "x"}}
     payload = apply_qa_turn_isolation({"goal": "hello"}, existing)

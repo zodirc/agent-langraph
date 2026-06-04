@@ -50,6 +50,10 @@ def steer_needs_planning_llm(
     intervention: Optional[dict[str, Any]] = None,
 ) -> bool:
     """Whether steer must go through planning (not mechanical step_policy only)."""
+    from app.services.interaction_goal import goal_is_mission_status_query
+
+    if goal_is_mission_status_query(message):
+        return False
     if (message or "").strip():
         return True
     if not intervention:
@@ -349,8 +353,28 @@ def apply_steer_message(
             )
 
     from app.services.mission_execution import has_execution_grant
+    from app.services.interaction_goal import goal_is_mission_status_query
 
-    if steer_needs_planning_llm(message=combined, intervention=norm):
+    status_inquiry = bool(payload.get("mission_status_inquiry")) or any(
+        goal_is_mission_status_query(t) for t in texts
+    )
+    if status_inquiry:
+        payload["mission_status_inquiry"] = True
+        if not norm:
+            norm = _normalize_intervention(
+                {"action": "pause", "force": True, "reason": "status inquiry"}
+            )
+            payload = apply_intervention_to_payload(payload, norm)
+        payload["writing_intent"] = {
+            "enabled": False,
+            "source": "status_inquiry",
+            "blocked_by": "status_inquiry",
+        }
+        payload["steer_planning_done"] = True
+        payload.pop("require_planning_after_steer", None)
+        payload.pop("execution_grant", None)
+        payload.pop("current_work_item", None)
+    elif steer_needs_planning_llm(message=combined, intervention=norm):
         if has_execution_grant(payload):
             from app.services.intent_composer import record_grant_steer_conflict
 
@@ -488,6 +512,20 @@ def queue_steer_message(
     """
     if not (message or "").strip() and not intervention and not confirm:
         raise ValueError("steer requires message, intervention, and/or confirm=true")
+
+    from app.services.interaction_goal import goal_is_mission_status_query
+
+    msg_text = (message or "").strip()
+    if msg_text and goal_is_mission_status_query(msg_text):
+        replace_goal = False
+        preempt = True
+        priority = max(int(priority or 0), 100)
+        if not intervention:
+            intervention = {
+                "action": "pause",
+                "force": True,
+                "reason": "status inquiry",
+            }
 
     from app.services.mission_worker_lost import reconcile_worker_lost
 

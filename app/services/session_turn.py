@@ -166,38 +166,40 @@ def prepare_session_turn(
                 "mission_suspended"
             )
             if mission_active:
+                from app.services.interaction_goal import goal_is_mission_status_query
                 from app.services.mission_steer import (
                     apply_review_outline_mode,
                     apply_steer_message,
                     goal_requests_outline_read,
                 )
 
-                steer_state = merge_state(
-                    existing,
-                    input_payload=merged,
-                    conversation_history=history,
-                    mission=existing.get("mission"),
-                    progress=existing.get("progress"),
-                    manuscript=existing.get("manuscript"),
-                )
-                steer_state = apply_steer_message(
-                    steer_state,
-                    goal,
-                    source="session_turn",
-                    skip_history_append=True,
-                    persist=False,
-                )
-                merged = dict(steer_state.get("input_payload") or merged)
-                history = list(
-                    steer_state.get("conversation_history")
-                    or merged.get("conversation_history")
-                    or history
-                )
-                merged["conversation_history"] = history
-                if goal_requests_outline_read(goal):
-                    merged = apply_review_outline_mode(
-                        merged, existing.get("mission") or {}
+                if not goal_is_mission_status_query(goal):
+                    steer_state = merge_state(
+                        existing,
+                        input_payload=merged,
+                        conversation_history=history,
+                        mission=existing.get("mission"),
+                        progress=existing.get("progress"),
+                        manuscript=existing.get("manuscript"),
                     )
+                    steer_state = apply_steer_message(
+                        steer_state,
+                        goal,
+                        source="session_turn",
+                        skip_history_append=True,
+                        persist=False,
+                    )
+                    merged = dict(steer_state.get("input_payload") or merged)
+                    history = list(
+                        steer_state.get("conversation_history")
+                        or merged.get("conversation_history")
+                        or history
+                    )
+                    merged["conversation_history"] = history
+                    if goal_requests_outline_read(goal):
+                        merged = apply_review_outline_mode(
+                            merged, existing.get("mission") or {}
+                        )
             else:
                 from app.services.mission_steer import _append_steer_goal
 

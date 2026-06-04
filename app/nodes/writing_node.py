@@ -482,15 +482,24 @@ def writing_node(state: AgentState) -> AgentState:
             field="writing_result",
         )
 
+        from app.services.writing_delivery import (
+            clear_reasoning_regen_after_persist,
+            should_force_slow_reasoning_after_write,
+            writing_tool_results_ok,
+        )
+
         audit = payload.get("route_audit") or {}
-        force_reasoning = bool(
-            payload.get("force_slow_reasoning")
-            or audit.get("force_slow_reasoning")
-            or audit.get("aligned") is False
+        revision_intent = bool(payload.get("revision_intent"))
+        if writing_tool_results_ok(results):
+            payload = clear_reasoning_regen_after_persist(payload)
+            audit = payload.get("route_audit") or {}
+        force_reasoning = should_force_slow_reasoning_after_write(
+            payload,
+            audit if isinstance(audit, dict) else {},
+            tool_results=results,
+            revision_intent=revision_intent,
         )
-        payload["skip_reasoning_after_tools"] = not (
-            payload.get("revision_intent") or force_reasoning
-        )
+        payload["skip_reasoning_after_tools"] = not force_reasoning
 
         progress_patch: dict[str, Any] = dict(state.get("progress") or {})
         if chapter_quality_metrics:

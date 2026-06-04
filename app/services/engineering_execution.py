@@ -342,6 +342,8 @@ def _degraded_reason_for_verify(
     if stderr and not verify.ok:
         parts.append("校验输出: " + stderr[:500])
 
+    if verify.ok and verify.status == "ok":
+        return " ".join(parts) if parts else ""
     if not parts:
         return "校验未通过，已停止受控修复。请根据 trace 中的 stderr 调整后重试。"
     return " ".join(parts)
@@ -454,7 +456,10 @@ def format_engineering_answer(
         lines.append(f"- issues: {', '.join(str(i) for i in issues[:6])}")
     if stderr and status != "ok":
         lines.append(f"- stderr: {stderr[:800]}")
-    if status in ("failed", "degraded") or degraded_reason:
+    show_degraded = status in ("failed", "degraded") or (
+        bool(degraded_reason) and status != "ok"
+    )
+    if show_degraded:
         lines.extend(
             [
                 "",

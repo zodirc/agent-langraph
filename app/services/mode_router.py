@@ -41,6 +41,10 @@ def refine_mode_for_session_switch(
     reason = ""
 
     if current_mode == "engineering_mode":
+        from app.services.interaction_goal import goal_is_conversational_qa
+
+        if goal_is_conversational_qa(text):
+            return "qa", "qa_mode", "engineering_to_conversational_qa"
         qa_hit = intent_kind in _QA_LIKE_INTENTS and confidence >= min_kind_score
         if qa_hit or _QA_FOLLOWUP_RE.search(text):
             return intent_kind, "qa_mode", "engineering_to_qa_followup"

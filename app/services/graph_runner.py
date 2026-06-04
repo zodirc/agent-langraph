@@ -380,6 +380,7 @@ def _should_emit_node_event(node_name: str, state: AgentState) -> bool:
 def _node_stream_payload(state: AgentState, node_name: str) -> dict[str, Any]:
     manuscript = state.get("manuscript") or {}
     writing_intent = (state.get("input_payload") or {}).get("writing_intent") or {}
+    writing_action = str(writing_intent.get("action") or "")
     errors = list(state.get("errors") or [])
     status = str(state.get("status") or "")
     payload: dict[str, Any] = {
@@ -389,10 +390,18 @@ def _node_stream_payload(state: AgentState, node_name: str) -> dict[str, Any]:
         "current_node": state.get("current_node"),
         "policy_result": state.get("policy_result"),
         "mission_step": state.get("mission_step"),
-        "writing_action": writing_intent.get("action"),
+        "writing_action": writing_action,
         "body_bytes": manuscript.get("body_bytes"),
         "body_path": manuscript.get("body_path"),
+        "outline_bytes": manuscript.get("outline_bytes"),
+        "outline_path": manuscript.get("outline_path"),
     }
+    if writing_action in ("write_outline", "rewrite_outline"):
+        payload["written_path"] = manuscript.get("outline_path")
+        payload["written_bytes"] = manuscript.get("outline_bytes")
+    else:
+        payload["written_path"] = manuscript.get("body_path")
+        payload["written_bytes"] = manuscript.get("body_bytes")
     if errors and (
         status.endswith("FAILED") or status == TaskStatus.DEAD_LETTER.value
     ):

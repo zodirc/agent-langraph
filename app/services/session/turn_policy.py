@@ -99,6 +99,15 @@ def _evaluate_active_mission_turn(
             reason="empty goal while mission active",
         )
 
+    from app.services.interaction_goal import goal_is_mission_status_query
+
+    if goal_is_mission_status_query(text):
+        return TurnDecision(
+            intent="isolate_qa",
+            source="status_query",
+            reason="mission status/meta question — do not append chapter",
+        )
+
     if _matches_continue_patterns(text, turn_cfg):
         return TurnDecision(
             intent="resume_mission",
