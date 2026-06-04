@@ -85,6 +85,7 @@ delivery:
 
 ## 6. 相关文档
 
+- [`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) — 推理侧 `code_artifact` vs `engineering_mode` 落盘交付
 - [`CODE_ARTIFACT_PIPELINE.md`](CODE_ARTIFACT_PIPELINE.md)
 - [`ROUTE_AUDIT.md`](ROUTE_AUDIT.md)
 - [`REASONING_SHORTCUT.md`](REASONING_SHORTCUT.md)

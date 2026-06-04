@@ -11,10 +11,14 @@
 | Session memory retrieval | **stable** | on | ✅ | `session.memory_retrieval_enabled`；`retrieval_policy.py` |
 | Turn event log (`turn_event_log`) | **stable** | on | ✅ | decision / execution / quality 结构化事件账本 |
 | Segment-aware output guard | **stable** | on | ✅ | `content_segments`；`output_guard.pii_prose_only` |
-| Reasoning code artifacts | **stable** | on | ✅ | `structured.artifacts` + `answer_compose` |
-| Code compile verify + stderr repair | **stable** | on | ✅ | [`CODE_ARTIFACT_PIPELINE.md`](CODE_ARTIFACT_PIPELINE.md)；`code_verify` + `repair`（无排版硬编码） |
+| Reasoning code artifacts | **stable** | on | ✅ | `structured.artifacts` + `answer_compose`；路径 A，见 [`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) |
+| Code compile verify + stderr repair | **stable** | on | ✅ | [`CODE_ARTIFACT_PIPELINE.md`](CODE_ARTIFACT_PIPELINE.md)；`code_verify` 临时 workspace + `repair`（无排版硬编码） |
 | Multi-turn reasoning isolation | **stable** | on | ✅ | [`REASONING_SHORTCUT.md`](REASONING_SHORTCUT.md) |
 | Route audit (post-planning) | **stable** | on | ✅ | [`ROUTE_AUDIT.md`](ROUTE_AUDIT.md)；`config route_audit` |
+| Intent → Mode routing (`engineering_mode`) | **stable** | on | ✅ | [`ENGINEERING_AGENT_SANDBOX_PROPOSAL.md`](ENGINEERING_AGENT_SANDBOX_PROPOSAL.md)；`mode_routing` / `mode_contracts` |
+| Engineering bounded delivery + `project_verify` | **stable** | on | ✅ | 路径 B：落盘 + `cpp`/`python`/`web_html_js`/`make_cpp_demo`；[`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) |
+| Session filesystem tools (sandboxed) | **stable** | on | ✅ | [`SESSION_FILE_TOOLS.md`](SESSION_FILE_TOOLS.md)；`session_fs_tools`；`rm_path` 两阶段确认 |
+| Mode switch per turn (`stay`/`switch`/`isolate`) | **stable** | on | ✅ | `mode_resolution`；[`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) §2 · [`SESSION_TURN_POLICY.md`](SESSION_TURN_POLICY.md) |
 | Reflection + replan on misroute | **stable** | on | ✅ | `retry_planning`；`reflection.route_audit_on_misroute` |
 | Artifact content profiles | **stable** | on | ✅ | `source_code` / `manuscript_prose` / `outline` in `artifact_content` |
 | Controlled SRDL / bounded ReAct | **stable** | on | ✅ | `react_loop.enabled=true`；single runtime 受控 think-act-observe |

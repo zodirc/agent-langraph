@@ -16,6 +16,7 @@ from app.services.artifact_tools import (
     handle_write_text_artifact,
 )
 from app.services.manuscript_context import analyze_manuscript_structure
+from app.services.verify_backend_tool import handle_verify_backend
 from app.services.session_fs_tools import (
     handle_append_file,
     handle_copy_path,
@@ -266,6 +267,28 @@ def _register_artifact_and_utility(registry: ToolRegistry) -> None:
             required_role="user",
             risk_level="LOW",
             handler=handle_touch_file,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="verify_backend",
+            description=(
+                "Run whitelisted compile/project verify for the current session "
+                "(cpp/python/web_html_js/make_cpp_demo only)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "intent_kind": {"type": "string"},
+                    "goal": {"type": "string"},
+                    "backend_id": {"type": "string"},
+                },
+            },
+            output_schema={"type": "object"},
+            required_role="user",
+            risk_level="LOW",
+            handler=handle_verify_backend,
         )
     )
     registry.register(

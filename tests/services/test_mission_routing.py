@@ -17,6 +17,15 @@ def test_goal_only_not_mission():
     assert not should_use_mission_runtime({"goal": "写50万字小说", "mission_auto": True})
 
 
+def test_engineering_target_mode_skips_mission_runtime():
+    payload = {
+        "mission": {"kind": "writing"},
+        "target_mode": "engineering_mode",
+        "disable_mission_auto": True,
+    }
+    assert not should_use_mission_runtime(payload)
+
+
 def test_planning_auto_mission_recommended(test_settings):
     result = {
         "plan": ["outline", "append"],

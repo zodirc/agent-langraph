@@ -15,6 +15,15 @@
 
 Route audit 在 **planning 完成之后、tool/writing 执行之前** 插入审计与纠正。
 
+与 **模式路由** 的分工：
+
+| 模块 | 时机 | 职责 |
+|------|------|------|
+| `route_audit` | planning 后 | 推断 `inferred_kind`、比对 `planned_route`、纠正写作误路由 |
+| `mode_resolution` | route_audit 之后 | `intent_kind` → `target_mode`，加载 `mode_contracts`，写入 trace |
+
+工程类 kind（`interactive_app` / `small_project` / `code`）在 `mode_routing` 中统一映射到 `engineering_mode`，由主图 `engineering_execution` 节点执行，不再依赖 planner 自觉落盘。
+
 ---
 
 ## 2. 流水线
@@ -22,7 +31,8 @@ Route audit 在 **planning 完成之后、tool/writing 执行之前** 插入审�
 ```mermaid
 flowchart TD
   P[planning_node] --> A[run_route_audit_pipeline]
-  A --> I[infer_task_kind]
+  A --> M[run_mode_resolution_pipeline]
+  M --> I[infer_task_kind]
   I --> D[detect_planned_route]
   D --> C{conflicts?}
   C -->|yes| X[apply_route_corrections]
@@ -173,8 +183,10 @@ reflection:
 
 ## 9. 相关文档
 
+- [`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) — `code_artifact` vs `engineering_mode`、模式切换、`project_verify` backend
+- [`ENGINEERING_AGENT_SANDBOX_PROPOSAL.md`](ENGINEERING_AGENT_SANDBOX_PROPOSAL.md) — `engineering_mode` 契约与 `engineering_bounded`
 - [`DISPLAY_AND_DELIVERY.md`](DISPLAY_AND_DELIVERY.md) — 缩进保留、流式 artifacts、记忆写回
-- [`CODE_ARTIFACT_PIPELINE.md`](CODE_ARTIFACT_PIPELINE.md) — 编译校验与 stderr 驱动 LLM 修复（无启发式排版）
+- [`CODE_ARTIFACT_PIPELINE.md`](CODE_ARTIFACT_PIPELINE.md) — 推理侧编译校验与 stderr 修复（路径 A）
 - [`REASONING_SHORTCUT.md`](REASONING_SHORTCUT.md)
 - [`graph_runner.py`](../app/services/graph_runner.py) — 图执行与服务层编排
 - [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md)

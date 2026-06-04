@@ -15,6 +15,7 @@ def test_builtin_tools_registered():
         "replace_in_file",
         "touch_file",
         "mkdir_path",
+        "verify_backend",
         "rm_path",
         "write_text_artifact",
         "append_text_artifact",

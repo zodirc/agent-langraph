@@ -231,4 +231,8 @@ def apply_planning_mission_decision(
 
 def should_use_mission_runtime(payload: dict[str, Any], execution_mode: str = "") -> bool:
     """Mission graph when explicit contract exists or planning merged mission into payload."""
+    if _coerce_bool(payload.get("disable_mission_auto")):
+        return False
+    if str(payload.get("target_mode") or "") in ("engineering_mode", "qa_mode"):
+        return False
     return explicit_mission_requested(payload, execution_mode)

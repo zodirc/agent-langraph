@@ -69,7 +69,7 @@ session:
     enabled: true
     default_suspend_when_mission_active: true
     resume_on_kinds: [manuscript]
-    isolate_on_kinds: [qa]
+    isolate_on_kinds: [qa, code, interactive_app, small_project]
     min_kind_confidence: 0.35
     isolate_when_empty_goal: true
     audit_decisions: true
@@ -89,6 +89,16 @@ session:
 | **route_audit** | planning 完成之后 | goal + 结构信号 + plan |
 
 `route_audit.kinds.qa` **不再**承担问候语识别；hello 由 **default_suspend** 处理。
+
+### 与模式路由（`engineering_mode`）
+
+| 规则 | 行为 |
+|------|------|
+| 活跃写作 + 工程意图（2048 / 可编译代码 / Makefile demo） | `isolate_on_kinds` → `isolate_qa`，并归档 mission；planning 后 `mode_resolution` 进入 `engineering_mode` |
+| 工程会话 + 纯问答追问 | `refine_mode_for_session_switch` → `qa_mode`（见 [`ENGINEERING_AGENT_SANDBOX_PROPOSAL.md`](ENGINEERING_AGENT_SANDBOX_PROPOSAL.md) §10.2） |
+
+`input_payload` 额外字段：`current_mode`、`target_mode`、`mode_switch_action`、`mode_switch_reason`（由 `mode_resolution` 写入）。  
+完整切换规则与双代码路径对照：[`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) §2。
 
 ---
 

@@ -185,6 +185,10 @@ def resolve_session_turn(
         )
 
     if explicit_mission_requested(req, str(req.get("execution_mode") or "")):
+        # Stale mission block in payload must not block engineering / QA delivery turns.
+        pattern = _pattern_kind_decision(goal, turn_cfg=turn_cfg, route_cfg=route_cfg)
+        if pattern is not None and pattern.intent == "isolate_qa":
+            return pattern
         return TurnDecision(
             intent="resume_mission",
             source="explicit_request",

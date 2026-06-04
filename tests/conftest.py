@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from app.config.settings import Settings
 from app.services.audit_store import AuditStore
@@ -13,6 +14,30 @@ from app.services.knowledge_store import KnowledgeStore
 from app.services.memory_store import MemoryStore
 from app.services.state_store import StateStore
 from app.services.tool_registry import ToolRegistry
+
+
+def _merge_prod_mode_blocks(settings: Settings) -> None:
+    """Align test Settings with production mode routing / contracts / verify."""
+    root = Path(__file__).resolve().parents[1]
+    prod_path = root / "config" / "config.yaml"
+    if not prod_path.is_file():
+        return
+    with prod_path.open(encoding="utf-8") as handle:
+        prod = yaml.safe_load(handle) or {}
+    for key, attr in (
+        ("mode_routing", "MODE_ROUTING_CONFIG"),
+        ("mode_contracts", "MODE_CONTRACTS_CONFIG"),
+        ("project_verify", "PROJECT_VERIFY_CONFIG"),
+        ("route_audit", "ROUTE_AUDIT_CONFIG"),
+        ("delivery", "DELIVERY_CONFIG"),
+    ):
+        block = prod.get(key)
+        if isinstance(block, dict) and hasattr(settings, attr):
+            setattr(settings, attr, block)
+    session = prod.get("session") if isinstance(prod.get("session"), dict) else {}
+    turn_policy = session.get("turn_policy")
+    if isinstance(turn_policy, dict):
+        settings.SESSION_TURN_POLICY_CONFIG = turn_policy
 
 
 @pytest.fixture
@@ -77,6 +102,13 @@ session:
   max_history_turns: 20
   max_history_chars: 8000
   compress_enabled: true
+  turn_policy:
+    enabled: true
+    default_suspend_when_mission_active: true
+    resume_on_kinds: [manuscript]
+    isolate_on_kinds: [qa, code, interactive_app, small_project]
+    min_kind_confidence: 0.35
+    isolate_when_empty_goal: true
 observability:
   metrics_enabled: false
 rate_limit:
@@ -110,6 +142,7 @@ skill:
     config_path = tmp_data_dir / "config.yaml"
     config_path.write_text(config_content, encoding="utf-8")
     settings = Settings(str(config_path))
+    _merge_prod_mode_blocks(settings)
     import app.config.settings as settings_module
     import app.nodes.tool_node as tool_node_module  # noqa: F401 — used in loop below
     import app.runtime.graph as graph_module

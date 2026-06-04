@@ -10,6 +10,11 @@
     "integration_exploration_analysis": { "passed": 1.0 },
     "integration_mission_planning_handoff": { "passed": 1.0 },
     "integration_mission_three_steps": { "passed": 0.5 },
-    "integration_supervisor_dual_worker": { "passed": 1.0 }
+    "integration_supervisor_dual_worker": { "passed": 1.0 },
+    "integration_engineering_2048": { "passed": 1.0 },
+    "integration_engineering_cpp": { "passed": 1.0 },
+    "integration_engineering_makefile": { "passed": 1.0 },
+    "integration_session_manuscript_to_engineering": { "passed": 1.0 },
+    "integration_qa_mode_blocks_writing": { "passed": 1.0 }
   }
 }

@@ -15,6 +15,8 @@ from app.services.retrieval_policy import (
     should_route_to_retrieval_after_planning,
 )
 from app.services.route_audit.apply import writing_gate_allowed
+from app.services.mode_execution import mode_blocks_writing, should_route_mission_writing_mode
+from app.services.mode_resolution import should_route_engineering_execution
 from app.services.react_entry import should_enter_react_loop
 from app.services.turn_contract import (
     contract_blocks_writing,
@@ -31,6 +33,8 @@ def _failed_route(state: AgentState, retry_node: str) -> str:
 
 def _writing_route_allowed(state: AgentState) -> bool:
     payload = state.get("input_payload") or {}
+    if mode_blocks_writing(payload):
+        return False
     if contract_blocks_writing(payload):
         return False
     intent = payload.get("writing_intent") or {}
@@ -126,14 +130,21 @@ def route_after_planning(state: AgentState) -> str:
             return "dead_letter"
 
     payload = state.get("input_payload") or {}
+    # manuscript_mode contract: mission graph before engineering / single-turn branches.
+    if should_route_mission_writing_mode(state):
+        if int(state.get("mission_step") or 0) < 1:
+            return "end"
+
     # Main graph stops at planning and hands off to mission_graph (mission_step < 1).
-    # Inside mission_act's inline pipeline, mission_step is already bumped — continue.
     if should_use_mission_runtime(payload, str(state.get("execution_mode") or "")):
         if int(state.get("mission_step") or 0) < 1:
             return "end"
 
     if should_enter_react_loop(state):
         return "react_deliberate"
+
+    if should_route_engineering_execution(state):
+        return "engineering_execution"
 
     plan = state.get("plan") or []
     selected_tools = _effective_selected_tools(state)
@@ -220,6 +231,13 @@ def should_reflect(state: AgentState) -> bool:
         intent = payload.get("writing_intent") or {}
         return bool(intent.get("enabled"))
     return True
+
+
+def route_after_engineering(state: AgentState) -> str:
+    status = str(state.get("status", ""))
+    if status == TaskStatus.FAILED.value:
+        return _failed_route(state, "engineering_execution")
+    return "policy"
 
 
 def route_after_reasoning(state: AgentState) -> str:

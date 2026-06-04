@@ -284,6 +284,35 @@ def stream_llm_trace(
     return accumulated
 
 
+def report_mode_resolution_trace(state: dict[str, Any]) -> None:
+    if not trace_enabled():
+        return
+    payload = state.get("input_payload") or {}
+    resolution = payload.get("mode_resolution") or {}
+    if not resolution:
+        return
+    lines = [
+        "【模式路由】",
+        f"intent_kind: {resolution.get('intent_kind')}",
+        f"target_mode: {resolution.get('target_mode')}",
+        f"switch: {resolution.get('mode_switch_action')} ({resolution.get('mode_switch_reason')})",
+    ]
+    contract = resolution.get("effective_mode_contract") or {}
+    if contract:
+        lines.append(
+            f"contract: path={contract.get('execution_path')} "
+            f"delivery={contract.get('delivery_primary')} "
+            f"tools={contract.get('allowed_tools')}"
+        )
+    report_block(
+        "planning",
+        "mode_resolution",
+        "\n".join(lines),
+        field="mode_resolution",
+        level="detail",
+    )
+
+
 def report_route_audit_trace(state: dict[str, Any]) -> None:
     if not trace_enabled():
         return

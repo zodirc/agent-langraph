@@ -572,6 +572,19 @@ class Settings:
         self.ROUTE_AUDIT_CONFIG = (
             route_audit_cfg if isinstance(route_audit_cfg, dict) else {}
         )
+
+        mode_routing_cfg = raw.get("mode_routing", {})
+        self.MODE_ROUTING_CONFIG = (
+            mode_routing_cfg if isinstance(mode_routing_cfg, dict) else {}
+        )
+        mode_contracts_cfg = raw.get("mode_contracts", {})
+        self.MODE_CONTRACTS_CONFIG = (
+            mode_contracts_cfg if isinstance(mode_contracts_cfg, dict) else {}
+        )
+        project_verify_cfg = raw.get("project_verify", {})
+        self.PROJECT_VERIFY_CONFIG = (
+            project_verify_cfg if isinstance(project_verify_cfg, dict) else {}
+        )
         self.ROUTE_AUDIT_ENABLED = _coerce_bool(
             route_audit_cfg.get("enabled", True)
             if isinstance(route_audit_cfg, dict)

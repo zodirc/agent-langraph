@@ -3,7 +3,8 @@
 > 代码类任务：以**编译校验为主裁判**；失败时先走**确定性最小修复**，再走 **LLM + compiler stderr 修复**。  
 > **不**使用面向用户话术的关键词硬编码，也 **不**在 repair 提示中硬编码缩进风格（如「C++ 每层 4 空格」）；允许少量**编译器无关但协议相关**的确定性修复（如 `static _cast` → `static_cast`、流式 token 粘连空白恢复）。  
 > 对 LOW 风险代码问答，最终仍失败时允许**降级展示未校验源码并显式告警**，而不是一律卡人工审核。  
-> 实现：`app/services/code_artifact_pipeline.py` · `app/services/code_verify/` · `config.yaml` → `code_artifact`
+> 实现：`app/services/code_artifact_pipeline.py` · `app/services/code_verify/` · `config.yaml` → `code_artifact`  
+> **与工程落盘路径的分工**：见 [`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md)（本文档 = **路径 A**；`engineering_mode` = **路径 B**）
 
 ---
 
@@ -129,6 +130,7 @@ Docker 覆盖项见 `config/config.docker.yaml`（`workspace_root: /data/code_ve
 
 ## 7. 相关文档与测试
 
+- [`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md) — 路径 A/B 对照、模式切换、backend 白名单
 - [`ROUTE_AUDIT.md`](ROUTE_AUDIT.md) — 任务种类与 `writing_code_artifact` 路由
 - [`DISPLAY_AND_DELIVERY.md`](DISPLAY_AND_DELIVERY.md) — 展示与记忆写回
 - [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) — 实现状态表

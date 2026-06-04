@@ -112,7 +112,7 @@ session:
     enabled: true
     default_suspend_when_mission_active: true
     resume_on_kinds: [manuscript]
-    isolate_on_kinds: [qa]
+    isolate_on_kinds: [qa, code, interactive_app, small_project]
     min_kind_confidence: 0.35
     isolate_when_empty_goal: true
     audit_decisions: true
@@ -193,6 +193,7 @@ route_audit:
     code:
       weight: 1.0
       patterns:
+        - '(?i)(请直接|帮我).*(生成|写出|落盘).*(项目|文件|源码|程序)'
         - '(?i)\b(c\+\+|cpp|python|java|javascript|typescript|golang|rust|algorithm)\b'
         - '(?i)\b(source\s*code|compile|executable|indentation|linked\s*list)\b'
         - '(?i)\.(cpp|hpp|cc|py|rs|go)\b'
@@ -207,6 +208,19 @@ route_audit:
       structural:
         - mission_writing
         - long_form_chars_requested
+    interactive_app:
+      weight: 1.05
+      patterns:
+        - '(?i)\b(2048|小游戏|html5?\s*game|browser\s*game|canvas)\b'
+        - '(?i)\b(index\.html|game\.js|static\s*(web|page)|网页游戏)\b'
+        - '(?i)(浏览器.*游戏|前端.*demo|html.*demo)'
+    small_project:
+      weight: 1.0
+      patterns:
+        - '(?i)\b(makefile|cmake|multi[- ]file|小项目|样例工程)\b'
+        - '(?i)\b(make\s+demo|项目文件|构建文件)\b'
+      structural:
+        - makefile_in_tools
     qa:
       weight: 0.8
       patterns:
@@ -238,6 +252,114 @@ route_audit:
     - when_kind: qa
       planned_route: writing_manuscript
       action: disable_writing_force_reasoning
+    - when_kind: interactive_app
+      planned_route: writing_manuscript
+      action: disable_writing_force_reasoning
+    - when_kind: interactive_app
+      planned_route: writing_artifact
+      action: disable_writing_force_reasoning
+    - when_kind: small_project
+      planned_route: writing_manuscript
+      action: disable_writing_force_reasoning
+    - when_kind: small_project
+      planned_route: writing_artifact
+      action: disable_writing_force_reasoning
+
+mode_routing:
+  by_intent:
+    qa: qa_mode
+    general: qa_mode
+    manuscript: manuscript_mode
+    interactive_app: engineering_mode
+    small_project: engineering_mode
+    code: engineering_mode
+    retry_recovery: qa_mode
+
+mode_contracts:
+  qa_mode:
+    allowed_tools: []
+    delivery:
+      primary: reasoning_summary
+      secondary: null
+    execution:
+      path: reasoning
+      max_steps: 2
+      max_repair_attempts: 0
+    verify:
+      enabled: false
+    guards:
+      forbid_routes: []
+      force_isolate_from: []
+    security:
+      shell_access: false
+      network_access: false
+      path_scope: session_root_only
+  manuscript_mode:
+    allowed_tools: []
+    delivery:
+      primary: writing_gateway
+      secondary: mission_steps
+    execution:
+      path: mission_writing
+      max_steps: 500
+      max_repair_attempts: 0
+    verify:
+      enabled: false
+    guards:
+      forbid_routes: []
+      force_isolate_from: []
+    security:
+      shell_access: false
+      network_access: false
+      path_scope: session_root_only
+  engineering_mode:
+    allowed_tools: [mkdir_path, write_file, read_file, verify_backend]
+    delivery:
+      primary: tool_write
+      secondary: reasoning_artifacts
+    execution:
+      path: engineering_bounded
+      max_steps: 6
+      max_repair_attempts: 3
+    verify:
+      enabled: true
+      backend_selector: by_intent
+    guards:
+      forbid_routes: [writing_manuscript, mission_writing]
+      force_isolate_from: [manuscript_mode]
+    security:
+      shell_access: false
+      network_access: false
+      path_scope: session_root_only
+
+project_verify:
+  enabled: true
+  timeout_sec: 30
+  max_concurrent_verifies: 2
+  max_files: 64
+  max_file_bytes: 524288
+  workspace_root: /data/project_verify
+  backends:
+    web_html_js:
+      enabled: true
+      commands:
+        syntax_check: [node, --check, "{entry_js}"]
+      required_files: [index.html]
+      entry_js_names: [game.js, main.js, app.js]
+    make_cpp_demo:
+      enabled: true
+      commands:
+        build: [make, demo]
+      required_files: [Makefile]
+      allowed_targets: [demo]
+  backend_by_intent:
+    interactive_app: web_html_js
+    small_project: make_cpp_demo
+  backend_by_language:
+    cpp: cpp
+    c++: cpp
+    python: python
+    py: python
 
 memory:
   task_boost: 0.35
@@ -301,9 +423,17 @@ code_artifact:
 
 delivery:
   by_kind:
+    interactive_app:
+      primary: tool_write
+      secondary: reasoning_artifacts
+      forbid_routes: [writing_manuscript, writing_artifact, mission_writing]
+    small_project:
+      primary: tool_write
+      secondary: reasoning_artifacts
+      forbid_routes: [writing_manuscript, writing_artifact, mission_writing]
     code:
-      primary: reasoning_artifacts
-      secondary: tool_write
+      primary: tool_write
+      secondary: reasoning_artifacts
       default_extension: ".cpp"
       preserve_whitespace: true
       rewrite_manuscript_filenames: true

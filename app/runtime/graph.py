@@ -23,6 +23,7 @@ from app.nodes.human_review_node import human_review_node
 from app.nodes.memory_writeback_node import memory_writeback_node
 from app.nodes.output_guard_node import output_guard_node
 from app.nodes.output_node import output_node
+from app.nodes.engineering_node import engineering_execution_node
 from app.nodes.planning_node import planning_node
 from app.nodes.policy_node import policy_node
 from app.nodes.reasoning_node import reasoning_node
@@ -43,6 +44,7 @@ from app.runtime.react_router import (
 )
 from app.runtime.router import (
     route_after_output_guard,
+    route_after_engineering,
     route_after_planning,
     route_after_policy_to_guard,
     route_after_reasoning,
@@ -64,6 +66,7 @@ def build_agent_graph() -> StateGraph:
 
     # --- Cognition & execution ---
     workflow.add_node("planning", planning_node)
+    workflow.add_node("engineering_execution", engineering_execution_node)
     workflow.add_node("retrieval", retrieval_node)
     workflow.add_node("tool_execution", tool_execution_node)
     workflow.add_node("writing", writing_node)
@@ -92,9 +95,19 @@ def build_agent_graph() -> StateGraph:
             "writing": "writing",
             "reasoning": "reasoning",
             "react_deliberate": "react_deliberate",
+            "engineering_execution": "engineering_execution",
             "planning": "planning",
             "dead_letter": "dead_letter",
             "end": END,
+        },
+    )
+    workflow.add_conditional_edges(
+        "engineering_execution",
+        route_after_engineering,
+        {
+            "policy": "policy",
+            "engineering_execution": "engineering_execution",
+            "dead_letter": "dead_letter",
         },
     )
     workflow.add_conditional_edges(

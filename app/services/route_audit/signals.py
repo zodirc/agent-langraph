@@ -78,6 +78,7 @@ def collect_structural_signals(
         "manuscript_default_body": body_name in cfg.manuscript_body_names,
         "session_outcomes_rejected_recent": recent_rejected,
         "code_filename_in_tools": _code_extension_hit(params_blob + plan_blob, cfg),
+        "makefile_in_tools": "makefile" in (params_blob + plan_blob).lower(),
         "long_form_chars_requested": long_form,
         "planning_skip_retrieval_no_tools": bool(state.get("skip_retrieval"))
         and not tools,

@@ -14,7 +14,9 @@ from app.services.route_audit.config import load_route_audit_config
 def run_route_audit_pipeline(state: AgentState) -> AgentState:
     cfg = load_route_audit_config()
     if not cfg.enabled:
-        return state
+        from app.services.mode_resolution import run_mode_resolution_pipeline
+
+        return run_mode_resolution_pipeline(state)
     audit = audit_planned_route(state, cfg=cfg)
     payload = dict(state.get("input_payload") or {})
     payload["route_audit"] = audit
@@ -29,6 +31,9 @@ def run_route_audit_pipeline(state: AgentState) -> AgentState:
     report_route_audit_trace(state)
     report_effective_plan_trace(state)
     state = normalize_reasoning_policy(state)
+    from app.services.mode_resolution import run_mode_resolution_pipeline
+
+    state = run_mode_resolution_pipeline(state)
     from app.services.turn_event_log import record_turn_event
 
     aligned = bool((state.get("input_payload") or {}).get("route_audit", {}).get("aligned", True))

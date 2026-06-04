@@ -142,6 +142,80 @@
       "expected_nodes": ["mission_init", "mission_decide", "mission_act"]
     },
     {
+      "id": "integration_engineering_2048",
+      "execution_mode": "single",
+      "mock_engineering_bounded": true,
+      "input": {
+        "goal": "做一个浏览器 2048 小游戏，要能直接打开预览",
+        "risk_level": "LOW",
+        "needs_search": false,
+        "use_tools": false
+      },
+      "expect_engineering_mode": true,
+      "expect_min_written_files": 2,
+      "expected_output_contains": ["文件清单", "校验结果"],
+      "expected_nodes": ["planning", "engineering_execution"],
+      "expected_status": ["COMPLETED", "WAITING_REVIEW", "REASONED", "POLICY_CHECKED"]
+    },
+    {
+      "id": "integration_engineering_cpp",
+      "execution_mode": "single",
+      "mock_engineering_bounded": true,
+      "input": {
+        "goal": "用 C++ 写可编译单文件 main.cpp",
+        "risk_level": "LOW",
+        "needs_search": false
+      },
+      "expect_engineering_mode": true,
+      "expect_verify_backend": "cpp",
+      "expected_nodes": ["engineering_execution"],
+      "expected_status": ["COMPLETED", "WAITING_REVIEW", "REASONED", "POLICY_CHECKED"]
+    },
+    {
+      "id": "integration_engineering_makefile",
+      "execution_mode": "single",
+      "mock_engineering_bounded": true,
+      "input": {
+        "goal": "多文件 Makefile demo 小项目，make demo",
+        "risk_level": "LOW"
+      },
+      "expect_engineering_mode": true,
+      "expect_verify_backend": "make_cpp_demo",
+      "expected_nodes": ["engineering_execution"],
+      "expected_status": ["COMPLETED", "WAITING_REVIEW", "REASONED", "POLICY_CHECKED"]
+    },
+    {
+      "id": "integration_session_manuscript_to_engineering",
+      "execution_mode": "single",
+      "mock_engineering_bounded": true,
+      "input": {
+        "goal": "做一个 2048 网页游戏，落盘到 games 目录",
+        "risk_level": "LOW",
+        "current_mode": "manuscript_mode",
+        "mission": { "kind": "writing", "objective": "novel" },
+        "writing_intent": { "enabled": true, "action": "write_body" }
+      },
+      "expect_engineering_mode": true,
+      "expect_mode_switch_contains": "isolate",
+      "expected_nodes": ["engineering_execution"],
+      "expected_status": ["COMPLETED", "WAITING_REVIEW", "REASONED", "POLICY_CHECKED"]
+    },
+    {
+      "id": "integration_qa_mode_blocks_writing",
+      "execution_mode": "single",
+      "mock_planning_qa_mode": true,
+      "input": {
+        "goal": "为什么 LangGraph 使用 checkpoint？",
+        "risk_level": "LOW",
+        "needs_search": false,
+        "writing_intent": { "enabled": true, "action": "write_body" }
+      },
+      "expect_target_mode": "qa_mode",
+      "expected_nodes": ["reasoning"],
+      "forbidden_nodes": ["writing", "engineering_execution"],
+      "expected_status": ["COMPLETED", "WAITING_REVIEW", "REASONED", "POLICY_CHECKED"]
+    },
+    {
       "id": "integration_supervisor_dual_worker",
       "execution_mode": "supervisor",
       "task_type": "supervisor",

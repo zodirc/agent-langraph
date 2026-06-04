@@ -36,6 +36,36 @@ case "$SUITE" in
       --fail-on-regression="$FAIL_REG" \
       "$@"
     ;;
+  engineering)
+    echo "==> eval suite: engineering (golden + unit + optional live E2E)"
+    "$PY" -m pytest \
+      tests/eval/test_integration_golden.py \
+      -k "engineering or qa_mode" \
+      --baseline="tests/eval/integration_baseline.json" \
+      --fail-on-regression="$FAIL_REG" \
+      "$@"
+    "$PY" -m pytest \
+      tests/services/test_mode_router.py \
+      tests/services/test_mode_session_rules.py \
+      tests/services/test_mode_session_switch.py \
+      tests/services/test_mode_contract_apply.py \
+      tests/runtime/test_mode_routing.py \
+      tests/services/test_engineering_bounded_limits.py \
+      tests/services/test_engineering_repair.py \
+      tests/services/test_engineering_execution.py \
+      tests/services/test_project_verify_security.py \
+      tests/services/test_mission_routing.py \
+      tests/config/test_mode_config_parity.py \
+      tests/integration/test_engineering_mode_flow.py \
+      -q \
+      "$@"
+    if [[ -n "${ENGINEERING_E2E_LIVE:-}" ]]; then
+      echo "==> engineering live E2E (ENGINEERING_E2E_LIVE=1)"
+      "$PY" -m pytest tests/e2e/test_engineering_mode_live.py -v "$@"
+    else
+      echo "==> skip live E2E (set ENGINEERING_E2E_LIVE=1 to enable)"
+    fi
+    ;;
   oma)
     echo "==> eval suite: oma (ADR-001 M8 golden)"
     exec "$PY" -m pytest tests/integration/test_mission_oma_golden.py tests/services/test_mission_oma.py -q \
@@ -72,7 +102,7 @@ case "$SUITE" in
       "$@"
     ;;
   *)
-    echo "Unknown SUITE=$SUITE (use unit|integration|oma|rag|all)" >&2
+    echo "Unknown SUITE=$SUITE (use unit|integration|engineering|oma|rag|all)" >&2
     exit 1
     ;;
 esac
