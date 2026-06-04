@@ -520,10 +520,43 @@ def get_task_state_debug(
     )
 
 
+@router.get("/{task_id}/session-usage")
+def get_task_session_usage(
+    task_id: str,
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> dict[str, Any]:
+    """Provider-reported token usage for chat panel (no heuristic estimates)."""
+    from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
+    from app.services.prompt_context_gateway import resolve_context_panel_meta
+
+    state = get_state_store().load(task_id, read_only=True)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    state = enrich_agent_state_manuscript(state)
+    return {
+        "task_id": task_id,
+        "session": resolve_context_panel_meta(state),
+    }
+
+
+@router.get("/models/catalog")
+def get_models_catalog(
+    _principal: AuthPrincipal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Available models and context window sizes for chat metering UI."""
+    from app.services.model_catalog import catalog_for_api
+
+    return {"models": catalog_for_api()}
+
+
 @router.get("/{task_id}/context-composition")
 def get_task_context_composition(
     task_id: str,
     purpose: str = Query("reasoning", description="Context policy purpose"),
+    model: Optional[str] = Query(
+        None,
+        description="Catalog model id for context-window preview (same session context)",
+    ),
     _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> dict[str, Any]:
     """
@@ -563,13 +596,47 @@ def get_task_context_composition(
     p = purpose if purpose in allowed else "reasoning"
     from app.services.prompt_context_gateway import resolve_context_panel_meta
 
-    composition = build_prompt_composition_for_state(state, purpose=p)  # type: ignore[arg-type]
-    session_meta = resolve_context_panel_meta(state)
+    model_id = (model or "").strip() or None
+    composition = build_prompt_composition_for_state(
+        state, purpose=p, model_id=model_id
+    )  # type: ignore[arg-type]
+    session_meta = resolve_context_panel_meta(state, purpose=p, model_id=model_id)
     return {
         "task_id": task_id,
         "purpose": p,
         "composition": composition,
         "session": session_meta,
+    }
+
+
+class ChatModelRequest(BaseModel):
+    model_id: str = Field(..., min_length=1, max_length=256)
+
+
+@router.put("/{task_id}/chat-model")
+def put_task_chat_model(
+    task_id: str,
+    body: ChatModelRequest,
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> dict[str, Any]:
+    """
+    Persist per-session model choice (same conversation context, different context window).
+    """
+    from app.runtime.state import merge_state
+    from app.services.prompt_context_gateway import resolve_context_panel_meta
+
+    store = get_state_store()
+    state = store.load(task_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    payload = dict(state.get("input_payload") or {})
+    payload["chat_model_id"] = body.model_id.strip()
+    updated = merge_state(state, input_payload=payload)  # type: ignore[arg-type]
+    store.save(updated)
+    return {
+        "task_id": task_id,
+        "chat_model_id": body.model_id,
+        "session": resolve_context_panel_meta(updated),
     }
 
 

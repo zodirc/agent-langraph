@@ -514,6 +514,18 @@ button.badge-session-btn:hover {
   border-radius: 2px;
 }
 
+.ctx-gov-window-meter {
+  margin: 0.35rem 0 0.5rem;
+}
+
+.ctx-gov-window-fill {
+  background: linear-gradient(90deg, #2a5a8a, var(--cyan));
+}
+
+.ctx-gov-window-fill-warn {
+  background: linear-gradient(90deg, #8a5a2a, #d8a04a);
+}
+
 .ctx-gov-details {
   margin: 4px 0;
   border: 1px solid var(--border-subtle);

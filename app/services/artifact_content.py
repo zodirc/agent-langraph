@@ -235,6 +235,7 @@ def generate_artifact_content(
             task_desc=task_desc,
             user_payload=user_payload,
             filename=filename,
+            trace_state=state,
         )
     else:
         draft = invoke_artifact_draft(
@@ -242,6 +243,7 @@ def generate_artifact_content(
             task_desc=task_desc,
             user_payload=user_payload,
             filename=filename,
+            trace_state=state,
         )
     if profile == "source_code":
         content = draft.content.rstrip("\n")

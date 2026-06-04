@@ -125,6 +125,9 @@ class Settings:
         self.MODEL_MAX_TOKENS_WRITING = int(
             purpose_tokens.get("writing", min(16384, self.MODEL_MAX_TOKENS))
         )
+        self.MODEL_CONTEXT_WINDOW = int(model.get("context_window", 0) or 0)
+        catalog_raw = model.get("catalog")
+        self.MODEL_CATALOG = catalog_raw if isinstance(catalog_raw, list) else []
 
         performance = raw.get("performance", {})
         self.FAST_REASONING_ENABLED = _coerce_bool(
@@ -736,6 +739,11 @@ class Settings:
         self.CONTEXT_GOVERNANCE_ENABLED = _coerce_bool(ctx_gov.get("enabled", True))
         self.CONTEXT_GOVERNANCE_DEFAULT_BUDGET = int(
             ctx_gov.get("default_token_budget", 64800)
+        )
+        # IDE/session context meter cap (Cursor/Copilot-style); NOT per-model.
+        self.SESSION_CONTEXT_WINDOW = int(
+            ctx_gov.get("session_context_window", 0)
+            or ctx_gov.get("default_token_budget", 64800)
         )
 
         self.CHECKPOINT_CORRUPTION_DETECTION_ENABLED = _coerce_bool(

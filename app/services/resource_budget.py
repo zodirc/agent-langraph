@@ -27,6 +27,8 @@ class BudgetContext:
     token_limit: int = 0
     cost_limit: float = 0.0
     tokens_used: int = 0
+    tokens_used_estimate: int = 0
+    tokens_used_billed: int = 0
     cost_used: float = 0.0
     exhausted: bool = False
     model_downgrade: bool = False
@@ -36,6 +38,8 @@ class BudgetContext:
             "token_limit": self.token_limit,
             "cost_limit": self.cost_limit,
             "tokens_used": self.tokens_used,
+            "tokens_used_estimate": self.tokens_used_estimate,
+            "tokens_used_billed": self.tokens_used_billed,
             "cost_used": round(self.cost_used, 6),
             "exhausted": self.exhausted,
             "model_downgrade": self.model_downgrade,
@@ -45,10 +49,13 @@ class BudgetContext:
     def from_state(cls, state: AgentState) -> BudgetContext:
         raw = state.get("token_budget") or {}
         cost_raw = state.get("cost_budget") or {}
+        used = int(raw.get("used") or 0)
         ctx = cls(
             token_limit=int(raw.get("limit") or 0),
             cost_limit=float(cost_raw.get("limit") or 0.0),
-            tokens_used=int(raw.get("used") or 0),
+            tokens_used=used,
+            tokens_used_estimate=int(raw.get("used_estimate") or used),
+            tokens_used_billed=int(raw.get("used_billed") or 0),
             cost_used=float(cost_raw.get("used") or 0.0),
             exhausted=bool(raw.get("exhausted")),
             model_downgrade=bool(raw.get("model_downgrade")),
@@ -57,14 +64,26 @@ class BudgetContext:
 
     def apply_to_state(self, state: AgentState) -> AgentState:
         blob = self.to_dict()
+        prev = state.get("token_budget") if isinstance(state.get("token_budget"), dict) else {}
+        token_budget: dict[str, Any] = {
+            "limit": blob["token_limit"],
+            "used": blob["tokens_used_billed"] or blob["tokens_used"],
+            "used_estimate": blob["tokens_used_estimate"],
+            "used_billed": blob["tokens_used_billed"],
+            "exhausted": blob["exhausted"],
+            "model_downgrade": blob["model_downgrade"],
+        }
+        if prev.get("last_usage"):
+            token_budget["last_usage"] = prev["last_usage"]
+        if prev.get("last_usage_local"):
+            token_budget["last_usage_local"] = prev["last_usage_local"]
+        if prev.get("used_local") is not None:
+            token_budget["used_local"] = prev["used_local"]
+        if prev.get("llm_call_count"):
+            token_budget["llm_call_count"] = prev["llm_call_count"]
         return merge_state(
             state,
-            token_budget={
-                "limit": blob["token_limit"],
-                "used": blob["tokens_used"],
-                "exhausted": blob["exhausted"],
-                "model_downgrade": blob["model_downgrade"],
-            },
+            token_budget=token_budget,
             cost_budget={
                 "limit": blob["cost_limit"],
                 "used": blob["cost_used"],
@@ -100,12 +119,20 @@ class BudgetContext:
         system_prompt: str,
         user_content: str,
         response_text: str,
+        *,
+        billed_tokens: int | None = None,
     ) -> None:
-        used = _estimate_tokens(system_prompt + user_content + response_text)
-        self.tokens_used += used
+        estimated = _estimate_tokens(system_prompt + user_content + response_text)
+        self.tokens_used_estimate += estimated
+        if billed_tokens is not None and billed_tokens > 0:
+            self.tokens_used_billed += billed_tokens
+            self.tokens_used += billed_tokens
+        else:
+            self.tokens_used += estimated
         cost_per_1k = float(getattr(settings, "COST_PER_1K_TOKENS", 0.0))
+        billed_for_cost = billed_tokens if billed_tokens is not None else estimated
         if cost_per_1k > 0:
-            self.cost_used += (used / 1000.0) * cost_per_1k
+            self.cost_used += (billed_for_cost / 1000.0) * cost_per_1k
         if self.token_limit > 0 and self.tokens_used >= self.token_limit:
             self.exhausted = True
         if self.cost_limit > 0 and self.cost_used >= self.cost_limit:
@@ -129,6 +156,98 @@ def init_task_budget(state: AgentState) -> AgentState:
 
 def budget_context_from_state(state: AgentState) -> BudgetContext:
     return BudgetContext.from_state(state)
+
+
+def record_session_token_usage(
+    state: dict[str, Any],
+    *,
+    system_prompt: str,
+    user_content: str,
+    response_text: str,
+    billed_tokens: int | None = None,
+    usage_detail: dict[str, Any] | None = None,
+    purpose: str = "",
+    budget_ctx: BudgetContext | None = None,
+) -> None:
+    """Accumulate provider + local token usage on task state for session panel."""
+    from datetime import datetime, timezone
+
+    from app.services.context_meter import resolve_session_model
+    from app.services.token_counter import count_llm_exchange_tokens
+
+    prev = state.get("token_budget") if isinstance(state.get("token_budget"), dict) else {}
+    if budget_ctx is not None:
+        blob = budget_ctx.to_dict()
+    else:
+        ctx = BudgetContext.from_state(state)  # type: ignore[arg-type]
+        ctx.after_invoke(
+            "session",
+            system_prompt,
+            user_content,
+            response_text,
+            billed_tokens=billed_tokens,
+        )
+        blob = ctx.to_dict()
+    tb: dict[str, Any] = {
+        "limit": blob["token_limit"],
+        "used": blob["tokens_used_billed"],
+        "used_estimate": blob["tokens_used_estimate"],
+        "used_billed": blob["tokens_used_billed"],
+        "exhausted": blob["exhausted"],
+        "model_downgrade": blob["model_downgrade"],
+        "llm_call_count": int(prev.get("llm_call_count") or 0),
+        "last_usage": dict(prev.get("last_usage") or {}),
+        "used_local": int(prev.get("used_local") or 0),
+        "last_usage_local": dict(prev.get("last_usage_local") or {}),
+        "session_prompt_tokens_billed": int(prev.get("session_prompt_tokens_billed") or 0),
+        "session_completion_tokens_billed": int(prev.get("session_completion_tokens_billed") or 0),
+        "session_prompt_tokens_local": int(prev.get("session_prompt_tokens_local") or 0),
+        "session_completion_tokens_local": int(prev.get("session_completion_tokens_local") or 0),
+    }
+    model_name, _ = resolve_session_model(state)
+    local_detail = count_llm_exchange_tokens(
+        model_name=model_name,
+        system_prompt=system_prompt,
+        user_content=user_content,
+        response_text=response_text,
+    )
+    call_recorded = False
+    if int(local_detail.get("total_tokens") or 0) > 0:
+        tb["used_local"] = int(tb.get("used_local") or 0) + int(local_detail["total_tokens"])
+        tb["session_prompt_tokens_local"] = int(tb.get("session_prompt_tokens_local") or 0) + int(
+            local_detail.get("prompt_tokens") or 0
+        )
+        tb["session_completion_tokens_local"] = int(
+            tb.get("session_completion_tokens_local") or 0
+        ) + int(local_detail.get("completion_tokens") or 0)
+        tb["llm_call_count"] = int(tb["llm_call_count"]) + 1
+        call_recorded = True
+        tb["last_usage_local"] = {
+            "purpose": purpose,
+            "prompt_tokens": int(local_detail["prompt_tokens"]),
+            "completion_tokens": int(local_detail["completion_tokens"]),
+            "total_tokens": int(local_detail["total_tokens"]),
+            "source": "local",
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+    if usage_detail and int(usage_detail.get("total_tokens") or 0) > 0:
+        if not call_recorded:
+            tb["llm_call_count"] = int(tb["llm_call_count"]) + 1
+        tb["session_prompt_tokens_billed"] = int(tb.get("session_prompt_tokens_billed") or 0) + int(
+            usage_detail.get("prompt_tokens") or 0
+        )
+        tb["session_completion_tokens_billed"] = int(
+            tb.get("session_completion_tokens_billed") or 0
+        ) + int(usage_detail.get("completion_tokens") or 0)
+        tb["last_usage"] = {
+            "purpose": purpose,
+            "prompt_tokens": int(usage_detail.get("prompt_tokens") or 0),
+            "completion_tokens": int(usage_detail.get("completion_tokens") or 0),
+            "total_tokens": int(usage_detail.get("total_tokens") or 0),
+            "source": "provider",
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+    state["token_budget"] = tb
 
 
 def resolve_prompt_token_budget(

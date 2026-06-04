@@ -1,74 +1,14 @@
 /**
- * Context Governance observability — collapsible panel beside chat title (ADR §1.1 #6).
+ * Session usage panel — Copilot-style dual metrics (context length + token usage).
+ * Provider usage when available; local tokenizer/heuristic fallback otherwise.
  */
 (function initContextGovernancePanel(global) {
-  const COLLAPSED_KEY = "ctx_gov_panel_collapsed";
-  const DEFAULT_TOKEN_BUDGET = 64800;
-
-  /** 各「预算桶」对人可读的含义（ADR ContextBucket） */
-  const BUCKET_HELP = {
-    system_policy: { title: "系统策略", desc: "任务规则、安全边界、全局指令" },
-    current_turn: { title: "当前轮", desc: "本轮用户目标与即时输入" },
-    recent_transcript: { title: "近期对话", desc: "最近几轮聊天原文" },
-    semantic_summary: { title: "历史摘要", desc: "较早对话压缩成的摘要" },
-    working_memory: { title: "工作记忆", desc: "计划、约束、章节状态等结构化笔记" },
-    retrieved_memory: { title: "情节记忆", desc: "从长期记忆召回的片段" },
-    retrieved_knowledge: { title: "检索知识", desc: "RAG / 知识库检索结果" },
-    tool_observations: { title: "工具输出", desc: "grep、读文件、API 等工具返回" },
-    file_context: { title: "文件上下文", desc: "工作区文件切片、diff 等" },
-    diagnostics: { title: "诊断信息", desc: "报错、测试失败、终端输出等" },
-  };
-
-  const SCOPE_HELP = {
-    transcript: {
-      title: "transcript（对话历史）",
-      desc:
-        "压缩 conversation_history：对较早轮次做语义摘要或字符裁剪，保留最近若干轮。适合聊天原文过长、想减负 transcript 桶。",
-    },
-    all_compressible: {
-      title: "all_compressible（可压缩项）",
-      desc:
-        "当前实现会先压缩对话历史（与 transcript 相同）；设计上还会压缩标记为 compressible 的工作记忆、工具输出等。组包预览使用 reasoning 策略。",
-    },
-    aggressive: {
-      title: "aggressive（强力）",
-      desc:
-        "同样先压缩对话历史，但组包预览改用 summarization 策略、更紧的 token 预算（约为配置值一半），更容易丢弃低优先级片段。",
-    },
-  };
-
-  const PURPOSE_HELP = {
-    reasoning: "推理节点",
-    planning: "规划节点",
-    writing: "写作节点",
-    reviewing: "审阅节点",
-    reflection: "反思节点",
-    routing: "路由节点",
-    summarization: "摘要节点",
-    code_agent: "代码 Agent",
-  };
-
   const panelEl = document.getElementById("context-governance-panel");
   if (!panelEl) return;
 
   const toggleBtnEl = document.getElementById("ctx-gov-toggle");
-  const dropdownEl = document.getElementById("ctx-gov-dropdown");
   const badgeEl = document.getElementById("ctx-gov-badge");
-  const hintEl = document.getElementById("ctx-gov-hint");
-  const summaryPanelEl = document.getElementById("ctx-gov-summary");
   const summaryEl = document.getElementById("ctx-gov-summary-body");
-  const bucketsEl = document.getElementById("ctx-gov-buckets");
-  const keptEl = document.getElementById("ctx-gov-kept");
-  const compressedEl = document.getElementById("ctx-gov-compressed");
-  const droppedEl = document.getElementById("ctx-gov-dropped");
-  const compressedCountEl = document.getElementById("ctx-gov-compressed-count");
-  const droppedCountEl = document.getElementById("ctx-gov-dropped-count");
-  const purposeEl = document.getElementById("ctx-gov-purpose");
-  const scopeEl = document.getElementById("ctx-gov-scope");
-  const scopeHintEl = document.getElementById("ctx-gov-scope-hint");
-  const tokenBudgetEl = document.getElementById("ctx-gov-token-budget");
-  const compressBtnEl = document.getElementById("ctx-gov-compress-btn");
-  const compressStatusEl = document.getElementById("ctx-gov-compress-status");
 
   let refreshInFlight = false;
 
@@ -91,11 +31,6 @@
     return fetch(url, options);
   }
 
-  function appendSystemLine(text) {
-    const fn = runtime().appendSystemLine;
-    if (typeof fn === "function") fn(text);
-  }
-
   function escapeHtml(value) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -109,257 +44,118 @@
     if (toggleBtnEl) {
       toggleBtnEl.setAttribute("aria-expanded", collapsed ? "false" : "true");
     }
-    localStorage.setItem(COLLAPSED_KEY, collapsed ? "1" : "0");
+    localStorage.setItem("ctx_gov_panel_collapsed", collapsed ? "1" : "0");
   }
 
   function isCollapsed() {
-    return localStorage.getItem(COLLAPSED_KEY) !== "0";
+    return localStorage.getItem("ctx_gov_panel_collapsed") !== "0";
   }
 
-  function countKeptItems(itemsByBucket) {
-    if (!itemsByBucket || typeof itemsByBucket !== "object") return 0;
-    return Object.values(itemsByBucket).reduce((n, arr) => n + (Array.isArray(arr) ? arr.length : 0), 0);
+  /** Compact display like 157.3k / 3.1m */
+  function fmtCompact(n) {
+    if (n === null || n === undefined || Number.isNaN(Number(n))) return "—";
+    const v = Number(n);
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}m`;
+    if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
+    return String(Math.round(v));
   }
 
-  function summarizeRoles(roles) {
-    if (!Array.isArray(roles) || !roles.length) return "—";
-    const counts = {};
-    for (const r of roles) {
-      const key = String(r || "unknown");
-      counts[key] = (counts[key] || 0) + 1;
-    }
-    const roleZh = { system: "系统", user: "用户", assistant: "助手", tool: "工具" };
-    return Object.entries(counts)
-      .map(([r, n]) => `${roleZh[r] || r}×${n}`)
-      .join("，");
+  function fmtPair(used, max) {
+    if (used === null || used === undefined) return "—";
+    if (!max) return fmtCompact(used);
+    return `${fmtCompact(used)} / ${fmtCompact(max)}`;
   }
 
-  function bucketLabel(bucketKey) {
-    const info = BUCKET_HELP[bucketKey];
-    if (!info) return { title: bucketKey, desc: "" };
-    return info;
+  function billingHint(source) {
+    if (source === "provider") return "厂商 API usage";
+    if (source === "local") return "本地计数（无厂商 usage 时）";
+    if (source === "none") return "";
+    return "厂商优先，缺省用本地计数";
   }
 
-  function renderBadge(comp) {
+  function renderBadge(sessionMeta) {
     if (!badgeEl) return;
-    if (!comp) {
+    if (!sessionMeta) {
       badgeEl.textContent = "—";
       badgeEl.className = "ctx-gov-badge-inline ctx-gov-badge-idle";
-      badgeEl.title = "尚无组包数据";
+      badgeEl.title = "尚无用量数据";
       return;
     }
-    const kept = countKeptItems(comp.items_by_bucket);
-    const compressed = (comp.compressed || []).length;
-    const dropped = (comp.dropped || []).length;
-    if (compressed === 0 && dropped === 0) {
-      badgeEl.textContent = `保留${kept}`;
+    const ctx = sessionMeta.context_length_used_tokens;
+    const session = sessionMeta.session_tokens_consumed;
+    if (ctx > 0) {
+      badgeEl.textContent = fmtCompact(ctx);
+      badgeEl.title = `上下文 ${fmtCompact(ctx)} / ${fmtCompact(sessionMeta.context_length_max_tokens)}`;
+    } else if (session > 0) {
+      badgeEl.textContent = fmtCompact(session);
+      badgeEl.title = `会话累计 ${session} tok`;
     } else {
-      badgeEl.textContent = `保留${kept}·压${compressed}·丢${dropped}`;
+      badgeEl.textContent = "—";
+      badgeEl.title = "尚无 LLM 调用";
     }
     badgeEl.className = "ctx-gov-badge-inline";
-    if (dropped > 0) badgeEl.classList.add("ctx-gov-badge-warn");
-    badgeEl.title =
-      `进入模型的上下文片段：保留 ${kept} 条` +
-      (compressed ? `，压缩 ${compressed} 条` : "") +
-      (dropped ? `，丢弃 ${dropped} 条` : "");
   }
 
-  function formatSessionTokens(comp, sessionMeta) {
-    const used =
-      sessionMeta?.session_tokens_used ??
-      comp?.session_tokens_used ??
-      comp?.trace?.session_tokens_used ??
-      0;
-    const limit =
-      sessionMeta?.session_token_limit ??
-      comp?.session_token_limit ??
-      comp?.trace?.session_token_limit ??
-      0;
-    let text = `${used} tok（本会话 LLM 累计消耗）`;
-    if (limit > 0) text += ` / 任务限额 ${limit}`;
-    return text;
+  function renderMeterBar(pct) {
+    if (!Number.isFinite(pct) || pct < 0) return "";
+    const warn = pct >= 85 ? " ctx-gov-window-fill-warn" : "";
+    return (
+      `<div class="ctx-gov-window-meter" role="presentation">` +
+      `<div class="ctx-gov-bar"><span class="ctx-gov-bar-fill ctx-gov-window-fill${warn}" style="width:${pct}%"></span></div>` +
+      `</div>`
+    );
   }
 
-  function renderScopeHint() {
-    if (!scopeHintEl || !scopeEl) return;
-    const key = scopeEl.value || "transcript";
-    const info = SCOPE_HELP[key] || SCOPE_HELP.transcript;
-    scopeHintEl.innerHTML =
-      `<strong>${escapeHtml(info.title)}</strong>：${escapeHtml(info.desc)}`;
-  }
-
-  function renderSummary(comp, taskId, purpose, sessionMeta, options = {}) {
+  function renderSummary(sessionMeta, taskId, options = {}) {
     if (!summaryEl) return;
-    if (!comp) {
-      const msg = options.loading
-        ? "正在加载会话摘要…"
-        : "暂无组包数据。请先在本会话发送一条任务，或切换已有历史会话。";
-      summaryEl.innerHTML = `<p class="ctx-gov-empty">${escapeHtml(msg)}</p>`;
+    if (!sessionMeta && !options.loading) {
+      summaryEl.innerHTML =
+        `<p class="ctx-gov-empty">尚无 LLM 调用。发送消息后将显示上下文长度与会话 Token 用量。</p>`;
       return;
     }
-    const trace = comp.trace || {};
-    const budget =
-      comp.token_budget_total ?? trace.token_budget_total ?? trace.budget_total ?? DEFAULT_TOKEN_BUDGET;
-    const assembly =
-      comp.assembly_tokens ?? trace.assembly_tokens ?? countAssemblyTokens(comp.buckets);
-    const model =
-      sessionMeta?.model_name ?? comp.model_name ?? trace.model_name ?? "";
-    const msgCount = comp.rendered_message_count ?? (comp.rendered_roles || []).length;
-    const roleSummary = summarizeRoles(comp.rendered_roles);
-    const purposeZh = PURPOSE_HELP[purpose] || purpose;
-    const sessionTok = formatSessionTokens(comp, sessionMeta);
+    if (options.loading) {
+      summaryEl.innerHTML = `<p class="ctx-gov-empty">正在加载…</p>`;
+      return;
+    }
+
+    const model = sessionMeta.model_name || "—";
+    const ctxUsed = sessionMeta.context_length_used_tokens;
+    const ctxMax = sessionMeta.context_length_max_tokens || sessionMeta.model_context_window_tokens;
+    const sessionTotal = sessionMeta.session_tokens_consumed;
+    const lastReq = sessionMeta.last_request_tokens;
+    const source = sessionMeta.billing_source || "none";
+    const purpose = sessionMeta.last_call_purpose || "—";
+    const ctxPct = sessionMeta.context_length_used_percent;
+    const ctxBar = renderMeterBar(ctxPct);
+    const hint = billingHint(source);
+
+    const contextLine = fmtPair(ctxUsed, ctxMax);
+    const tokenLine = fmtPair(sessionTotal, lastReq);
+
+    let sourceNote = "";
+    if (source === "provider") {
+      sourceNote = "累计与上次请求优先使用厂商 usage。";
+    } else if (source === "local") {
+      sourceNote = "网关未返回 usage，数字为本地分词计数（与厂商账单可能略有偏差）。";
+    } else {
+      sourceNote = hint;
+    }
+
     summaryEl.innerHTML =
-      `<dl class="ctx-gov-dl" role="list">` +
-      `<dt>当前会话</dt><dd><code>${escapeHtml(taskId.slice(0, 12))}…</code>（任务 ID）</dd>` +
-      `<dt>当前模型</dt><dd><strong>${escapeHtml(model || "—")}</strong></dd>` +
-      `<dt>会话已消耗 token</dt><dd>${escapeHtml(sessionTok)}</dd>` +
-      `<dt>预览场景</dt><dd><strong>${escapeHtml(purposeZh)}</strong>（${escapeHtml(purpose)}）` +
-      ` — 模拟该节点下次调模型时的组包，非正在执行的节点</dd>` +
-      `<dt>本轮组包预算</dt><dd>${escapeHtml(String(budget))} tok（单次 prompt 上限）</dd>` +
-      `<dt>本轮组包估算</dt><dd>${escapeHtml(String(assembly))} tok（各桶保留之和）</dd>` +
-      `<dt>最终消息条数</dt><dd>${escapeHtml(String(msgCount))} 条</dd>` +
-      `<dt>消息角色构成</dt><dd>${escapeHtml(roleSummary)}</dd>` +
-      `</dl>`;
+      `<dl class="ctx-gov-dl ctx-gov-dl-compact" role="list">` +
+      `<dt>当前会话</dt><dd><code>${escapeHtml(taskId.slice(0, 12))}…</code></dd>` +
+      `<dt>模型</dt><dd><strong>${escapeHtml(model)}</strong></dd>` +
+      `<dt>上下文长度</dt><dd>${ctxBar}<strong>${escapeHtml(contextLine)}</strong>` +
+      (ctxPct != null ? `<span class="ctx-gov-muted">（${ctxPct}%）</span>` : "") +
+      `</dd>` +
+      `<dt>Token 用量</dt><dd><strong>${escapeHtml(tokenLine)}</strong>` +
+      `<br><span class="ctx-gov-muted">会话累计 / 上次请求 · ${escapeHtml(purpose)}</span></dd>` +
+      `</dl>` +
+      `<p class="ctx-gov-muted">${escapeHtml(sourceNote)}</p>`;
   }
 
-  function countAssemblyTokens(buckets) {
-    if (!Array.isArray(buckets)) return 0;
-    return buckets.reduce((n, b) => n + (Number(b.final_tokens) || 0), 0);
-  }
-
-  function renderBuckets(comp) {
-    if (!bucketsEl) return;
-    bucketsEl.replaceChildren();
-    const buckets = comp?.buckets;
-    if (!Array.isArray(buckets) || !buckets.length) {
-      bucketsEl.appendChild(Object.assign(document.createElement("p"), {
-        className: "ctx-gov-empty",
-        textContent: "暂无桶分配数据。",
-      }));
-      return;
-    }
-    const cap = document.createElement("p");
-    cap.className = "ctx-gov-section-cap";
-    cap.textContent = "各类上下文占用的 token（已用 / 该桶上限）";
-    bucketsEl.appendChild(cap);
-    for (const b of buckets) {
-      const budget = Number(b.budget_tokens) || 1;
-      const final = Number(b.final_tokens) || 0;
-      const initial = Number(b.initial_tokens) || 0;
-      const pct = Math.min(100, Math.round((final / budget) * 100));
-      const info = bucketLabel(b.bucket);
-      const row = document.createElement("div");
-      row.className = "ctx-gov-bucket-row";
-      row.title = info.desc;
-      row.innerHTML =
-        `<div class="ctx-gov-bucket-head">` +
-        `<span class="ctx-gov-bucket-name">${escapeHtml(info.title)}` +
-        `<span class="ctx-gov-bucket-key">${escapeHtml(b.bucket)}</span></span>` +
-        `<span class="ctx-gov-bucket-tokens">${final} / ${budget} tok` +
-        (initial !== final ? ` <span class="ctx-gov-muted">(组包前 ${initial})</span>` : "") +
-        `</span></div>` +
-        `<p class="ctx-gov-bucket-desc">${escapeHtml(info.desc)}</p>` +
-        `<div class="ctx-gov-bar" role="presentation"><span class="ctx-gov-bar-fill" style="width:${pct}%"></span></div>`;
-      bucketsEl.appendChild(row);
-    }
-  }
-
-  function renderKept(comp) {
-    if (!keptEl) return;
-    keptEl.replaceChildren();
-    const byBucket = comp?.items_by_bucket;
-    if (!byBucket || typeof byBucket !== "object" || !Object.keys(byBucket).length) {
-      keptEl.appendChild(Object.assign(document.createElement("p"), {
-        className: "ctx-gov-empty",
-        textContent: "无保留项。",
-      }));
-      return;
-    }
-    for (const [bucket, items] of Object.entries(byBucket)) {
-      const sec = document.createElement("section");
-      sec.className = "ctx-gov-bucket-items";
-      const h = document.createElement("h4");
-      h.textContent = `${bucket} (${items.length})`;
-      sec.appendChild(h);
-      const ul = document.createElement("ul");
-      ul.className = "ctx-gov-ul";
-      for (const it of items.slice(0, 12)) {
-        const li = document.createElement("li");
-        li.innerHTML =
-          `<span class="ctx-gov-item-id">${escapeHtml(it.id)}</span> ` +
-          `<span class="ctx-gov-item-kind">${escapeHtml(it.kind)}</span> ` +
-          `<span class="ctx-gov-muted">p=${escapeHtml(it.priority)} · ${it.tokens ?? 0} tok</span>` +
-          (it.preview ? `<pre class="ctx-gov-preview">${escapeHtml(it.preview)}</pre>` : "");
-        ul.appendChild(li);
-      }
-      if (items.length > 12) {
-        ul.appendChild(Object.assign(document.createElement("li"), {
-          className: "ctx-gov-muted",
-          textContent: `… 另有 ${items.length - 12} 项`,
-        }));
-      }
-      sec.appendChild(ul);
-      keptEl.appendChild(sec);
-    }
-  }
-
-  function renderItemList(ulEl, items, countEl) {
-    if (!ulEl) return;
-    ulEl.replaceChildren();
-    const list = Array.isArray(items) ? items : [];
-    if (countEl) countEl.textContent = list.length ? `(${list.length})` : "";
-    if (!list.length) {
-      ulEl.appendChild(Object.assign(document.createElement("li"), {
-        className: "ctx-gov-muted",
-        textContent: "无",
-      }));
-      return;
-    }
-    for (const it of list.slice(0, 20)) {
-      const li = document.createElement("li");
-      const preview = (it.content || it.preview || "").slice(0, 160);
-      li.innerHTML =
-        `<span class="ctx-gov-item-id">${escapeHtml(it.id)}</span> ` +
-        `<span class="ctx-gov-item-kind">${escapeHtml(it.kind || "")}</span> ` +
-        `<span class="ctx-gov-muted">${escapeHtml(it.bucket || "")} · ${it.estimated_tokens ?? it.tokens ?? 0} tok</span>` +
-        (preview ? `<pre class="ctx-gov-preview">${escapeHtml(preview)}</pre>` : "");
-      ulEl.appendChild(li);
-    }
-    if (list.length > 20) {
-      ulEl.appendChild(Object.assign(document.createElement("li"), {
-        className: "ctx-gov-muted",
-        textContent: `… 另有 ${list.length - 20} 项`,
-      }));
-    }
-  }
-
-  function applyComposition(comp, meta) {
-    const taskId = meta?.taskId || getTaskId();
-    const purpose = meta?.purpose || purposeEl?.value || "reasoning";
-    const sessionMeta = meta?.session || null;
-    if (hintEl) hintEl.hidden = Boolean(comp);
-    renderBadge(comp);
-    renderSummary(comp, taskId, purpose, sessionMeta);
-    renderBuckets(comp);
-    renderKept(comp);
-    renderItemList(compressedEl, comp?.compressed, compressedCountEl);
-    renderItemList(droppedEl, comp?.dropped, droppedCountEl);
-  }
-
-  function compositionFromStatePayload(statePayload) {
-    if (!statePayload || typeof statePayload !== "object") return null;
-    const direct = statePayload.context_composition;
-    if (direct && typeof direct === "object") return direct;
-    const trace = statePayload.trace_context || statePayload.traceContext;
-    if (trace && typeof trace === "object") {
-      return trace.last_context_composition || null;
-    }
-    return null;
-  }
-
-  async function fetchComposition(taskId, purpose) {
-    const params = new URLSearchParams({ purpose });
-    const res = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/context-composition?${params}`, {
+  async function fetchSessionUsage(taskId) {
+    const res = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/session-usage`, {
       headers: { Accept: "application/json" },
     });
     if (res.status === 404) return { error: "not_found" };
@@ -368,129 +164,38 @@
       return { error: `http_${res.status}`, detail: text.slice(0, 200) };
     }
     const body = await res.json();
-    return {
-      composition: body.composition,
-      purpose: body.purpose,
-      taskId: body.task_id,
-      session: body.session || null,
-    };
+    return { session: body.session, taskId: body.task_id };
   }
 
-  function sessionMetaFromState(state) {
-    if (!state || typeof state !== "object") return null;
-    const tb = state.token_budget || {};
-    return {
-      model_name: "",
-      session_tokens_used: Number(tb.used) || 0,
-      session_token_limit: Number(tb.limit) || 0,
-    };
-  }
-
-  async function fetchStateComposition(taskId) {
-    const res = await apiFetch(
-      `/tasks/${encodeURIComponent(taskId)}/state?truncate=true`,
-      { headers: { Accept: "application/json" } }
-    );
-    if (!res.ok) return null;
-    const body = await res.json();
-    const view = body.sources?.merged || body;
-    const state = view.state || view;
-    const composition = compositionFromStatePayload(state);
-    if (!composition) return null;
-    return { composition, session: sessionMetaFromState(state) };
+  function applySession(meta) {
+    const taskId = meta?.taskId || getTaskId();
+    const sessionMeta = meta?.session || null;
+    renderBadge(sessionMeta);
+    renderSummary(sessionMeta, taskId);
   }
 
   async function refreshPanel(options = {}) {
     if (refreshInFlight && !options.force) return;
     const taskId = (options.taskId || getTaskId() || "").trim();
     if (!taskId) {
-      renderSummary(null, "", purposeEl?.value || "reasoning", null);
-      applyComposition(null, {});
+      applySession({});
       return;
     }
-    const purpose = purposeEl?.value || "reasoning";
     refreshInFlight = true;
-    renderSummary(null, taskId, purpose, null, { loading: true });
+    renderSummary(null, taskId, { loading: true });
     try {
-      const result = await fetchComposition(taskId, purpose);
+      const result = await fetchSessionUsage(taskId);
       if (result.error === "not_found") {
-        applyComposition(null, { taskId, purpose });
-        renderSummary(null, taskId, purpose, null);
-        if (compressStatusEl) compressStatusEl.textContent = "任务尚无状态";
+        applySession({ taskId });
         return;
       }
       if (result.error) {
-        const fallback = await fetchStateComposition(taskId);
-        if (fallback?.composition) {
-          applyComposition(fallback.composition, {
-            taskId,
-            purpose,
-            session: fallback.session,
-          });
-          return;
-        }
-        if (compressStatusEl) compressStatusEl.textContent = result.detail || "加载失败";
+        renderSummary(null, taskId);
         return;
       }
-      applyComposition(result.composition, {
-        taskId: result.taskId || taskId,
-        purpose: result.purpose || purpose,
-        session: result.session,
-      });
-      if (compressStatusEl) compressStatusEl.textContent = "";
+      applySession({ taskId: result.taskId || taskId, session: result.session });
     } finally {
       refreshInFlight = false;
-    }
-  }
-
-  async function runCompress() {
-    const taskId = getTaskId();
-    if (!taskId) {
-      if (compressStatusEl) compressStatusEl.textContent = "无活动任务";
-      return;
-    }
-    const scope = scopeEl?.value || "transcript";
-    const body = { scope };
-    const rawBudget = tokenBudgetEl?.value?.trim();
-    if (rawBudget) {
-      const n = Number(rawBudget);
-      if (Number.isFinite(n) && n >= 1024 && n <= DEFAULT_TOKEN_BUDGET) {
-        body.token_budget = Math.floor(n);
-      }
-    }
-    if (compressBtnEl) compressBtnEl.disabled = true;
-    if (compressStatusEl) compressStatusEl.textContent = "压缩中…";
-    try {
-      const res = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/context/compress`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({}));
-        const detail =
-          typeof errBody.detail === "string"
-            ? errBody.detail
-            : `HTTP ${res.status}`;
-        if (compressStatusEl) compressStatusEl.textContent = detail;
-        return;
-      }
-      const data = await res.json();
-      if (data.composition) {
-        applyComposition(data.composition, {
-          taskId,
-          purpose: purposeEl?.value || "reasoning",
-          session: data.session,
-        });
-      } else {
-        await refreshPanel({ force: true });
-      }
-      const msg =
-        `上下文已压缩 (scope=${scope})：保留 ${data.kept ?? "?"}, 丢弃 ${data.dropped ?? "?"}, 压缩 ${data.compressed ?? "?"}`;
-      if (compressStatusEl) compressStatusEl.textContent = msg;
-      appendSystemLine(`[context] ${msg}`);
-    } finally {
-      if (compressBtnEl) compressBtnEl.disabled = false;
     }
   }
 
@@ -510,18 +215,6 @@
       togglePanel();
     });
   }
-  if (purposeEl) {
-    purposeEl.addEventListener("change", () => {
-      if (isExpanded()) refreshPanel({ force: true });
-    });
-  }
-  if (scopeEl) {
-    scopeEl.addEventListener("change", renderScopeHint);
-  }
-  renderScopeHint();
-  if (compressBtnEl) {
-    compressBtnEl.addEventListener("click", () => runCompress());
-  }
 
   document.addEventListener("click", (ev) => {
     if (!isExpanded()) return;
@@ -534,13 +227,10 @@
   });
 
   setCollapsed(isCollapsed());
-  if (tokenBudgetEl && !tokenBudgetEl.value) {
-    tokenBudgetEl.placeholder = String(DEFAULT_TOKEN_BUDGET);
-  }
 
   global.AgentContextGovernance = {
     bump,
     refresh: (opts) => refreshPanel(opts || { force: true }),
-    applyComposition,
+    applyComposition: (_comp, meta) => applySession(meta),
   };
 })(window);

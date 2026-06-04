@@ -170,6 +170,32 @@ def test_queue_steer_while_running_accumulates(base_state, monkeypatch):
     assert len(entries) == 2
 
 
+def test_queue_steer_after_completed_starts_new_turn(base_state):
+    mission = build_mission_dict(
+        base_state,
+        {"mission": {"kind": "writing", "total_target_chars": 50000}},
+        kind="writing",
+    )
+    state = merge_state(
+        base_state,
+        mission=mission,
+        status="COMPLETED",
+        input_payload={"goal": "写小说"},
+        session_turn=1,
+    )
+    get_state_store().save(state)
+
+    updated = queue_steer_message(
+        state["task_id"],
+        "写一个2048的小游戏",
+        replace_goal=True,
+    )
+    assert updated["status"] == "NEW"
+    assert int(updated.get("session_turn") or 0) == 2
+    payload = updated.get("input_payload") or {}
+    assert "2048" in str(payload.get("goal") or "")
+
+
 def test_forced_pause_queue_also_sets_immediate_intervention(base_state):
     mission = build_mission_dict(
         base_state,

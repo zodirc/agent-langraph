@@ -19,6 +19,17 @@ def test_extract_usage_from_response_metadata():
     assert _extract_usage_from_response(response) == 15
 
 
+def test_extract_usage_from_additional_kwargs():
+    response = SimpleNamespace(
+        content="hi",
+        response_metadata={},
+        additional_kwargs={
+            "usage": {"prompt_tokens": 20, "completion_tokens": 7, "total_tokens": 27}
+        },
+    )
+    assert _extract_usage_from_response(response) == 27
+
+
 def test_record_llm_usage_billed_vs_logical(monkeypatch):
     reset_tenant_quota_store()
     monkeypatch.setattr(settings, "MULTI_TENANT_ENABLED", True)

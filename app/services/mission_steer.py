@@ -497,6 +497,39 @@ def queue_steer_message(
     stored = reconcile_worker_lost(stored)
     status = str(stored.get("status", ""))
 
+    if status == TaskStatus.COMPLETED.value and (
+        (message or "").strip() or intervention or confirm
+    ):
+        from app.services.session_turn import _reset_execution_fields
+        from app.services.session.turn_policy import (
+            apply_qa_turn_isolation,
+            resolve_session_turn,
+        )
+
+        updated = apply_steer_message(
+            stored,
+            message,
+            intervention=intervention,
+            confirm=confirm,
+            replace_goal=replace_goal,
+            source="steer_after_complete",
+        )
+        merged = dict(updated.get("input_payload") or {})
+        goal = str(merged.get("goal") or message or "").strip()
+        if goal:
+            decision = resolve_session_turn(updated, merged, goal)
+            if decision.intent == "isolate_qa":
+                merged = apply_qa_turn_isolation(merged, updated)
+        updated = _reset_execution_fields(updated, merged)
+        if merged.get("mission_suspended"):
+            updated = merge_state(
+                updated,
+                mission=None,
+                execution_mode="single",
+            )
+        get_state_store().save(updated)
+        return updated
+
     if status in (TaskStatus.MISSION_PAUSED.value, TaskStatus.REASONED.value):
         return apply_steer_message(
             stored,

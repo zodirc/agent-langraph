@@ -42,71 +42,22 @@
           <span class="dot yellow"></span>
           <span class="dot green"></span>
           <span class="title">对话</span>
-          <div id="context-governance-panel" class="ctx-gov-anchor is-collapsed" aria-label="上下文治理观测">
-            <button type="button" id="ctx-gov-toggle" class="ctx-gov-trigger flow-btn" aria-expanded="false" aria-controls="ctx-gov-dropdown" title="展开/收起上下文治理">
-              上下文
+          <div id="context-governance-panel" class="ctx-gov-anchor is-collapsed" aria-label="会话用量">
+            <button type="button" id="ctx-gov-toggle" class="ctx-gov-trigger flow-btn" aria-expanded="false" aria-controls="ctx-gov-dropdown" title="展开/收起会话 token 用量（厂商实际回报）">
+              用量
               <span id="ctx-gov-badge" class="ctx-gov-badge-inline">—</span>
             </button>
             <div id="ctx-gov-dropdown" class="ctx-gov-dropdown">
-              <div class="ctx-gov-dropdown-toolbar">
-                <label class="ctx-gov-label">
-                  预览场景
-                  <select id="ctx-gov-purpose" class="ctx-gov-select" title="选择要预览的节点类型（不同节点组包策略不同）">
-                    <option value="reasoning">推理 reasoning</option>
-                    <option value="planning">规划 planning</option>
-                    <option value="writing">写作 writing</option>
-                    <option value="reviewing">审阅 reviewing</option>
-                    <option value="reflection">反思 reflection</option>
-                    <option value="routing">路由 routing</option>
-                    <option value="summarization">摘要 summarization</option>
-                    <option value="code_agent">代码 code_agent</option>
-                  </select>
-                </label>
-              </div>
-              <section id="ctx-gov-summary" class="ctx-gov-summary-panel" aria-label="会话摘要">
-                <h4 class="ctx-gov-summary-title">会话摘要</h4>
+              <section id="ctx-gov-summary" class="ctx-gov-summary-panel" aria-label="会话用量">
+                <h4 class="ctx-gov-summary-title">会话用量</h4>
                 <div id="ctx-gov-summary-body" class="ctx-gov-summary-body">
                   <p class="ctx-gov-empty">展开后加载…</p>
                 </div>
               </section>
-              <div id="ctx-gov-body" class="ctx-gov-body">
-                <p id="ctx-gov-hint" class="ctx-gov-hint">
-                  说明：以下为<strong>所选场景</strong>下的 prompt 组包模拟（非聊天原文）。按钮数字 = 保留/压缩/丢弃片段数。
-                </p>
-                <div id="ctx-gov-buckets" class="ctx-gov-buckets" aria-label="桶预算"></div>
-                <details class="ctx-gov-details" id="ctx-gov-kept-details">
-                  <summary>保留项（按 bucket）</summary>
-                  <div id="ctx-gov-kept" class="ctx-gov-item-list"></div>
-                </details>
-                <details class="ctx-gov-details">
-                  <summary>压缩项 <span id="ctx-gov-compressed-count" class="ctx-gov-count"></span></summary>
-                  <ul id="ctx-gov-compressed" class="ctx-gov-ul"></ul>
-                </details>
-                <details class="ctx-gov-details">
-                  <summary>丢弃项 <span id="ctx-gov-dropped-count" class="ctx-gov-count"></span></summary>
-                  <ul id="ctx-gov-dropped" class="ctx-gov-ul"></ul>
-                </details>
-                <footer class="ctx-gov-compress-block">
-                  <p class="ctx-gov-section-cap">手动压缩</p>
-                  <label class="ctx-gov-label">
-                    压缩 scope
-                    <select id="ctx-gov-scope" class="ctx-gov-select" title="选择要压缩的范围">
-                      <option value="transcript">transcript — 对话历史</option>
-                      <option value="all_compressible">all_compressible — 可压缩项</option>
-                      <option value="aggressive">aggressive — 强力压缩</option>
-                    </select>
-                  </label>
-                  <p id="ctx-gov-scope-hint" class="ctx-gov-scope-hint"></p>
-                  <div class="ctx-gov-compress-row">
-                  <label class="ctx-gov-label">
-                    token_budget
-                    <input type="number" id="ctx-gov-token-budget" class="ctx-gov-input-num" min="1024" max="64800" step="512" placeholder="64800" />
-                  </label>
-                  <button type="button" id="ctx-gov-compress-btn" class="flow-btn ctx-gov-compress-btn">执行压缩</button>
-                  <span id="ctx-gov-compress-status" class="ctx-gov-status-msg" role="status"></span>
-                  </div>
-                </footer>
-              </div>
+              <details id="ctx-gov-advanced" class="ctx-gov-details ctx-gov-advanced">
+                <summary>治理调试（组包模拟，非实际用量）</summary>
+                <p class="ctx-gov-hint">开发用：需组包预览请调 API <code>GET /tasks/{id}/context-composition</code></p>
+              </details>
             </div>
           </div>
           <div class="header-actions">
@@ -225,7 +176,7 @@
   <script src="/static/platform-nav.js?v=6"></script>
   <script src="/static/platform-auth.js?v=7"></script>
   <script src="/static/skill_form.js?v=1"></script>
-  <script src="/static/app.js?v=ui-26"></script>
-  <script src="/static/context_governance_panel.js?v=5"></script>
+  <script src="/static/app.js?v=ui-27"></script>
+  <script src="/static/context_governance_panel.js?v=9"></script>
 </body>
 </html>

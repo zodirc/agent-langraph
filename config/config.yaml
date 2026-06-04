@@ -17,6 +17,15 @@ model:
     reasoning: 8192
     writing: 16384
     routing: 1024
+  # 模型上下文窗口（单次请求 input+output 上限，用于 UI 占用条）
+  context_window: 200000
+  # 可选：多模型目录（切换模型时共用同一会话上下文，窗口大小随模型变化）
+  # catalog:
+  #   - id: claude-sonnet
+  #     label: Claude Sonnet
+  #     provider: anthropic
+  #     model_name: ${MODEL_NAME}
+  #     context_window_tokens: 200000
   timeout: 120
   max_retries: 2
 
@@ -525,6 +534,8 @@ context_compress:
 context_governance:
   enabled: true
   default_token_budget: 64800
+  # IDE 会话上下文窗口（占用条刻度，切换模型不变；对齐 Cursor/Copilot）
+  session_context_window: 64800
 
 rag:
   chunk_enabled: true

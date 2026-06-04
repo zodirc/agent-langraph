@@ -42,16 +42,18 @@ make init && make up                   # HTTPS + 代码热更新
 - `/risk high <text>`
 - `/supervisor 分析文档并审查代码`
 
-### 近期 Runtime / Mission 更新（2026-06-03）
+### 近期 Runtime / Mission / Context Governance 更新（2026-06-04）
 
-基于最近几次 commit，当前一轮核心变化已经从前端 UI 扩展为 **Mission OMAW 执行模型升级**、**长文执行控制加固**、以及 **运行中任务可恢复性补强** 三块：
+基于最近几次 commit，当前一轮核心变化已经从前端 UI 扩展为 **Mission OMAW 执行模型升级**、**长文执行控制加固**、**运行中任务可恢复性补强**，以及 **统一 Context Governance 上下文治理** 四块：
 
 - **Mission OMAW 成为默认长文主路径**：长篇写作明确收敛到 `execution_mode=mission_oma`，由 Orchestrator + Writer / Reviewer / Editor / Planner / Continuity Worker 协作，主链路不再依赖单图内联写作阶段切换。
 - **事实与验收语义收敛**：新增 [`FactBundle`](app/domain/fact_bundle.py:35) 与 [`ReviewVerdict`](app/domain/review_verdict.py:54)，把 worker 的事实输入、检索来源、章节验收与 polish 决策统一成稳定对象模型。
 - **执行路径与回合语义更明确**：新增 [`turn_kind`](app/services/turn_kind.py:13) 与 planning→executor 路由约束，避免“计划说要执行、实际却只 narrate/reasoning 收尾”的漂移。
 - **Mission 控制面补强**：运行中任务通过 executor registry 跟踪活跃 graph run；SSE 刷新不再误清 live 状态，孤儿 `MISSION_RUNNING` 会被识别并自动转成 `worker_lost` pause，等待显式恢复。
+- **Context Governance 成为统一上下文入口**：任意 LLM 调用不再直接消费原始全量 `conversation_history`，而是通过 [`prompt_context_gateway`](app/services/prompt_context_gateway.py:1) 统一收集 `current_turn / semantic_summary / working_memory / retrieved_knowledge / tool_observations / file_context / diagnostics` 等上下文项，按 [`PromptContextPolicy`](app/services/context_policy.py:12) 做 token 预算、优先级裁剪、压缩与组包，并把 kept / compressed / dropped 决策写入 composition trace。
+- **上下文治理可观测与可操作**：`/chat` 内嵌上下文治理面板；任务 API 可查看 `context-composition` 并触发受策略约束的手动压缩。旧 [`context_compressor`](app/services/context_compressor.py:1) 仍保留为 transcript → semantic summary 的子能力，但不再作为 prompt 主路径的唯一入口。
 
-相关实现与文档可参考 [`docs/ADR_MISSION_LIFECYCLE_V2.md`](docs/ADR_MISSION_LIFECYCLE_V2.md)、[`docs/MANUSCRIPT_WRITING.md`](docs/MANUSCRIPT_WRITING.md)、[`docs/MISSION_EXECUTION_CONTROL.md`](docs/MISSION_EXECUTION_CONTROL.md)、[`app/services/graph_run_registry.py`](app/services/graph_run_registry.py:1)、[`app/services/mission_worker_lost.py`](app/services/mission_worker_lost.py:1)。
+相关实现与文档可参考 [`docs/ADR_MISSION_LIFECYCLE_V2.md`](docs/ADR_MISSION_LIFECYCLE_V2.md)、[`docs/MISSION_EXECUTION_CONTROL.md`](docs/MISSION_EXECUTION_CONTROL.md)、[`docs/ADR_CONTEXT_GOVERNANCE.md`](docs/ADR_CONTEXT_GOVERNANCE.md)、[`docs/CONTEXT_GOVERNANCE.md`](docs/CONTEXT_GOVERNANCE.md)、[`app/services/graph_run_registry.py`](app/services/graph_run_registry.py:1)、[`app/services/mission_worker_lost.py`](app/services/mission_worker_lost.py:1)、[`app/services/context_assembler.py`](app/services/context_assembler.py:53)。
 
 ## 独立 CLI（§8.2）
 

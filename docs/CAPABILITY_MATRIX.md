@@ -36,10 +36,12 @@
 | API rate limit | **stable** | on | ✅ | `rate_limit.enabled` |
 | LLM circuit breaker | **beta** | off | ✅ | `llm.circuit_breaker_enabled` |
 | Checkpoint corruption recovery | **beta** | off | ✅ | `checkpoint_recovery.py` |
-| Context compress (character) | **stable** | on | ✅ | `session.compress_enabled` |
+| Context compress (character) | **stable** | on | ✅ | `session.compress_enabled`；作为 transcript fail-safe，而非长期 prompt 主路径 |
 | Session turn policy / planning gate | **stable** | on | ✅ | [`SESSION_TURN_POLICY.md`](SESSION_TURN_POLICY.md)；mission active 时的机械续写、intent classifier、planning gate |
-| Semantic context compress | **beta** | off | 🔶 | Code ✅；压缩率 hard gate 未齐 |
-| Context Governance (unified) | **stable** | on | ✅ | [`ADR_CONTEXT_GOVERNANCE.md`](ADR_CONTEXT_GOVERNANCE.md)、[`CONTEXT_GOVERNANCE.md`](CONTEXT_GOVERNANCE.md)；`context_governance.enabled` |
+| Semantic context compress | **beta** | off | 🔶 | Code ✅；作为 `recent_transcript → semantic_summary` 子能力保留，压缩率 hard gate 未齐 |
+| Context Governance (unified) | **stable** | on | ✅ | [`ADR_CONTEXT_GOVERNANCE.md`](ADR_CONTEXT_GOVERNANCE.md)、[`CONTEXT_GOVERNANCE.md`](CONTEXT_GOVERNANCE.md)；`context_governance.enabled`；统一 `prompt_context_gateway → context_policy → context_assembler` |
+| Purpose-specific context policy | **stable** | on | ✅ | [`context_policy.py`](../app/services/context_policy.py)；planning / reasoning / writing / reviewing / routing / code_agent 分桶预算与 degrade order |
+| Context composition observability | **stable** | on | ✅ | composition view + Prometheus + `/tasks/{id}/context-composition` + `/chat` 上下文治理面板 |
 | Skill runtime | **beta** | off | ✅ | `skill.enabled=false`；registry + yaml |
 | MCP tools + ops | **beta** | off | ✅ | probe/evict；resources/prompts；HTTP stub E2E |
 | Embedding governance | **stable** | on | ✅ | meta table + reindex + compatibility check |

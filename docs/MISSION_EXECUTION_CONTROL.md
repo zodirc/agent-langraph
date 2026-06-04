@@ -11,7 +11,7 @@
 | 编排显示 `write_outline` pending，但 `outline.txt` 已有内容 | `work_plan` 投影与 `manuscript` 事实不同步 |
 | `mission_finalize` 调用 reasoning 流式输出全文大纲 | 无本回合 `artifact_delta` 时仍走 LLM 综合 |
 
-**原则**：下一步写什么由 **手稿度量 + step_policy** 推导；`work_plan` 是可重建的投影；恢复执行走 **显式 control-plane**，不靠正文关键词表。
+**原则**：下一步写什么由 **手稿度量 + step_policy** 推导；`work_plan` 是可重建的投影；恢复执行走 **显式 control-plane**，不靠正文关键词表。与此并行，所有 planning / reasoning / writing / reviewing 的模型输入统一经 [`Context Governance`](ADR_CONTEXT_GOVERNANCE.md) 组包，Mission 控制面不再默认直接消费原始全量 transcript，而是消费按 `purpose` 裁剪后的 governed context。
 
 ---
 

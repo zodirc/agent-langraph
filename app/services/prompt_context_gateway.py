@@ -513,25 +513,52 @@ def governed_mission_observation_context(state: AgentState | dict[str, Any]) -> 
     return governed
 
 
-def resolve_context_panel_meta(state: AgentState | dict[str, Any]) -> dict[str, Any]:
-    """Runtime model + cumulative session token usage for Web context panel."""
-    from app.services.llm_client import _resolve_model_name
-    from app.services.resource_budget import budget_context_from_state
+def resolve_context_panel_meta(
+    state: AgentState | dict[str, Any],
+    *,
+    purpose: str = "reasoning",
+    model_id: str | None = None,
+) -> dict[str, Any]:
+    """Runtime model + session metering for Web context panel (Copilot/Cursor-style)."""
+    from app.services.context_meter import build_session_meter
 
     raw = state if isinstance(state, dict) else dict(state)
-    tb = raw.get("token_budget") or {}
-    if not isinstance(tb, dict):
-        tb = {}
-    used = int(tb.get("used") or 0)
-    limit = int(tb.get("limit") or 0)
-    try:
-        model = _resolve_model_name(budget_context_from_state(raw))  # type: ignore[arg-type]
-    except Exception:
-        model = str(getattr(settings, "MODEL_NAME", "") or "")
+    meter = build_session_meter(raw, purpose=purpose, model_id=model_id)
     return {
-        "model_name": model,
-        "session_tokens_used": used,
-        "session_token_limit": limit,
+        "data_mode": meter.get("data_mode"),
+        "model_name": meter.get("model_name"),
+        "model_id": meter.get("model_id"),
+        "billing_source": meter.get("billing_source"),
+        "session_tokens_used": meter.get("session_tokens_consumed"),
+        "session_tokens_consumed": meter.get("session_tokens_consumed"),
+        "session_tokens_consumed_billed": meter.get("session_tokens_consumed_billed"),
+        "session_tokens_consumed_local": meter.get("session_tokens_consumed_local"),
+        "session_prompt_tokens_consumed": meter.get("session_prompt_tokens_consumed"),
+        "session_completion_tokens_consumed": meter.get("session_completion_tokens_consumed"),
+        "session_prompt_tokens_consumed_billed": meter.get("session_prompt_tokens_consumed_billed"),
+        "session_completion_tokens_consumed_billed": meter.get("session_completion_tokens_consumed_billed"),
+        "session_prompt_tokens_consumed_local": meter.get("session_prompt_tokens_consumed_local"),
+        "session_completion_tokens_consumed_local": meter.get("session_completion_tokens_consumed_local"),
+        "last_request_tokens": meter.get("last_request_tokens"),
+        "llm_call_count": meter.get("llm_call_count"),
+        "last_prompt_tokens": meter.get("last_prompt_tokens"),
+        "last_completion_tokens": meter.get("last_completion_tokens"),
+        "last_provider_prompt_tokens": meter.get("last_provider_prompt_tokens"),
+        "last_provider_completion_tokens": meter.get("last_provider_completion_tokens"),
+        "last_local_prompt_tokens": meter.get("last_local_prompt_tokens"),
+        "last_local_completion_tokens": meter.get("last_local_completion_tokens"),
+        "last_call_purpose": meter.get("last_call_purpose"),
+        "model_context_window_tokens": meter.get("model_context_window_tokens"),
+        "context_length_used_tokens": meter.get("context_length_used_tokens"),
+        "context_length_max_tokens": meter.get("context_length_max_tokens"),
+        "context_length_used_percent": meter.get("context_length_used_percent"),
+        "context_length_available_tokens": meter.get("context_length_available_tokens"),
+        "context_length_source": meter.get("context_length_source"),
+        "context_window_tokens": meter.get("context_window_tokens"),
+        "session_context_window_tokens": meter.get("session_context_window_tokens"),
+        "context_window_used_tokens": meter.get("context_window_used_tokens"),
+        "context_window_available_tokens": meter.get("context_window_available_tokens"),
+        "context_window_used_percent": meter.get("context_window_used_percent"),
     }
 
 
@@ -567,9 +594,12 @@ def build_prompt_composition_for_state(
     state: AgentState | dict[str, Any],
     *,
     purpose: ContextPurpose = "reasoning",
+    model_id: str | None = None,
 ) -> dict[str, Any]:
     """On-demand prompt composition view (ADR §11.3)."""
-    panel_meta = resolve_context_panel_meta(state)
+    panel_meta = resolve_context_panel_meta(
+        state, purpose=purpose, model_id=model_id
+    )
     envelope = build_context_envelope(
         state,
         purpose=purpose,

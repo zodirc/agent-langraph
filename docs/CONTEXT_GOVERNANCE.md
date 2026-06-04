@@ -28,6 +28,19 @@
 | LLM 挂钩 | `app/services/llm_client.py` | `trace_state` 自动 `apply_governance_to_user_content` |
 | 组包 | `app/services/context_assembler.py` | 预算 → 裁剪 → messages |
 | 策略 | `app/services/context_policy.py` | purpose 策略 + `resolve_purpose_for_state` |
+| 历史压缩子能力 | `app/services/context_compressor.py` | `recent_transcript → semantic_summary` 与字符 fail-safe；不再承担统一 prompt 主入口 |
+
+## 与旧上下文链路的关系
+
+当前长期主路径已经明确：**所有带 `AgentState` 的 LLM 调用，优先通过 [`prompt_context_gateway`](../app/services/prompt_context_gateway.py:1) 进入治理组包。**
+
+因此几类旧能力的定位已经收敛为：
+
+- `conversation_context`：负责 transcript 生命周期、session turn 持久化与续聊基线；**不是** prompt 侧唯一组包器。
+- [`context_compressor.py`](../app/services/context_compressor.py:1)：负责 transcript 的语义压缩 / 字符裁剪与 `semantic_summary` 生成；**不是**新的统一入口。
+- `resource_budget`：继续提供 token / cost 预算基础能力，但预算分配、桶优先级与 degrade order 由 [`PromptContextPolicy`](../app/services/context_policy.py:12) 与 reducer/assembler 执行。
+
+换句话说，最近一轮实现不是“再加一个压缩器”，而是把历史、memory、retrieval、tool、file、diagnostic 等来源统一升级为 `ContextItem -> ContextEnvelope` 主路径，并把旧压缩逻辑收编为治理层子模块。
 
 ## 配置
 
@@ -53,7 +66,16 @@ context_governance:
 | `all_compressible` | 当前同 transcript；规划上含可压缩的工作记忆/工具输出等 |
 | `aggressive` | 先压历史，再以 `summarization` 策略、更紧预算组包预览 |
 
-`GET …/context-composition` 与压缩接口均返回 `session.model_name`、`session.session_tokens_used`（任务 `token_budget.used` 累计）。
+**Web 面板（`/chat` →「用量」）** 采用主流 IDE 插件常见口径：`GET /tasks/{id}/session-usage`
+
+| UI 行 | 含义 |
+|-------|------|
+| **上下文长度** | `used / max`；`used` 优先取**最近一次请求的 prompt tokens**（有 provider usage 用 provider 的 `prompt_tokens`，否则用本地 tokenizer 估算），仅在 prompt token 不可得时回退到组包 `assembly_tokens`；`max` 为模型目录 `context_window` |
+| **Token 用量** | `会话累计 / 上次请求 total`；优先使用 provider usage，provider 缺失时退回本地 tokenizer/字符估算 |
+| `billing_source` | `provider` / `local` / `none`，表示 **Token 用量**来源 |
+| `context_length_source` | `provider_prompt` / `local_prompt` / `assembly` / `last_prompt_fallback` / `none`，表示 **上下文长度**来源 |
+
+说明：这套口径对齐主流 IDE/编程插件的通行做法——**Usage 看累计，Context Length 看当前轮 prompt 占窗**；provider usage 优先，本地估算兜底。组包模拟、桶预算、purpose 预览见 `GET …/context-composition`（开发调试，默认不在 UI 展示）。
 
 ## Web UI（对话页内嵌，非独立导航）
 

@@ -1993,8 +1993,18 @@ function appendLine(text, className = "system") {
     resendBtn.addEventListener("click", async () => {
       const raw = String(text || "").replace(/^>\s*/, "").trim();
       if (!raw) return;
-      if (running) {
+      const taskId = activeTaskId || getSessionId();
+      const statusData = await fetchTaskStatus(taskId);
+      const st = String(statusData?.status || "");
+      if (running && !isTerminalTaskStatus(st)) {
         appendLine("当前任务仍在运行，请先停止或等待完成后再重发。", "error");
+        return;
+      }
+      if (running && isTerminalTaskStatus(st)) {
+        setRunning(false);
+      }
+      if (isTerminalTaskStatus(st)) {
+        await runTaskStream(raw, "LOW", "/tasks/stream", null, { suppressUserEcho: true });
         return;
       }
       await handleCommand(raw);
@@ -2684,6 +2694,15 @@ async function runAutonomousUi(autonomousUi, taskId) {
 
 async function steerActiveMission(message, opts = {}) {
   const taskId = activeTaskId || getSessionId();
+  const statusData = await fetchTaskStatus(taskId);
+  const st = String(statusData?.status || "");
+  if (isTerminalTaskStatus(st)) {
+    appendLine("任务已结束，正在开启新轮次…", "system");
+    await runTaskStream(message, "LOW", "/tasks/stream", null, {
+      suppressUserEcho: Boolean(opts.suppressUserEcho),
+    });
+    return true;
+  }
   const payload = {
     message,
     preempt: Boolean(opts.preempt),
@@ -3720,11 +3739,19 @@ function initSkillFromUrl() {
  *
  * Start streamed task via POST /tasks/stream; refresh flow panel in finally.
  */
-async function runTaskStream(goal, riskLevel = "LOW", endpoint = "/tasks/stream", body = null) {
+async function runTaskStream(
+  goal,
+  riskLevel = "LOW",
+  endpoint = "/tasks/stream",
+  body = null,
+  opts = {}
+) {
   setRunning(true);
   shownConfirmationKeys.clear();
   writingStreamCharsThisTurn = 0;
-  appendLine(`> ${goal}`, "user");
+  if (!opts.suppressUserEcho) {
+    appendLine(`> ${goal}`, "user");
+  }
   const requestBody = body || buildTaskRequestBody(goal, riskLevel);
   const taskIdRef = { id: null };
   const sseAbort = new AbortController();
@@ -3939,6 +3966,14 @@ formEl.addEventListener("submit", async (event) => {
   if (running) {
     // Keep slash commands operational while stream is running (e.g. /stop, /stop-all).
     if (value.startsWith("/")) {
+      await handleCommand(value);
+      return;
+    }
+    const taskId = activeTaskId || getSessionId();
+    const statusData = await fetchTaskStatus(taskId);
+    const st = String(statusData?.status || "");
+    if (isTerminalTaskStatus(st)) {
+      setRunning(false);
       await handleCommand(value);
       return;
     }

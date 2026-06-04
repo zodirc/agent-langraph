@@ -63,6 +63,7 @@ def create_chat_model(
             max_retries=max_retries,
             timeout=timeout,
             streaming=True,
+            stream_usage=True,
         )
 
     raise ValueError(f"Unsupported provider api_family for {provider!r}")

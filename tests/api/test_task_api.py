@@ -110,6 +110,32 @@ def test_get_task_context_composition(isolated_stores, monkeypatch):
     assert "session" in body
     assert "model_name" in body["session"]
     assert "session_tokens_used" in body["session"]
+    assert "context_window_tokens" in body["session"]
+    assert "context_window_used_tokens" in body["session"]
+
+
+def test_get_task_session_usage(isolated_stores, monkeypatch):
+    from app.api import task_api
+    from app.runtime.state import create_initial_state, merge_state
+
+    store = isolated_stores
+    state = merge_state(
+        create_initial_state(session_id="sess-usage-api"),
+        token_budget={
+            "used_billed": 42,
+            "llm_call_count": 1,
+            "last_usage": {"prompt_tokens": 30, "completion_tokens": 12, "total_tokens": 42},
+        },
+    )
+    store.save(state)
+    monkeypatch.setattr(task_api, "get_state_store", lambda: store)
+
+    client = TestClient(app)
+    resp = client.get(f"/tasks/{state['task_id']}/session-usage")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["session"]["session_tokens_consumed"] == 42
+    assert body["session"]["last_prompt_tokens"] == 30
 
 
 def test_post_task_context_compress(isolated_stores, monkeypatch):

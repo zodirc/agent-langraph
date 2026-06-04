@@ -520,11 +520,24 @@ def _max_tokens_for_purpose(purpose: str) -> int:
     return mapping.get(purpose, settings.MODEL_MAX_TOKENS)
 
 
-def _resolve_model_name(budget_ctx: Any | None = None) -> str:
+def _resolve_model_name(
+    budget_ctx: Any | None = None,
+    trace_state: Any | None = None,
+) -> str:
     if budget_ctx is not None and getattr(budget_ctx, "model_downgrade", False):
         fallback = str(getattr(settings, "MODEL_FALLBACK_NAME", "")).strip()
         if fallback:
             return fallback
+    if isinstance(trace_state, dict):
+        payload = trace_state.get("input_payload") or {}
+        if isinstance(payload, dict):
+            model_id = str(payload.get("chat_model_id") or "").strip()
+            if model_id:
+                from app.services.model_catalog import resolve_catalog_entry
+
+                entry = resolve_catalog_entry(model_id=model_id)
+                if entry:
+                    return entry.model_name
     return settings.MODEL_NAME
 
 
@@ -621,28 +634,59 @@ def _usage_identity(trace_state: Any | None) -> tuple[str, str]:
     return get_tenant_id() or "default", "anonymous"
 
 
-def _extract_usage_from_response(response: Any) -> int | None:
-    """Read provider token usage from a LangChain AIMessage when available."""
+def _extract_usage_detail(response: Any) -> dict[str, int] | None:
+    """Provider-reported token usage from a LangChain AIMessage when available."""
+
+    def _from_usage(usage: dict[str, Any]) -> dict[str, int] | None:
+        prompt = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+        completion = int(
+            usage.get("output_tokens") or usage.get("completion_tokens") or 0
+        )
+        total = usage.get("total_tokens")
+        if total is not None:
+            total_i = int(total)
+        elif prompt or completion:
+            total_i = prompt + completion
+        else:
+            return None
+        return {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": total_i,
+        }
+
+    direct = getattr(response, "usage", None)
+    if isinstance(direct, dict):
+        detail = _from_usage(direct)
+        if detail:
+            return detail
     meta = getattr(response, "response_metadata", None) or {}
     if isinstance(meta, dict):
         usage = meta.get("usage") or meta.get("token_usage")
         if isinstance(usage, dict):
-            total = usage.get("total_tokens")
-            if total is not None:
-                return int(total)
-            prompt = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
-            completion = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
-            if prompt or completion:
-                return prompt + completion
+            detail = _from_usage(usage)
+            if detail:
+                return detail
+    extra = getattr(response, "additional_kwargs", None) or {}
+    if isinstance(extra, dict):
+        usage = extra.get("usage") or extra.get("token_usage")
+        if isinstance(usage, dict):
+            detail = _from_usage(usage)
+            if detail:
+                return detail
     usage_meta = getattr(response, "usage_metadata", None)
     if isinstance(usage_meta, dict):
-        total = usage_meta.get("total_tokens")
-        if total is not None:
-            return int(total)
-        prompt = int(usage_meta.get("input_tokens") or 0)
-        completion = int(usage_meta.get("output_tokens") or 0)
-        if prompt or completion:
-            return prompt + completion
+        detail = _from_usage(usage_meta)
+        if detail:
+            return detail
+    return None
+
+
+def _extract_usage_from_response(response: Any) -> int | None:
+    """Read provider total token usage from a LangChain AIMessage when available."""
+    detail = _extract_usage_detail(response)
+    if detail:
+        return int(detail["total_tokens"])
     return None
 
 
@@ -656,6 +700,8 @@ def _record_llm_usage(
     billed_tokens: int | None = None,
     bill_quota: bool = True,
     bill_cost: bool = True,
+    update_session_budget: bool = True,
+    budget_ctx: Any | None = None,
 ) -> None:
     from app.config.settings import settings
     from app.services.metrics_service import get_metrics_service
@@ -664,17 +710,18 @@ def _record_llm_usage(
 
     estimated = _estimate_tokens(system_prompt + user_content + response_text)
     logical = estimated
-    billed = billed_tokens if billed_tokens is not None else estimated
+    billed = billed_tokens if billed_tokens is not None else None
     tenant_id, user_id = _usage_identity(trace_state)
     metrics = get_metrics_service()
     metrics.inc_llm_tokens(purpose, "logical", logical)
+    billed_for_metrics = billed if billed is not None else 0
     if bill_quota or bill_cost:
-        metrics.inc_llm_tokens(purpose, "billed", billed)
-    if settings.MULTI_TENANT_ENABLED and bill_quota and billed > 0:
+        metrics.inc_llm_tokens(purpose, "billed", billed_for_metrics)
+    if settings.MULTI_TENANT_ENABLED and bill_quota and billed and billed > 0:
         record_usage(tenant_id, "tokens", billed)
         metrics.inc_tenant_tokens(tenant_id, billed)
     cost_per_1k = float(getattr(settings, "COST_PER_1K_TOKENS", 0.0))
-    if cost_per_1k > 0 and bill_cost and billed > 0:
+    if cost_per_1k > 0 and bill_cost and billed and billed > 0:
         metrics.record_llm_cost_usd(
             (billed / 1000.0) * cost_per_1k,
             tenant_id=tenant_id,
@@ -690,6 +737,24 @@ def _record_llm_usage(
         response_text=response_text,
         status="ok",
     )
+    if isinstance(trace_state, dict) and trace_state.get("task_id") and (
+        update_session_budget or budget_ctx is not None
+    ):
+        from app.services.resource_budget import record_session_token_usage
+
+        usage_detail = None
+        if isinstance(trace_state.get("_last_llm_usage_detail"), dict):
+            usage_detail = trace_state.pop("_last_llm_usage_detail")
+        record_session_token_usage(
+            trace_state,
+            system_prompt=system_prompt,
+            user_content=user_content,
+            response_text=response_text,
+            billed_tokens=billed,
+            usage_detail=usage_detail,
+            purpose=purpose,
+            budget_ctx=budget_ctx,
+        )
     if isinstance(trace_state, dict) and trace_state.get("task_id"):
         from app.services.engineering_trace import init_trace_context, record_llm_span
 
@@ -766,10 +831,19 @@ def invoke_structured(
         )
         content = response.content if hasattr(response, "content") else str(response)
         normalized = _normalize_content(content)
+        usage_detail = _extract_usage_detail(response)
+        provider_tokens = int(usage_detail["total_tokens"]) if usage_detail else None
+        if isinstance(trace_state, dict) and usage_detail:
+            trace_state["_last_llm_usage_detail"] = usage_detail
         if budget_ctx is not None:
-            budget_ctx.after_invoke(purpose, system_prompt, user_content, normalized)
+            budget_ctx.after_invoke(
+                purpose,
+                system_prompt,
+                user_content,
+                normalized,
+                billed_tokens=provider_tokens,
+            )
         metrics.inc_llm_invoke(purpose, model_name, "ok")
-        provider_tokens = _extract_usage_from_response(response)
         _record_llm_usage(
             purpose=purpose,
             system_prompt=system_prompt,
@@ -777,6 +851,7 @@ def invoke_structured(
             response_text=normalized,
             trace_state=trace_state,
             billed_tokens=provider_tokens,
+            budget_ctx=budget_ctx,
             bill_quota=True,
             bill_cost=True,
         )
@@ -859,11 +934,15 @@ def stream_structured(
     from app.services.reasoning_trace import thinking_stream_enabled
 
     emit_thinking = bool(thinking_stream_enabled() and stream_node)
+    last_usage_detail: dict[str, int] | None = None
     try:
         for chunk in llm.stream(
             [SystemMessage(content=system_prompt), HumanMessage(content=user_content)],
             config=run_config or None,
         ):
+            chunk_usage = _extract_usage_detail(chunk)
+            if chunk_usage:
+                last_usage_detail = chunk_usage
             raw = getattr(chunk, "content", "")
             thinking_part, text_part = extract_chunk_stream_parts(raw)
             if emit_thinking and thinking_part:
@@ -894,6 +973,9 @@ def stream_structured(
             normalized = _normalize_content(
                 response.content if hasattr(response, "content") else str(response)
             )
+            invoke_usage = _extract_usage_detail(response)
+            if invoke_usage:
+                last_usage_detail = invoke_usage
             if normalized.strip():
                 full_text = normalized
                 yield normalized
@@ -901,17 +983,29 @@ def stream_structured(
             pass
 
     if full_text:
+        provider_tokens = (
+            int(last_usage_detail["total_tokens"]) if last_usage_detail else None
+        )
+        if isinstance(trace_state, dict) and last_usage_detail:
+            trace_state["_last_llm_usage_detail"] = last_usage_detail
         if budget_ctx is not None:
-            budget_ctx.after_invoke(purpose, system_prompt, user_content, full_text)
+            budget_ctx.after_invoke(
+                purpose,
+                system_prompt,
+                user_content,
+                full_text,
+                billed_tokens=provider_tokens,
+            )
         _record_llm_usage(
             purpose=purpose,
             system_prompt=system_prompt,
             user_content=user_content,
             response_text=full_text,
             trace_state=trace_state,
-            billed_tokens=None,
-            bill_quota=True,
-            bill_cost=True,
+            billed_tokens=provider_tokens,
+            budget_ctx=budget_ctx,
+            bill_quota=bool(provider_tokens),
+            bill_cost=bool(provider_tokens),
         )
         _set_cached(_STREAM_CACHE, key, {"text": full_text})
 

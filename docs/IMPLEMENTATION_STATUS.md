@@ -38,8 +38,9 @@
 
 | 项 | 状态 | 说明 |
 |----|------|------|
-| `context_compressor.py` | ✅ | `SemanticContextSummary`、字符 / 语义双路径 |
-| **Context Governance（ADR §13 DoD）** | ✅ | 网关 + registry + API + DoD eval；**Web** `/chat` 内嵌上下文治理面板（§1.1 #6）；见 [`CONTEXT_GOVERNANCE.md`](CONTEXT_GOVERNANCE.md) |
+| `context_compressor.py` | ✅ | `SemanticContextSummary`、字符 / 语义双路径；当前定位为 transcript 压缩与 `semantic_summary` 生成子能力 |
+| **Context Governance（ADR §13 DoD）** | ✅ | 网关 + policy + assembler + registry + API + DoD eval；**Web** `/chat` 内嵌上下文治理面板（§1.1 #6）；见 [`CONTEXT_GOVERNANCE.md`](CONTEXT_GOVERNANCE.md) |
+| `prompt_context_gateway` 统一入口 | ✅ | planning / reasoning / writing / reviewing / reflection / routing / code_agent / session_turn 统一经治理组包 |
 | `conversation_context` 模块 | ✅ | transcript 生命周期；治理启用时不再作为直接 prompt 主路径 |
 | `session_turn` 接入 | ✅ | `prepare_session_turn`；压缩见 `compress_session_history()` |
 | session turn 策略闸门 | ✅ | `SESSION_TURN_POLICY.md` 对齐：mission active 时的 intent classifier、机械续写与 planning gate |
@@ -328,6 +329,7 @@ pytest tests/services/test_react_entry.py tests/services/test_react_loop_runner.
 
 | 日期 | 说明 |
 |------|------|
+| 2026-06-04 | 对齐最近提交：① Context Governance 正式收敛为统一长期上下文架构，新增 `prompt_context_gateway` / `context_policy` / `context_assembler` / composition trace 与 `/chat` 上下文治理面板；② 文档同步明确字符压缩与 `context_compressor` 已退居 transcript / semantic summary 子能力，不再作为 prompt 主路径；③ README、能力矩阵、实现状态、Mission 文档统一补齐“执行治理 + 上下文治理”双主线。 |
 | 2026-06-03 | 对齐最近 3 次提交：① Mission OMAW 落实为默认长文执行路径，新增 `FactBundle` / `ReviewVerdict` / `WorkerExecutionPolicy` / `turn_kind`；② Mission control 增补 `worker_lost` pause、`graph_run_registry` 活跃执行器跟踪，SSE 刷新不再清 live；③ 文档补齐 `ADR_MISSION_LIFECYCLE_V2.md`、`MISSION_EXECUTION_CONTROL.md`、`MANUSCRIPT_WRITING.md` 的 OMAW / executor 控制语义。 |
 | 2026-06-02 | 检索链路优化：`knowledge.top_k` 提升到 8、默认启用 lexical rerank、关键词检索升级为 BM25 + CJK token（含中文 bigram）、`fetch_k_multiplier` 扩候选池、向量检索前置 tenant/domain 过滤、`max_chunks_per_doc` 去重；文档见 `docs/RETRIEVAL_OPTIMIZATION.md`。 |
 | 2026-06-02 | 近 3 次提交增量对齐：① mission/tools 会话文件工具集（grep/replace/touch/mkdir/ls/read/write/append/move/copy/rm 两阶段 dry_run token）；② Writing Pack 工具白名单扩展 + mission 工具型 work item（`patch_recent_chapter`/`consistency_check`）可选自动注入（`auto_tool_injection` 默认 false，`work_item.params.auto_tools` 可覆盖）；③ Web CLI 增加会话文件侧栏、目录导航/面包屑、双击文件实时预览与保存编辑接口。 |

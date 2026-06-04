@@ -27,7 +27,7 @@
 
 ### 1.2 一句话原则
 
-**OMAW 决定“谁来做、做到什么算过”；RAG 决定“可引用的外部事实从哪里来”；ReAct 决定“Worker 在受限边界内如何拿事实、调工具、局部重试”。**
+**OMAW 决定“谁来做、做到什么算过”；RAG 决定“可引用的外部事实从哪里来”；ReAct 决定“Worker 在受限边界内如何拿事实、调工具、局部重试”；[`Context Governance`](ADR_CONTEXT_GOVERNANCE.md) 决定“每一次 planning / reasoning / writing / reviewing 到底允许看到哪些上下文、以什么预算和保真度进入 prompt”。**
 
 ---
 

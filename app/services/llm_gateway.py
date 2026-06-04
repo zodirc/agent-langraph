@@ -55,6 +55,15 @@ _TOOL_BLOCK_TYPES = frozenset({"tool_use"})
 ARTIFACT_TOOL_NAME = "submit_artifact"
 
 
+def _usage_from_llm_response(response: Any) -> tuple[int | None, dict[str, int] | None]:
+    from app.services.llm_client import _extract_usage_detail
+
+    detail = _extract_usage_detail(response)
+    if not detail:
+        return None, None
+    return int(detail["total_tokens"]), detail
+
+
 def _log_gateway_llm_interaction(
     *,
     purpose: str,
@@ -63,12 +72,26 @@ def _log_gateway_llm_interaction(
     response_text: str,
     user_payload: dict[str, Any],
     status: str = "ok",
+    trace_state: Any | None = None,
+    billed_tokens: int | None = None,
+    usage_detail: dict[str, int] | None = None,
+    llm_response: Any | None = None,
 ) -> None:
+    from app.services.llm_client import _record_llm_usage
     from app.services.llm_interaction_store import record_llm_interaction
+
+    if llm_response is not None and (billed_tokens is None or usage_detail is None):
+        extracted_total, extracted_detail = _usage_from_llm_response(llm_response)
+        if billed_tokens is None:
+            billed_tokens = extracted_total
+        if usage_detail is None:
+            usage_detail = extracted_detail
+    if isinstance(trace_state, dict) and usage_detail:
+        trace_state["_last_llm_usage_detail"] = usage_detail
 
     task_id = str(user_payload.get("task_id") or "")
     record_llm_interaction(
-        trace_state=None,
+        trace_state=trace_state,
         purpose=purpose,
         system_prompt=system,
         user_content=user,
@@ -78,6 +101,16 @@ def _log_gateway_llm_interaction(
         task_id=task_id or None,
         session_id=task_id or None,
     )
+    if isinstance(trace_state, dict) and trace_state.get("task_id"):
+        _record_llm_usage(
+            purpose=purpose,
+            system_prompt=system,
+            user_content=user,
+            response_text=response_text,
+            trace_state=trace_state,
+            billed_tokens=billed_tokens,
+            update_session_budget=True,
+        )
 ARTIFACT_TOOL_SCHEMA = {
     "name": ARTIFACT_TOOL_NAME,
     "description": "Submit finalized text to persist as the task artifact file.",
@@ -421,17 +454,17 @@ def _invoke_artifact_sync(
     return _invoke_text(llm, system, user)
 
 
-def _adapt_or_retry_thinking_only(
+def _adapt_or_retry_thinking_only_with_response(
     llm: Any,
     *,
     system: str,
     user: str,
     preferred: str,
-) -> ArtifactDraft:
+) -> tuple[ArtifactDraft, Any]:
     """Parse model output; on thinking-only, one json_text retry (like planning stream fallback)."""
     try:
         response = _invoke_artifact_sync(llm, system=system, user=user, preferred=preferred)
-        return adapt_raw_response(response)
+        return adapt_raw_response(response), response
     except ValueError as exc:
         if not is_thinking_only_error(exc):
             raise
@@ -446,7 +479,20 @@ def _adapt_or_retry_thinking_only(
             + '\n\n"output_contract": "emit_visible_json_content_field_only_no_thinking_blocks"'
         )
         response = _invoke_text(llm, retry_system, retry_user)
-        return adapt_raw_response(response)
+        return adapt_raw_response(response), response
+
+
+def _adapt_or_retry_thinking_only(
+    llm: Any,
+    *,
+    system: str,
+    user: str,
+    preferred: str,
+) -> ArtifactDraft:
+    draft, _response = _adapt_or_retry_thinking_only_with_response(
+        llm, system=system, user=user, preferred=preferred
+    )
+    return draft
 
 
 @with_retry()
@@ -502,6 +548,7 @@ def _stream_artifact_live(
     filename: str,
     preferred: str,
     target_chars: int,
+    trace_state: Any | None = None,
 ) -> ArtifactDraft:
     """Stream LLM output; push artifact body via writing_delta."""
     from langchain_core.messages import HumanMessage, SystemMessage
@@ -535,6 +582,7 @@ def _stream_artifact_live(
     seen_content = 0
     buffer_trace_at = 0.0
     merged: Any = None
+    last_usage_detail: dict[str, int] | None = None
     emit_thinking = thinking_stream_enabled()
     stream_started = time.monotonic()
     stream_interrupted = False
@@ -544,6 +592,11 @@ def _stream_artifact_live(
 
     try:
         for chunk in stream_llm.stream(messages):
+            from app.services.llm_client import _extract_usage_detail
+
+            chunk_usage = _extract_usage_detail(chunk)
+            if chunk_usage:
+                last_usage_detail = chunk_usage
             elapsed = time.monotonic() - stream_started
             if elapsed > max_duration:
                 report_status_trace(
@@ -693,6 +746,12 @@ def _stream_artifact_live(
     draft.meta.update(generation.to_meta())
     if draft.content:
         report_writing_done(filename, len(draft.content))
+    billed, usage_detail = (
+        _usage_from_llm_response(merged) if merged is not None else (None, None)
+    )
+    if usage_detail is None and last_usage_detail:
+        usage_detail = last_usage_detail
+        billed = int(last_usage_detail["total_tokens"])
     _log_gateway_llm_interaction(
         purpose=str(user_payload.get("purpose") or "writing"),
         system=system,
@@ -700,6 +759,10 @@ def _stream_artifact_live(
         response_text=draft.content or "",
         user_payload=user_payload,
         status="ok" if draft.content else "empty",
+        trace_state=trace_state,
+        billed_tokens=billed,
+        usage_detail=usage_detail,
+        llm_response=merged,
     )
     return draft
 
@@ -710,6 +773,7 @@ def invoke_artifact_draft(
     task_desc: str,
     user_payload: dict[str, Any],
     filename: str = "artifact.txt",
+    trace_state: Any | None = None,
 ) -> ArtifactDraft:
     """
     Generate artifact content via capability-driven adapter (tool preferred).
@@ -743,6 +807,7 @@ def invoke_artifact_draft(
             response_text=content,
             user_payload=user_payload,
             status="ok",
+            trace_state=trace_state,
         )
         return draft
 
@@ -758,6 +823,7 @@ def invoke_artifact_draft(
                     filename=fname,
                     preferred=preferred,
                     target_chars=target_chars,
+                    trace_state=trace_state,
                 )
             except RetryableError as exc:
                 if attempt >= stream_retries:
@@ -778,8 +844,9 @@ def invoke_artifact_draft(
                 break
 
     report_status_trace("writing", "gateway: invoking model (tool-first)…")
+    llm_response: Any = None
     try:
-        draft = _adapt_or_retry_thinking_only(
+        draft, llm_response = _adapt_or_retry_thinking_only_with_response(
             llm,
             system=system,
             user=user,
@@ -793,6 +860,7 @@ def invoke_artifact_draft(
             response_text=str(exc),
             user_payload=user_payload,
             status="error",
+            trace_state=trace_state,
         )
         raise
     if writing_stream_enabled() and draft.content:
@@ -804,6 +872,8 @@ def invoke_artifact_draft(
         response_text=draft.content or "",
         user_payload=user_payload,
         status="ok" if draft.content else "empty",
+        trace_state=trace_state,
+        llm_response=llm_response,
     )
     return draft
 
@@ -814,6 +884,7 @@ def stream_artifact_draft(
     task_desc: str,
     user_payload: dict[str, Any],
     filename: str = "artifact.txt",
+    trace_state: Any | None = None,
 ) -> ArtifactDraft:
     """Prefer live writing_delta stream; falls back to invoke path."""
     if writing_stream_enabled() or trace_enabled():
@@ -822,10 +893,12 @@ def stream_artifact_draft(
             task_desc=task_desc,
             user_payload=user_payload,
             filename=filename,
+            trace_state=trace_state,
         )
     return invoke_artifact_draft(
         purpose=purpose,
         task_desc=task_desc,
         user_payload=user_payload,
         filename=filename,
+        trace_state=trace_state,
     )
