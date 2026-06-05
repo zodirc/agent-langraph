@@ -2891,16 +2891,27 @@ async function steerActiveMission(message, opts = {}) {
 
 async function stopActiveMission() {
   const hadClientStream = Boolean(activeSseAbortController) || running;
-  if (abortActiveSseStream("user_stop")) {
+  const taskId = activeTaskId || getSessionId();
+  if (hadClientStream) {
+    try {
+      await apiFetch(`/tasks/${taskId}/interrupt-stream`, {
+        method: "POST",
+        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "user_requested", requested_by: "web" }),
+      });
+    } catch {
+      /* best-effort */
+    }
+    abortActiveSseStream("user_stop");
     markActiveWritingStreamStopped();
     if (running) {
       setRunning(false);
     }
   }
-  const taskId = activeTaskId || getSessionId();
-  const res = await apiFetch(`/tasks/${taskId}/stop`, {
+  const res = await apiFetch(`/tasks/${taskId}/pause`, {
     method: "POST",
-    headers: getAuthHeaders(),
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ reason: "user_requested", requested_by: "web" }),
   });
   if (!res.ok) {
     if (res.status !== 401) {
@@ -2914,8 +2925,8 @@ async function stopActiveMission() {
   if (!display.system_lines?.length) {
     appendLine(
       hadClientStream
-        ? "已停止接收流式输出；服务端将在当前步骤结束后收尾…"
-        : "stop requested, waiting current step to yield…",
+        ? "已停止接收流式输出；任务将在当前步骤安全点暂停…"
+        : "pause requested, waiting current step to yield…",
       "system"
     );
   }

@@ -541,6 +541,18 @@ class Settings:
         self.MISSION_OMA_REQUIRE_FACT_BUNDLE = _coerce_bool(
             worker_retrieval.get("require_fact_bundle", True)
         )
+        self.MISSION_REQUIRE_FACT_BUNDLE = _coerce_bool(
+            mission_cfg.get(
+                "require_fact_bundle",
+                self.MISSION_OMA_REQUIRE_FACT_BUNDLE,
+            )
+        )
+        self.MISSION_REQUIRE_REVIEW_VERDICT = _coerce_bool(
+            mission_cfg.get("require_review_verdict", True)
+        )
+        self.MISSION_ALLOW_LEGACY_WRITING_PATH = _coerce_bool(
+            mission_cfg.get("allow_legacy_writing_path", False)
+        )
         worker_react = mission_cfg.get("worker_react") or {}
         if not isinstance(worker_react, dict):
             worker_react = {}
@@ -571,6 +583,11 @@ class Settings:
         route_audit_cfg = raw.get("route_audit", {})
         self.ROUTE_AUDIT_CONFIG = (
             route_audit_cfg if isinstance(route_audit_cfg, dict) else {}
+        )
+
+        intent_obs_cfg = raw.get("intent_observation", {})
+        self.INTENT_OBSERVATION_CONFIG = (
+            intent_obs_cfg if isinstance(intent_obs_cfg, dict) else {}
         )
 
         mode_routing_cfg = raw.get("mode_routing", {})

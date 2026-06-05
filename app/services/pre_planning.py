@@ -115,14 +115,34 @@ def run_pre_planning_pipeline(state: AgentState) -> AgentState:
     """
     Early intent → mode resolution (before planning LLM).
 
-    Writes: route_audit (partial), mode_resolution, target_mode, mode contract fields.
+    Pipeline: explicit mode → structural route audit → intent observation → mode contract.
+    Writes: intent_observation, route_audit (partial), mode_resolution, target_mode.
     """
+    from app.services.intent_observation import (
+        apply_intent_observation_to_state,
+        observe_intent,
+        resolve_mode_with_observation,
+    )
+
     payload = dict(state.get("input_payload") or {})
+    explicit = parse_explicit_interaction_mode(payload)
     audit_seed = seed_pre_planning_route_audit(state)
+    audit_seed["phase"] = "pre_observation"
     payload["route_audit"] = {**dict(payload.get("route_audit") or {}), **audit_seed}
     state = merge_state(state, input_payload=payload)
 
-    resolution = resolve_target_mode(state)
+    observation = observe_intent(
+        state,
+        explicit_mode=explicit,
+        route_audit_seed=audit_seed,
+    )
+    state = apply_intent_observation_to_state(state, observation)
+
+    intent_obs = state.get("intent_observation")
+    resolution = resolve_target_mode(
+        state,
+        intent_observation=intent_obs if resolve_mode_with_observation(state) else None,
+    )
     resolution = _apply_explicit_mode_override(resolution, payload)
 
     state = apply_mode_isolation_if_needed(state, resolution)
@@ -145,6 +165,9 @@ def run_pre_planning_pipeline(state: AgentState) -> AgentState:
                 "target_mode": resolution.target_mode,
                 "intent_kind": resolution.intent_kind,
                 "explicit": parse_explicit_interaction_mode(payload_out),
+                "intent_observation_trace": (state.get("intent_observation") or {}).get(
+                    "trace_id"
+                ),
             },
         ),
     )
@@ -156,11 +179,20 @@ def should_skip_planning_llm(state: AgentState) -> bool:
     Thin planning for engineering delivery (like Cursor Agent on a repo task).
 
     Skip full planning LLM when mode is already engineering and this is not a
-    steer/replan/retry turn.
+    steer/replan/retry turn. Also respects intent_observation.needs_planning.
     """
     payload = state.get("input_payload") or {}
     if not payload.get("pre_planning_completed"):
         return False
+
+    intent_obs = state.get("intent_observation") or {}
+    if intent_obs.get("needs_planning") is False:
+        if str(payload.get("target_mode") or "") == "engineering_mode":
+            return True
+        return False
+    if intent_obs.get("needs_planning") is True:
+        pass  # fall through to engineering checks
+
     if str(payload.get("target_mode") or "") != "engineering_mode":
         return False
     from app.services.interaction_goal import goal_is_conversational_qa

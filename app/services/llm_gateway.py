@@ -587,6 +587,11 @@ def _stream_artifact_live(
     stream_started = time.monotonic()
     stream_interrupted = False
     aborted = False
+    stream_session = None
+    if isinstance(trace_state, dict):
+        from app.services.step_committer import StreamingStepSession
+
+        stream_session = StreamingStepSession.maybe_start(trace_state, user_payload, filename)
     max_duration = int(getattr(settings, "WRITING_STREAM_MAX_DURATION_SEC", 600))
     max_accumulated = int(getattr(settings, "WRITING_STREAM_MAX_ACCUMULATED_CHARS", 120_000))
 
@@ -608,15 +613,22 @@ def _stream_artifact_live(
                 break
             if task_id:
                 try:
-                    from app.services.mission_steer import pending_has_forced_action
-                    from app.services.state_store import get_state_store
+                    from app.services.execution_control import (
+                        CancelRequested,
+                        PauseRequested,
+                        check_for_control_signal,
+                    )
 
-                    stored = get_state_store().load(task_id, read_only=True) or {}
-                    pending = stored.get("pending_user_message")
-                    if pending_has_forced_action(pending, "pause"):
-                        report_status_trace("writing", "检测到强制停止，终止本次流式生成")
-                        aborted = True
-                        break
+                    check_for_control_signal(
+                        task_id,
+                        phase="writing_stream_chunk",
+                        raise_on_pause=True,
+                        raise_on_cancel=True,
+                    )
+                except (PauseRequested, CancelRequested):
+                    report_status_trace("writing", "检测到任务控制停止，终止本次流式生成")
+                    aborted = True
+                    break
                 except Exception:
                     pass
             merged = chunk if merged is None else merged + chunk
@@ -647,6 +659,7 @@ def _stream_artifact_live(
                 seen_content,
                 filename=filename,
                 parser=parser,
+                task_id=task_id or None,
             )
             if prev_seen == 0 and seen_content > 0:
                 generation.time_to_first_content_ms = int(elapsed * 1000)
@@ -662,8 +675,17 @@ def _stream_artifact_live(
                 last_report_at=buffer_trace_at,
                 parser=parser,
             )
+            if stream_session:
+                live_content = extract_streaming_content(accumulated, parser)
+                if live_content:
+                    stream_session.on_content(live_content)
     except Exception as exc:
-        if is_stream_transport_error(exc):
+        from app.services.execution_control import CancelRequested, PauseRequested
+
+        if isinstance(exc, (PauseRequested, CancelRequested)):
+            report_status_trace("writing", "检测到任务控制停止，终止本次流式生成")
+            aborted = True
+        elif is_stream_transport_error(exc):
             get_metrics_service().inc_contract_event("writing_stream_transport_error")
             partial_draft = _draft_from_partial_stream(
                 parser.accumulated,
@@ -724,6 +746,8 @@ def _stream_artifact_live(
         )
 
     draft.raw_length = parser.args_len()
+    if stream_session and draft.content:
+        stream_session.finalize(draft.content)
     close = map_close_status(
         has_content=bool(draft.content),
         stream_interrupted=stream_interrupted,

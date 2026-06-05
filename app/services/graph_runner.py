@@ -83,7 +83,32 @@ from app.services.stream_progress import (
     set_writing_handler,
 )
 from app.services.graph_run_registry import begin_graph_run, execution_run_meta, end_graph_run
-from app.services.live_task_state import clear_live, register_live, touch_live
+from app.services.live_task_state import (
+    clear_live,
+    get_live,
+    register_live,
+    touch_live,
+    touch_live_control,
+)
+from app.services.task_control import (
+    clear_task_control,
+    register_task_control,
+    request_cancel,
+    request_interrupt_stream,
+    request_pause,
+    snapshot_all_worker_controls,
+    snapshot_task_control,
+    snapshot_worker_control,
+)
+from app.services.execution_control import (
+    CONTROL_PAUSE_REQUESTED,
+    CONTROL_STREAMING_OUTPUT,
+    build_control_response,
+    effective_control_state,
+    finalize_control_outcome,
+    persist_control_request_to_state,
+    record_control_event,
+)
 from app.services.state_store import get_state_store
 from app.services.graph_execution_pool import (
     GraphExecutionRejected,
@@ -179,16 +204,24 @@ def _prepare_mission_for_turn(
 
 
 def _begin_task_graph_run(state: AgentState) -> tuple[AgentState, str]:
-    """Register in-process executor; persist execution_run on state."""
+    """Register in-process executor and task control; persist execution_run on state."""
     task_id = str(state["task_id"])
     run_id = begin_graph_run(task_id)
-    return merge_state(state, execution_run=execution_run_meta(run_id)), run_id
+    register_task_control(task_id, run_id)
+    state = merge_state(state, execution_run=execution_run_meta(run_id))
+    return state, run_id
 
 
 def _end_task_graph_run(task_id: str, run_id: str) -> None:
-    """Drop executor registry and live snapshot when the graph thread finishes."""
+    """Drop executor registry, live snapshot, and task control when graph thread finishes."""
     end_graph_run(task_id, run_id)
     clear_live(task_id)
+    clear_task_control(task_id)
+
+
+def _sse_suppressed(task_id: str) -> bool:
+    control = snapshot_task_control(str(task_id))
+    return bool(control and control.stream_interrupted)
 
 
 def _format_stream_exception(exc: BaseException) -> str:
@@ -198,7 +231,7 @@ def _format_stream_exception(exc: BaseException) -> str:
         return text
     name = type(exc).__name__
     if name == "GeneratorExit":
-        return "stream closed (client disconnected or concurrent request interrupted execution)"
+        return "stream closed (client disconnected; task was not cancelled)"
     return name
 
 
@@ -325,6 +358,8 @@ def _drain_sse_side_queues(
     thinking_q: queue.SimpleQueue[dict[str, Any]] | None = None,
     writing_q: queue.SimpleQueue[dict[str, Any]] | None = None,
 ) -> Iterator[str]:
+    if _sse_suppressed(task_id):
+        return
     if thinking_q is not None:
         yield from _drain_thinking_queue(task_id, thinking_q)
     if writing_q is not None:
@@ -492,8 +527,16 @@ class GraphRunner:
         from app.services.mission_worker_lost import reconcile_worker_lost
         from app.services.otel_export import finalize_trace_export
 
+        task_id = str(state["task_id"])
+        control = snapshot_task_control(task_id)
         state = finalize_trace_export(state)
         state = finalize_turn_history(state)
+        if control and (control.pause_requested or control.cancel_requested):
+            state = finalize_control_outcome(state, control)
+        elif state.get("interrupt_context"):
+            ctx = state.get("interrupt_context") or {}
+            if ctx.get("pause_requested") or ctx.get("cancel_requested"):
+                state = finalize_control_outcome(state, None)
         # Graph worker already ended (_end_task_graph_run); persist orphan MISSION_RUNNING as PAUSED.
         return reconcile_worker_lost(state, persist=False)
 
@@ -669,7 +712,7 @@ class GraphRunner:
         task_id = state["task_id"]
         state, run_id = _begin_task_graph_run(state)
         get_state_store().save(state)
-        register_live(state)
+        register_live(state, run_id=run_id)
         progress_q: queue.SimpleQueue[str] = queue.SimpleQueue()
         trace_q: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
         answer_q: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
@@ -766,6 +809,15 @@ class GraphRunner:
                     last_event_at = time.monotonic()
 
                 now = time.monotonic()
+                control = snapshot_task_control(task_id)
+                if control and (control.pause_requested or control.cancel_requested):
+                    live_entry = get_live(task_id)
+                    touch_live_control(
+                        task_id,
+                        control_state=effective_control_state(control),
+                        active_step_id=live_entry.active_step_id if live_entry else None,
+                    )
+
                 if now - last_event_at >= 8.0 and worker.is_alive():
                     yield _format_progress_event(
                         task_id,
@@ -928,7 +980,7 @@ class GraphRunner:
         task_id = state["task_id"]
         state, run_id = _begin_task_graph_run(state)
         get_state_store().save(state)
-        register_live(state)
+        register_live(state, run_id=run_id)
         try:
             for node_name, snapshot in stream_supervisor_graph(state):
                 latest = snapshot
@@ -960,6 +1012,45 @@ class GraphRunner:
         yield from self._stream_finalize(latest, interrupted_for_review)
 
     def _stream_error(self, latest: AgentState, exc: BaseException) -> Iterator[str]:
+        from app.services.execution_control import (
+            CancelRequested,
+            PauseRequested,
+            StreamInterrupted,
+            finalize_control_outcome,
+            handle_control_exception,
+        )
+
+        if isinstance(exc, GeneratorExit):
+            try:
+                from app.services.metrics_service import get_metrics_service
+
+                get_metrics_service().inc_disconnect_without_cancel()
+            except Exception:
+                pass
+            detail = _format_stream_exception(exc)
+            yield _format_stream_event(
+                "stream_closed",
+                {"task_id": latest["task_id"], "detail": detail, "cancelled": False},
+            )
+            yield from self._stream_finalize(latest, interrupted_for_review=False)
+            return
+
+        handled = handle_control_exception(latest, exc)
+        if handled is not None:
+            control = snapshot_task_control(str(latest["task_id"]))
+            latest = finalize_control_outcome(handled, control)
+            get_state_store().save(latest)
+            yield _format_stream_event(
+                "task_control",
+                {
+                    "task_id": latest["task_id"],
+                    "status": latest.get("status"),
+                    "control_event": type(exc).__name__,
+                },
+            )
+            yield from self._stream_finalize(latest, interrupted_for_review=False)
+            return
+
         detail = _format_stream_exception(exc)
         latest = merge_state(
             latest,
@@ -1090,6 +1181,8 @@ class GraphRunner:
             raise KeyError(f"Task not found: {task_id}")
         stored = reconcile_worker_lost(stored)
         status = str(stored.get("status", ""))
+        if status == TaskStatus.CANCELLED.value:
+            raise ValueError(f"Task {task_id} is cancelled and cannot resume")
         if status not in (
             TaskStatus.MISSION_PAUSED.value,
             TaskStatus.REASONED.value,
@@ -1159,6 +1252,9 @@ class GraphRunner:
             ),
             source="resume_api",
         )
+        from app.services.execution_control import apply_checkpoint_to_resume_state
+
+        resumed = apply_checkpoint_to_resume_state(resumed)
         get_state_store().save(resumed)
         return resumed
 
@@ -1183,6 +1279,187 @@ class GraphRunner:
         """SSE stream for mission resume (same events as /tasks/stream)."""
         resumed = self.prepare_resume_mission(task_id, confirm=confirm)
         yield from self._stream_single(resumed, created=False)
+
+    def _apply_control_request(
+        self,
+        task_id: str,
+        *,
+        control_action: str,
+        mutator,
+        requested_by: str = "web",
+        reason: str = "user_requested",
+        worker_id: str | None = None,
+    ) -> dict[str, Any]:
+        stored = get_state_store().load(task_id)
+        if not stored:
+            raise KeyError(f"Task not found: {task_id}")
+
+        if worker_id:
+            control = mutator(
+                task_id,
+                worker_id=worker_id,
+                requested_by=requested_by,
+                reason=reason,
+            )
+            worker_control = snapshot_worker_control(task_id, worker_id)
+            task_control = snapshot_task_control(task_id)
+        else:
+            control = mutator(task_id, requested_by=requested_by, reason=reason)
+            worker_control = None
+            task_control = control
+        live = get_live(task_id)
+        active_step_id = live.active_step_id if live else None
+
+        event_name = control_action.replace("-", "_")
+        if control is not None:
+            eff = effective_control_state(task_control)
+            if worker_control and worker_control.cancel_requested:
+                from app.services.execution_control import CONTROL_CANCEL_REQUESTED
+
+                eff = CONTROL_CANCEL_REQUESTED
+            elif worker_control and worker_control.pause_requested:
+                from app.services.execution_control import CONTROL_PAUSE_REQUESTED
+
+                eff = CONTROL_PAUSE_REQUESTED
+            touch_live_control(task_id, control_state=eff, active_step_id=active_step_id)
+            updated = record_control_event(
+                stored,
+                f"task_{event_name}_requested",
+                detail={
+                    "requested_by": requested_by,
+                    "reason": reason,
+                    "worker_id": worker_id,
+                },
+            )
+        else:
+            from app.services.execution_control import CONTROL_CANCEL_REQUESTED
+
+            eff = CONTROL_STREAMING_OUTPUT
+            if control_action == "pause_task":
+                eff = CONTROL_PAUSE_REQUESTED
+            elif control_action == "cancel_task":
+                eff = CONTROL_CANCEL_REQUESTED
+            updated = persist_control_request_to_state(
+                stored,
+                pause=control_action == "pause_task",
+                cancel=control_action == "cancel_task",
+                stream_interrupt=control_action == "interrupt_stream",
+                requested_by=requested_by,
+                reason=reason,
+                worker_id=worker_id,
+            )
+            updated = record_control_event(
+                updated,
+                f"task_{event_name}_requested",
+                detail={
+                    "requested_by": requested_by,
+                    "reason": reason,
+                    "deferred": True,
+                    "worker_id": worker_id,
+                },
+            )
+
+        if control_action == "pause_task":
+            pass  # Unified control: task_control registry only (no steer queue)
+
+        get_state_store().save(updated)
+        get_audit_store().append_events(task_id, updated.get("audit_log", []))
+        return build_control_response(
+            task_id,
+            control_action=control_action,
+            accepted=True,
+            control=task_control,
+            worker_control=worker_control,
+            active_step_id=active_step_id,
+            worker_id=worker_id,
+        )
+
+    def interrupt_task_stream(
+        self,
+        task_id: str,
+        *,
+        requested_by: str = "web",
+        reason: str = "user_requested",
+    ) -> dict[str, Any]:
+        return self._apply_control_request(
+            task_id,
+            control_action="interrupt_stream",
+            mutator=request_interrupt_stream,
+            requested_by=requested_by,
+            reason=reason,
+        )
+
+    def pause_task(
+        self,
+        task_id: str,
+        *,
+        requested_by: str = "web",
+        reason: str = "user_requested",
+        worker_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._apply_control_request(
+            task_id,
+            control_action="pause_task",
+            mutator=request_pause,
+            requested_by=requested_by,
+            reason=reason,
+            worker_id=worker_id,
+        )
+
+    def cancel_task(
+        self,
+        task_id: str,
+        *,
+        requested_by: str = "web",
+        reason: str = "user_requested",
+        worker_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._apply_control_request(
+            task_id,
+            control_action="cancel_task",
+            mutator=request_cancel,
+            requested_by=requested_by,
+            reason=reason,
+            worker_id=worker_id,
+        )
+
+    def get_task_control_snapshot(self, task_id: str) -> dict[str, Any]:
+        stored = get_state_store().load(task_id)
+        if not stored:
+            raise KeyError(f"Task not found: {task_id}")
+        control = snapshot_task_control(task_id)
+        live = get_live(task_id)
+        ctx = stored.get("interrupt_context") or {}
+        active = ctx.get("active_step") if isinstance(ctx.get("active_step"), dict) else {}
+        return {
+            "task_id": task_id,
+            "running": bool(live and live.running),
+            "run_id": (live.run_id if live else None) or (control.run_id if control else None),
+            "effective_state": (
+                effective_control_state(control) if control else ctx.get("control_state", "IDLE")
+            ),
+            "stream_interrupted": bool(control and control.stream_interrupted),
+            "pause_requested": bool(
+                (control and control.pause_requested) or ctx.get("pause_requested")
+            ),
+            "cancel_requested": bool(
+                (control and control.cancel_requested) or ctx.get("cancel_requested")
+            ),
+            "active_step_id": (live.active_step_id if live else None)
+            or active.get("step_id"),
+            "last_committed_step": ctx.get("last_committed_step"),
+            "interrupt_context": ctx,
+            "worker_controls": {
+                wid: {
+                    "worker_id": wc.worker_id,
+                    "pause_requested": wc.pause_requested,
+                    "cancel_requested": wc.cancel_requested,
+                    "requested_at": wc.requested_at,
+                    "reason": wc.reason,
+                }
+                for wid, wc in snapshot_all_worker_controls(task_id).items()
+            },
+        }
 
     def submit_review(
         self,

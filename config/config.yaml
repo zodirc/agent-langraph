@@ -248,7 +248,10 @@ mission:
   max_failures: 3
   writing_max_steps: 500      # legacy alias; writing uses estimate or planner budget
   execution_mode: mission_oma
-  writing_llm_decide: false   # OMAW mechanical dispatch (ADR-001)
+  writing_llm_decide: false   # deprecated — OMAW mechanical dispatch only (ADR-001)
+  allow_legacy_writing_path: false
+  require_fact_bundle: true
+  require_review_verdict: true
   review_max_parallel: 3
   unit_loop: chapter_unit
   oma_default_for_writing: true
@@ -320,6 +323,14 @@ confirmation_gates:
     rewrite_outline: [append_chapter, append_body, write_outline]
     edit_plot: [write_outline]
     batch_unit_quality: [append_chapter, append_body, write_body]
+
+# Intent observation (pre-planning L2 model layer — see docs/INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md)
+intent_observation:
+  enabled: true
+  shadow_mode: false
+  low_confidence_threshold: 0.55
+  primary_model: ""
+  fallback_model: ""
 
 # Post-planning route alignment (see docs/ROUTE_AUDIT.md): kinds + conflicts, not per-user-string hacks
 route_audit:

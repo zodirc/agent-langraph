@@ -91,6 +91,26 @@ def mission_decide_node(state: AgentState) -> AgentState:
     from app.services.mission_steer import consume_pending_steer
 
     state = consume_pending_steer(state)
+    from app.services.execution_control import (
+        CancelRequested,
+        PauseRequested,
+        check_for_control_signal,
+        handle_control_exception,
+    )
+
+    try:
+        check_for_control_signal(
+            str(state["task_id"]),
+            phase="mission_decide_enter",
+            raise_on_pause=True,
+            raise_on_cancel=True,
+        )
+    except (PauseRequested, CancelRequested) as exc:
+        handled = handle_control_exception(state, exc)
+        if handled is not None:
+            get_state_store().save(handled)
+            return handled
+
     from app.services.mission_execution import reconcile_work_plan
 
     state = reconcile_work_plan(state)
@@ -140,6 +160,10 @@ def mission_decide_node(state: AgentState) -> AgentState:
     use_oma = should_use_mission_oma(state)
     use_writing_llm = should_use_writing_llm_decide(mission) and not use_oma
     use_llm = (bool(getattr(settings, "MISSION_LLM_DECIDE", False)) or use_writing_llm) and not use_oma
+    if use_writing_llm:
+        from app.services.legacy_mission_paths import record_legacy_mission_path
+
+        record_legacy_mission_path("writing_llm_decide")
 
     if use_oma:
         if eval_result.done and eval_result.action == "finish":

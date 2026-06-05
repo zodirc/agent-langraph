@@ -53,7 +53,19 @@ make init && make up                   # HTTPS + 代码热更新
 - **Context Governance 成为统一上下文入口**：任意 LLM 调用不再直接消费原始全量 `conversation_history`，而是通过 [`prompt_context_gateway`](app/services/prompt_context_gateway.py:1) 统一收集 `current_turn / semantic_summary / working_memory / retrieved_knowledge / tool_observations / file_context / diagnostics` 等上下文项，按 [`PromptContextPolicy`](app/services/context_policy.py:12) 做 token 预算、优先级裁剪、压缩与组包，并把 kept / compressed / dropped 决策写入 composition trace。
 - **上下文治理可观测与可操作**：`/chat` 内嵌上下文治理面板；任务 API 可查看 `context-composition` 并触发受策略约束的手动压缩。旧 [`context_compressor`](app/services/context_compressor.py:1) 仍保留为 transcript → semantic summary 的子能力，但不再作为 prompt 主路径的唯一入口。
 
-相关实现与文档可参考 [`docs/ADR_MISSION_LIFECYCLE_V2.md`](docs/ADR_MISSION_LIFECYCLE_V2.md)、[`docs/MISSION_EXECUTION_CONTROL.md`](docs/MISSION_EXECUTION_CONTROL.md)、[`docs/ADR_CONTEXT_GOVERNANCE.md`](docs/ADR_CONTEXT_GOVERNANCE.md)、[`docs/CONTEXT_GOVERNANCE.md`](docs/CONTEXT_GOVERNANCE.md)、[`app/services/graph_run_registry.py`](app/services/graph_run_registry.py:1)、[`app/services/mission_worker_lost.py`](app/services/mission_worker_lost.py:1)、[`app/services/context_assembler.py`](app/services/context_assembler.py:53)。
+相关实现与文档可参考 [`docs/ADR_MISSION_LIFECYCLE_V2.md`](docs/ADR_MISSION_LIFECYCLE_V2.md)、[`docs/MISSION_EXECUTION_CONTROL.md`](docs/MISSION_EXECUTION_CONTROL.md)、[`docs/INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md`](docs/INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md)、[`docs/ADR_CONTEXT_GOVERNANCE.md`](docs/ADR_CONTEXT_GOVERNANCE.md)、[`docs/CONTEXT_GOVERNANCE.md`](docs/CONTEXT_GOVERNANCE.md)、[`app/services/graph_run_registry.py`](app/services/graph_run_registry.py:1)、[`app/services/mission_worker_lost.py`](app/services/mission_worker_lost.py:1)、[`app/services/context_assembler.py`](app/services/context_assembler.py:53)。
+
+### 唯一长期路径总表（Mission / OMAW / Intent Observation）
+
+| 域 | 长期路径 | 控制面 / 执行面 | 默认配置 |
+|----|----------|-----------------|----------|
+| **问答** | `qa_mode` → 单图 planning/reasoning | 单轮执行图 | `interaction_mode=chat` |
+| **工程交付** | `engineering_mode` → bounded executor | 单轮执行图 + verify | `interaction_mode=engineering` |
+| **长篇写作** | `manuscript_mode` → Mission 控制图 → **OMAW** workers | Mission = 控制面；OMAW = 写作执行面 | `execution_mode=mission_oma` |
+| **意图观测** | L0 显式模式 → L1 结构 → L2 模型 → L3 route audit | `pre_planning` 前置 | `intent_observation.enabled=true` |
+| **已退役** | `writing_llm_decide` / 单图内联写作 phase 自选 | 仅 `allow_legacy_writing_path=true` 时兼容 | 默认 **hard-off** |
+
+`writing_phase` 仅作 OMAW dispatch 兼容别名，不再是主架构词汇。
 
 ## 独立 CLI（§8.2）
 

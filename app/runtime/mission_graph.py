@@ -1,10 +1,13 @@
-"""Mission 长任务图（独立 StateGraph）。
+"""Mission 长任务控制面图（独立 StateGraph）。
+
+Mission = control plane only (decide / act / observe / eval / finalize).
+写作执行由 OMAW worker orchestration 完成，不在此图内联生成正文。
 
 循环：mission_init → mission_decide → mission_act → mission_observe → mission_eval。
 入口：graph_runner execution_mode=mission；或主图 planning 后 handoff。
 收尾：mission_finalize → policy → output → memory_writeback。
 
-Long-horizon mission graph: decide-act-observe-eval loop with shared output tail.
+Long-horizon mission control graph: decide-act-observe-eval loop with shared output tail.
 """
 
 from __future__ import annotations
@@ -158,4 +161,15 @@ def stream_mission_graph(
                 # Use merge_state to preserve nested dicts like progress.work_plan.
                 latest = merge_state(latest, **update)
             latest = _track(latest, node_name)
+            from app.services.execution_control import CancelRequested, PauseRequested, check_for_control_signal
+
+            try:
+                check_for_control_signal(
+                    str(latest["task_id"]),
+                    phase=f"mission_graph_{node_name}",
+                    raise_on_pause=True,
+                    raise_on_cancel=True,
+                )
+            except (PauseRequested, CancelRequested):
+                break
             yield node_name, latest

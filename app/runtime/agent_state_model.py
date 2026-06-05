@@ -71,6 +71,9 @@ class AgentStateModel(BaseModel):
     skill_snapshot: Optional[dict[str, Any]] = None
     skill_source_type: Optional[str] = None
     skill_runtime_policy: Optional[dict[str, Any]] = None
+    interrupt_context: Optional[dict[str, Any]] = None
+    execution_run: Optional[dict[str, Any]] = None
+    pending_user_message: Optional[dict[str, Any]] = None
 
 
 def state_to_model(state: AgentState | dict[str, Any]) -> AgentStateModel:

@@ -2,7 +2,7 @@
 
 创建与执行：POST /tasks、POST /tasks/stream → _prepare_task_request → GraphRunner。
 _prepare_task_request：sanitize_input_payload，可选 attach_skill_to_payload（仅 payload）。
-Mission 控制：POST /tasks/{id}/steer、resume、stop。
+Mission 控制：POST /tasks/{id}/steer、resume、stop、pause、cancel、interrupt-stream。
 查询：GET /tasks/{id}/status、result、audit、llm-interactions 与任务列表。
 
 Task HTTP API for create, stream, mission steer/resume/stop, and status queries.
@@ -339,6 +339,39 @@ class StopTaskResponse(BaseModel):
     client_display: Optional[dict[str, Any]] = None
 
 
+class TaskControlRequest(BaseModel):
+    reason: str = "user_requested"
+    requested_by: str = "web"
+    worker_id: Optional[str] = Field(
+        default=None,
+        description="Optional OMAW worker scope id (current_work_item.id or oma_capability)",
+    )
+
+
+class TaskControlResponse(BaseModel):
+    task_id: str
+    accepted: bool
+    control_action: str
+    effective_state: str
+    active_step_id: Optional[str] = None
+    run_id: Optional[str] = None
+    worker_id: Optional[str] = None
+
+
+class TaskControlSnapshotResponse(BaseModel):
+    task_id: str
+    running: bool
+    run_id: Optional[str] = None
+    effective_state: str
+    stream_interrupted: bool = False
+    pause_requested: bool = False
+    cancel_requested: bool = False
+    active_step_id: Optional[str] = None
+    last_committed_step: Optional[dict[str, Any]] = None
+    interrupt_context: Optional[dict[str, Any]] = None
+    worker_controls: Optional[dict[str, Any]] = None
+
+
 @router.post("/{task_id}/steer", response_model=SteerTaskResponse)
 def steer_task(
     task_id: str,
@@ -396,36 +429,134 @@ def stop_task(
     _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> StopTaskResponse:
     """
-    Best-effort immediate stop for running mission (especially long writing steps).
+    Pause a running mission at the next safe checkpoint (alias for POST /pause).
     """
     try:
-        state = get_graph_runner().steer_mission(
-            task_id,
-            "",
-            intervention={
-                "action": "pause",
-                "force": True,
-                "reason": "user requested stop",
-            },
-            priority=100,
-            preempt=True,
-        )
+        control = get_graph_runner().pause_task(task_id, reason="user requested stop")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    stored = get_state_store().load(task_id) or {}
     from app.services.client_display import build_steer_task_client_display
-    from app.services.mission_steer import pending_steer_is_set
 
-    queued = pending_steer_is_set(state.get("pending_user_message"))
-    display = build_steer_task_client_display(state, queued=queued)
+    display = build_steer_task_client_display(stored, queued=False)
     return StopTaskResponse(
         task_id=task_id,
-        status=str(state.get("status")),
-        message="stop_queued",
+        status=str(stored.get("status") or ""),
+        message=str(control.get("effective_state") or "pause_requested"),
         client_display=display,
     )
+
+
+@router.post("/{task_id}/interrupt-stream", response_model=TaskControlResponse)
+def interrupt_task_stream(
+    task_id: str,
+    request: TaskControlRequest = TaskControlRequest(),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> TaskControlResponse:
+    """Stop SSE output only; task continues in background."""
+    try:
+        result = get_graph_runner().interrupt_task_stream(
+            task_id,
+            requested_by=request.requested_by,
+            reason=request.reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return TaskControlResponse(**result)
+
+
+@router.post("/{task_id}/pause", response_model=TaskControlResponse)
+def pause_task(
+    task_id: str,
+    request: TaskControlRequest = TaskControlRequest(),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> TaskControlResponse:
+    """Request task pause at next safe checkpoint."""
+    try:
+        result = get_graph_runner().pause_task(
+            task_id,
+            requested_by=request.requested_by,
+            reason=request.reason,
+            worker_id=request.worker_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return TaskControlResponse(**result)
+
+
+@router.post("/{task_id}/cancel", response_model=TaskControlResponse)
+def cancel_task(
+    task_id: str,
+    request: TaskControlRequest = TaskControlRequest(),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> TaskControlResponse:
+    """Cancel task; discard uncommitted step buffer, keep committed artifacts."""
+    try:
+        result = get_graph_runner().cancel_task(
+            task_id,
+            requested_by=request.requested_by,
+            reason=request.reason,
+            worker_id=request.worker_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return TaskControlResponse(**result)
+
+
+@router.post("/{task_id}/workers/{worker_id}/pause", response_model=TaskControlResponse)
+def pause_worker(
+    task_id: str,
+    worker_id: str,
+    request: TaskControlRequest = TaskControlRequest(),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> TaskControlResponse:
+    """Request pause for a specific OMAW worker scope."""
+    try:
+        result = get_graph_runner().pause_task(
+            task_id,
+            requested_by=request.requested_by,
+            reason=request.reason,
+            worker_id=worker_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return TaskControlResponse(**result)
+
+
+@router.post("/{task_id}/workers/{worker_id}/cancel", response_model=TaskControlResponse)
+def cancel_worker(
+    task_id: str,
+    worker_id: str,
+    request: TaskControlRequest = TaskControlRequest(),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> TaskControlResponse:
+    """Cancel a specific OMAW worker scope."""
+    try:
+        result = get_graph_runner().cancel_task(
+            task_id,
+            requested_by=request.requested_by,
+            reason=request.reason,
+            worker_id=worker_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return TaskControlResponse(**result)
+
+
+@router.get("/{task_id}/control", response_model=TaskControlSnapshotResponse)
+def get_task_control(
+    task_id: str,
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> TaskControlSnapshotResponse:
+    """Observability for in-flight control state and interrupt_context."""
+    try:
+        snapshot = get_graph_runner().get_task_control_snapshot(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return TaskControlSnapshotResponse(**snapshot)
 
 
 class ResumeTaskRequest(BaseModel):

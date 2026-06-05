@@ -115,6 +115,11 @@ def _pause_context_lines(state: AgentState, control: dict[str, Any]) -> list[str
             lines.append(first)
 
     reason = str(control.get("reason") or "").strip()
+    pause_reason = str(control.get("pause_reason") or "").strip()
+    if pause_reason == "user_requested_pause":
+        lines.append("任务已按你的请求暂停；已提交内容已保存，可用 /resume 从检查点继续。")
+    elif pause_reason == "user_requested_cancel":
+        lines.append("任务已取消；已提交内容保留，未提交部分已丢弃。")
     if reason and reason not in lines:
         lines.append(reason)
 
@@ -301,7 +306,11 @@ def build_mission_paused_payload(
         "steer_outcome_confirmation": payload.get("steer_outcome_confirmation"),
         "confirmation_actions": confirmation_actions,
         "display": {
-            "pause_kind": "steer" if steer_pause else "stepwise",
+            "pause_kind": (
+                "user_control"
+                if str(control.get("pause_reason") or "") in ("user_requested_pause", "user_requested_cancel")
+                else ("steer" if steer_pause else "stepwise")
+            ),
             "writing_action": action_label,
             "mission_control": control,
             "intervention": intervention,

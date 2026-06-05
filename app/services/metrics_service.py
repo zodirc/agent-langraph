@@ -302,6 +302,56 @@ class MetricsService:
                     ["reason"],
                     **prom_kwargs,
                 )
+                self._prometheus["intent_observation_total"] = Counter(
+                    "agent_intent_observation_total",
+                    "Intent observation events",
+                    ["source", "intent_kind", "session_relation"],
+                    **prom_kwargs,
+                )
+                self._prometheus["intent_observation_fallback_total"] = Counter(
+                    "agent_intent_observation_fallback_total",
+                    "Intent observation LLM fallbacks",
+                    ["reason"],
+                    **prom_kwargs,
+                )
+                self._prometheus["legacy_mission_path_total"] = Counter(
+                    "agent_legacy_mission_path_total",
+                    "Legacy mission writing path hits",
+                    ["path_id"],
+                    **prom_kwargs,
+                )
+                self._prometheus["writing_without_fact_bundle_total"] = Counter(
+                    "agent_writing_without_fact_bundle_total",
+                    "Writing worker runs without FactBundle",
+                    **prom_kwargs,
+                )
+                self._prometheus["review_verdict_missing_fact_bundle_total"] = Counter(
+                    "agent_review_verdict_missing_fact_bundle_total",
+                    "ReviewVerdict missing fact_bundle_id",
+                    **prom_kwargs,
+                )
+                self._prometheus["mode_resolution_misroute_total"] = Counter(
+                    "agent_mode_resolution_misroute_total",
+                    "Mode resolution misroute corrections",
+                    ["reason"],
+                    **prom_kwargs,
+                )
+                self._prometheus["mission_mechanical_resume_false_positive_total"] = Counter(
+                    "agent_mission_mechanical_resume_false_positive_total",
+                    "Blocked mechanical resume by intent observation",
+                    **prom_kwargs,
+                )
+                self._prometheus["stay_switch_isolate_disagreement_total"] = Counter(
+                    "agent_stay_switch_isolate_disagreement_total",
+                    "Shadow structural vs LLM session_relation disagreement",
+                    ["structural", "llm"],
+                    **prom_kwargs,
+                )
+                self._prometheus["planning_skip_wrongly_total"] = Counter(
+                    "agent_planning_skip_wrongly_total",
+                    "Planning incorrectly skipped",
+                    **prom_kwargs,
+                )
             except ImportError:
                 pass
 
@@ -913,6 +963,85 @@ class MetricsService:
         if self._prometheus and "acceptance_fail_total" in self._prometheus:
             self._prometheus["acceptance_fail_total"].labels(reason=reason[:40]).inc()
 
+    def inc_intent_observation(
+        self,
+        *,
+        source: str,
+        intent_kind: str,
+        session_relation: str,
+    ) -> None:
+        key = f"intent_obs:{source}:{intent_kind}"
+        self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "intent_observation_total" in self._prometheus:
+            self._prometheus["intent_observation_total"].labels(
+                source=source[:20],
+                intent_kind=intent_kind[:30],
+                session_relation=session_relation[:20],
+            ).inc()
+
+    def inc_intent_observation_fallback(self, reason: str) -> None:
+        key = f"intent_obs_fallback:{reason[:40]}"
+        self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "intent_observation_fallback_total" in self._prometheus:
+            self._prometheus["intent_observation_fallback_total"].labels(
+                reason=reason[:40]
+            ).inc()
+
+    def inc_legacy_mission_path(self, path_id: str) -> None:
+        key = f"legacy_mission:{path_id[:40]}"
+        self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "legacy_mission_path_total" in self._prometheus:
+            self._prometheus["legacy_mission_path_total"].labels(
+                path_id=path_id[:40]
+            ).inc()
+
+    def inc_writing_without_fact_bundle(self) -> None:
+        self._inc("writing_without_fact_bundle")
+        if self._prometheus and "writing_without_fact_bundle_total" in self._prometheus:
+            self._prometheus["writing_without_fact_bundle_total"].inc()
+
+    def inc_review_verdict_missing_fact_bundle(self) -> None:
+        self._inc("review_verdict_missing_fact_bundle")
+        if (
+            self._prometheus
+            and "review_verdict_missing_fact_bundle_total" in self._prometheus
+        ):
+            self._prometheus["review_verdict_missing_fact_bundle_total"].inc()
+
+    def inc_mode_resolution_misroute(self, reason: str) -> None:
+        key = f"misroute:{reason[:40]}"
+        self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "mode_resolution_misroute_total" in self._prometheus:
+            self._prometheus["mode_resolution_misroute_total"].labels(
+                reason=reason[:40]
+            ).inc()
+
+    def inc_mechanical_resume_blocked(self) -> None:
+        self._inc("mechanical_resume_blocked")
+        if (
+            self._prometheus
+            and "mission_mechanical_resume_false_positive_total" in self._prometheus
+        ):
+            self._prometheus["mission_mechanical_resume_false_positive_total"].inc()
+
+    def inc_stay_switch_isolate_disagreement(
+        self, structural: str, llm: str
+    ) -> None:
+        key = f"session_disagree:{structural}:{llm}"
+        self._counters[key] = self._counters.get(key, 0) + 1
+        if (
+            self._prometheus
+            and "stay_switch_isolate_disagreement_total" in self._prometheus
+        ):
+            self._prometheus["stay_switch_isolate_disagreement_total"].labels(
+                structural=structural[:20], llm=llm[:20]
+            ).inc()
+
+    def inc_planning_skip_wrongly(self) -> None:
+        self._inc("planning_skip_wrongly")
+        if self._prometheus and "planning_skip_wrongly_total" in self._prometheus:
+            self._prometheus["planning_skip_wrongly_total"].inc()
+
     def inc_policy_review(self) -> None:
         self._inc("policy_reviews")
 
@@ -928,6 +1057,38 @@ class MetricsService:
 
     def inc_review_resolved(self) -> None:
         self._inc("reviews_resolved")
+
+    def inc_task_control_event(self, kind: str) -> None:
+        key = f"task_control_{(kind or 'unknown')[:40]}"
+        self._inc(key)
+        self.inc_contract_event(kind)
+
+    def observe_pause_latency_ms(self, latency_ms: int) -> None:
+        self._inc("pause_latency_samples")
+        self._counters["pause_latency_ms_total"] = (
+            self._counters.get("pause_latency_ms_total", 0) + max(0, int(latency_ms))
+        )
+
+    def observe_cancel_latency_ms(self, latency_ms: int) -> None:
+        self._inc("cancel_latency_samples")
+        self._counters["cancel_latency_ms_total"] = (
+            self._counters.get("cancel_latency_ms_total", 0) + max(0, int(latency_ms))
+        )
+
+    def observe_checkpoint_commit_ms(self, latency_ms: int) -> None:
+        self._inc("checkpoint_commit_samples")
+        self._counters["checkpoint_commit_ms_total"] = (
+            self._counters.get("checkpoint_commit_ms_total", 0) + max(0, int(latency_ms))
+        )
+
+    def inc_partial_commit(self) -> None:
+        self._inc("partial_commit_count")
+
+    def inc_resume_from_checkpoint(self) -> None:
+        self._inc("resume_from_checkpoint_count")
+
+    def inc_disconnect_without_cancel(self) -> None:
+        self._inc("disconnect_without_cancel_count")
 
     def tenant_metrics_snapshot(self, tenant_id: str) -> dict[str, Any]:
         from app.services.tenant_quota import quota_report

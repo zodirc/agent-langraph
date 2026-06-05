@@ -161,15 +161,21 @@ def reasoning_node(state: AgentState) -> AgentState:
             report_reasoning_context(state)
             report_status_trace("reasoning", "基于 turn_facts 综合回答（只读已执行事实）…")
             if trace_enabled() or answer_stream_enabled():
+                from app.services.execution_control import controlled_iter
+
                 raw = stream_llm_trace(
-                    stream_structured(
-                        "reasoning",
-                        reasoning_system,
-                        user_json,
-                        budget_ctx=budget_ctx,
-                        trace_state=state,
-                        stream_node="reasoning",
-                        stream_phase="reasoning_llm",
+                    controlled_iter(
+                        str(state["task_id"]),
+                        stream_structured(
+                            "reasoning",
+                            reasoning_system,
+                            user_json,
+                            budget_ctx=budget_ctx,
+                            trace_state=state,
+                            stream_node="reasoning",
+                            stream_phase="reasoning_llm",
+                        ),
+                        phase="reasoning_stream_chunk",
                     ),
                     node="reasoning",
                     phase="reasoning_llm",
@@ -268,6 +274,36 @@ def reasoning_node(state: AgentState) -> AgentState:
             audit_log=append_audit(state, "reasoning", "budget_exceeded", {"detail": str(exc)}),
         )
     except Exception as exc:
+        from app.services.execution_control import CancelRequested, PauseRequested
+        from app.services.mission_execution import (
+            PAUSE_USER_REQUESTED_CANCEL,
+            PAUSE_USER_REQUESTED_PAUSE,
+        )
+
+        if isinstance(exc, PauseRequested):
+            updated = merge_state(
+                state,
+                status=TaskStatus.MISSION_PAUSED.value,
+                current_node="reasoning",
+                mission_control={"pause_reason": PAUSE_USER_REQUESTED_PAUSE, "reason": str(exc)},
+                audit_log=append_audit(
+                    state, "reasoning", "control_interrupt", {"detail": str(exc)}
+                ),
+            )
+            get_state_store().save(updated)
+            return updated
+        if isinstance(exc, CancelRequested):
+            updated = merge_state(
+                state,
+                status=TaskStatus.CANCELLED.value,
+                current_node="reasoning",
+                mission_control={"pause_reason": PAUSE_USER_REQUESTED_CANCEL, "reason": str(exc)},
+                audit_log=append_audit(
+                    state, "reasoning", "control_interrupt", {"detail": str(exc)}
+                ),
+            )
+            get_state_store().save(updated)
+            return updated
         return merge_state(
             state,
             errors=list(state.get("errors", [])) + [f"reasoning: {exc}"],

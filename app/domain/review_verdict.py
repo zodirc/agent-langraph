@@ -149,6 +149,14 @@ def save_review_verdict(
     """Only reviewer worker may write chapter_reviews (ADR 5.3)."""
     if agent != "reviewer":
         raise PermissionError(f"only reviewer may save ReviewVerdict, not {agent}")
+    from app.config.settings import settings
+    from app.services.metrics_service import get_metrics_service
+
+    if getattr(settings, "MISSION_REQUIRE_REVIEW_VERDICT", True) and not verdict.is_valid():
+        get_metrics_service().inc_review_verdict_missing_fact_bundle()
+        raise ValueError(
+            "ReviewVerdict requires evidence.fact_bundle_id when mission.require_review_verdict=true"
+        )
     from app.services.writing_phases import _chapter_key, load_chapter_reviews, save_chapter_reviews
 
     reviews = load_chapter_reviews(task_id)

@@ -399,6 +399,18 @@ def manuscript_has_body(ms: Manuscript, *, min_bytes: int = 1) -> bool:
     return nbytes >= min_bytes
 
 
+def sync_manuscript_snapshot_atomic(state: "AgentState") -> "AgentState":
+    """
+    Refresh manuscript bytes from disk atomically after artifact commit.
+
+    Ensures state/manuscript snapshot matches on-disk truth (checkpoint-first order).
+    """
+    from app.runtime.state import AgentState as _AgentState
+    from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
+
+    return enrich_agent_state_manuscript(state)  # type: ignore[arg-type]
+
+
 def resolve_manuscript(task_id: str, stored: Optional[dict[str, Any]] = None) -> Manuscript:
     """Resolve canonical body/outline paths from state or artifact directory."""
     files = list_task_artifacts(task_id)

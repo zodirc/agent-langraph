@@ -181,3 +181,38 @@ def test_create_task_invalid_payload_returns_error(isolated_stores, monkeypatch)
     client = TestClient(app)
     resp = client.post("/tasks", json={"task_type": "qa", "input_payload": {}})
     assert resp.status_code == 500
+
+
+def test_task_control_endpoints(isolated_stores, monkeypatch):
+    from app.api import task_api
+    from app.runtime.state import create_initial_state, merge_state
+
+    store = isolated_stores
+    state = merge_state(
+        create_initial_state(task_id="ctrl-task"),
+        status="MISSION_RUNNING",
+    )
+    store.save(state)
+    monkeypatch.setattr(task_api, "get_state_store", lambda: store)
+
+    client = TestClient(app)
+    pause = client.post(
+        f"/tasks/{state['task_id']}/pause",
+        json={"reason": "user_requested", "requested_by": "test"},
+    )
+    assert pause.status_code == 200
+    body = pause.json()
+    assert body["accepted"] is True
+    assert body["control_action"] == "pause_task"
+
+    snap = client.get(f"/tasks/{state['task_id']}/control")
+    assert snap.status_code == 200
+    assert snap.json()["pause_requested"] is True
+
+    stream = client.post(f"/tasks/{state['task_id']}/interrupt-stream")
+    assert stream.status_code == 200
+    assert stream.json()["control_action"] == "interrupt_stream"
+
+    cancel = client.post(f"/tasks/{state['task_id']}/cancel")
+    assert cancel.status_code == 200
+    assert cancel.json()["control_action"] == "cancel_task"

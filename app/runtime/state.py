@@ -35,6 +35,7 @@ class TaskStatus(str, Enum):
     REASON_FAILED = "REASON_FAILED"
     DEAD_LETTER = "DEAD_LETTER"
     ABANDONED = "ABANDONED"
+    CANCELLED = "CANCELLED"
 
 
 class AgentState(TypedDict):
@@ -107,6 +108,11 @@ class AgentState(TypedDict):
     skill_snapshot: Optional[dict[str, Any]]
     skill_source_type: Optional[str]
     skill_runtime_policy: Optional[dict[str, Any]]
+
+    # Unified interrupt / checkpoint runtime (see docs/TASK_INTERRUPT_REFACTOR_PLAN.md)
+    interrupt_context: Optional[dict[str, Any]]
+    execution_run: Optional[dict[str, Any]]
+    pending_user_message: Optional[dict[str, Any]]
 
 
 def create_initial_state(

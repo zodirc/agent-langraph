@@ -174,9 +174,28 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
         PAUSE_HUMAN_GATE,
         PAUSE_STEP_CHECKPOINT,
         PAUSE_STEER_QUEUED,
+        PAUSE_USER_REQUESTED_CANCEL,
+        PAUSE_USER_REQUESTED_PAUSE,
         has_execution_grant,
     )
     from app.services.mission_steer import pending_has_forced_action, pending_steer_is_set
+    from app.services.task_control import snapshot_task_control
+
+    control = snapshot_task_control(str(state["task_id"]))
+    if control and control.cancel_requested:
+        return EvalResult(
+            done=True,
+            reason="user requested cancel",
+            action="pause",
+            pause_reason=PAUSE_USER_REQUESTED_CANCEL,
+        )
+    if control and control.pause_requested:
+        return EvalResult(
+            done=True,
+            reason="user requested pause",
+            action="pause",
+            pause_reason=PAUSE_USER_REQUESTED_PAUSE,
+        )
 
     payload_for_grant = merge_input_payload_for_gates(state, stored)
     pending = stored.get("pending_user_message") or state.get("pending_user_message")

@@ -91,6 +91,14 @@ def test_review_verdict_from_phase_result():
     assert verdict.evidence.fact_bundle_id == "fb-x"
 
 
+def test_save_review_verdict_requires_fact_bundle_id():
+    from app.domain.review_verdict import save_review_verdict
+
+    bad = ReviewVerdict(chapter_index=1, qualified=True, model_pass=True)
+    with pytest.raises(ValueError, match="fact_bundle_id"):
+        save_review_verdict("t1", bad)
+
+
 def test_should_use_mission_oma_writing():
     state = _writing_state()
     assert should_use_mission_oma(state)

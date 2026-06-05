@@ -144,13 +144,18 @@ flowchart TB
 
 ---
 
-## writing_llm_decide 与机械推导的边界
+## writing_llm_decide 与机械推导的边界（历史说明）
+
+> **2026-06-05 起**：`writing_llm_decide` 已进入退役流程。默认 **hard-off**（`allow_legacy_writing_path=false`）。
+> 写作域唯一长期执行面为 **OMAW worker orchestration**；Mission 图仅作控制面。
+> 详见 [`INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md`](INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md)。
 
 | 层 | 决定什么 | 实现 |
 |----|----------|------|
-| **机械** | 是否存在大纲/正文、下一 `action` 类型（outline / write_body / append_body）、work_plan 是否过期 | `resolve_writing_intent_for_step`、`work_item_satisfied`、`reconcile_work_plan` |
-| **模型**（`mission.writing_llm_decide=true`） | 在机械允许的执行器内选 `writing_phase`（审阅、润色、摘要、一致性等） | `mission_decide` + `MISSION_WRITING_DECIDE_SYSTEM` |
-| **模型**（steer） | 改纲、改剧情、强制 intervention | `planning` → `mission_intervention` / `work_plan_patch` |
+| **机械（当前默认）** | OMAW orchestrator 派单；`FactBundle` + `WorkerExecutionPolicy` 硬约束 | `mission_oma/orchestrator.py`、`prepare_worker_execution` |
+| **机械（历史）** | 是否存在大纲/正文、下一 `action` 类型 | `resolve_writing_intent_for_step`、`work_item_satisfied` |
+| **模型（已废弃）** | `mission.writing_llm_decide=true` 且 `allow_legacy_writing_path=true` 时 LLM 自选 `writing_phase` | `mission_decide` + `MISSION_WRITING_DECIDE_SYSTEM` — 仅兼容层，命中审计 |
+| **模型（steer）** | 改纲、改剧情、强制 intervention | `planning` → `mission_intervention` / `work_plan_patch` |
 
 模型 **不** 判断「大纲是否已写完」；该判断仅来自 `manuscript` 与 `step_policy`。
 

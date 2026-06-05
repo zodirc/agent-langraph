@@ -129,7 +129,10 @@ def apply_mode_isolation_if_needed(
 
 
 def run_mode_resolution_pipeline(state: AgentState) -> AgentState:
-    resolution = resolve_target_mode(state)
+    from app.services.intent_observation import resolve_mode_with_observation
+
+    intent_obs = state.get("intent_observation") if resolve_mode_with_observation(state) else None
+    resolution = resolve_target_mode(state, intent_observation=intent_obs)
     state = apply_mode_isolation_if_needed(state, resolution)
     state = apply_mode_contract_to_state(state, resolution)
     from app.services.reasoning_trace import report_mode_resolution_trace

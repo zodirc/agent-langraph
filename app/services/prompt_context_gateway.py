@@ -39,6 +39,7 @@ GOVERNED_LLM_PURPOSES: frozenset[str] = frozenset(
         "summarization",
         "code_agent",
         "session_turn",
+        "intent_observation",
     }
 )
 
@@ -337,6 +338,7 @@ def prepare_governed_payload(
         "reflection",
         "code_agent",
         "session_turn",
+        "intent_observation",
     ):
         out["conversation_history"] = transcript
     if "conversation" in out:

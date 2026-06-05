@@ -17,6 +17,8 @@ from app.services.artifact_content import (
     generate_artifact_content,
     parse_requested_chars,
 )
+from app.services.execution_control import CancelRequested, PauseRequested
+from app.services.step_committer import StepCommitter
 from app.services.artifact_tools import (
     handle_append_text_artifact,
     handle_read_text_artifact,
@@ -235,13 +237,23 @@ def writing_node(state: AgentState) -> AgentState:
                 intent={**intent, "action": "write_outline"},
                 target_chars=target_chars,
             )
-            outcome = handle_write_text_artifact(
-                {"task_id": task_id, "filename": filename, "content": content}
+            step_id = f"{work_item_id}_write_outline"
+            committer = StepCommitter(
+                merge_state(state, input_payload=payload),
+                step_id=step_id,
+                kind="write_outline",
+                filename=filename,
+                work_item_id=work_item_id,
+                tool_name="write_text_artifact",
+                min_chars=int(intent.get("min_chars") or settings.MANUSCRIPT_MIN_BODY_CHARS),
             )
+            commit_state, commit_result = committer.commit(content)
+            outcome = commit_result.artifact_outcome
             results.append({"tool": "write_text_artifact", "status": "ok", "result": outcome})
-            ms.outline_path = filename
-            ms.outline_bytes = int(outcome.get("bytes") or 0)
+            ms = resolve_manuscript(task_id, commit_state.get("manuscript"))
             ms.outline_revision = int(ms.outline_revision or 0) + 1
+            state = merge_state(commit_state, tool_results=results)
+            payload = dict(state.get("input_payload") or {})
             payload["last_written_outline_excerpt"] = content[:5000]
             if intent.get("source") == "revision_intent":
                 ms.revision = int(ms.revision or 0) + 1
@@ -342,15 +354,25 @@ def writing_node(state: AgentState) -> AgentState:
                     intent={**intent, "action": "write_body"},
                     target_chars=target_chars,
                 )
-                outcome = handle_write_text_artifact(
-                    {"task_id": task_id, "filename": filename, "content": content}
+                step_id = f"{work_item_id}_write_body"
+                committer = StepCommitter(
+                    merge_state(state, input_payload=payload),
+                    step_id=step_id,
+                    kind="write_body",
+                    filename=filename,
+                    work_item_id=work_item_id,
+                    tool_name="write_text_artifact",
+                    min_chars=min_body,
                 )
-                results.append(
-                    {"tool": "write_text_artifact", "status": "ok", "result": outcome}
-                )
+                commit_state, commit_result = committer.commit(content)
+                outcome = commit_result.artifact_outcome
+                results.append({"tool": "write_text_artifact", "status": "ok", "result": outcome})
+                ms = resolve_manuscript(task_id, commit_state.get("manuscript"))
                 ms.body_path = filename
                 ms.body_bytes = int(outcome.get("bytes") or 0)
                 ms.body_outline_revision_seen = int(ms.outline_revision or 0)
+                state = merge_state(commit_state, tool_results=results)
+                payload = dict(state.get("input_payload") or {})
 
         if action == "append_body":
             filename = ms.body_path or body_file
@@ -371,6 +393,22 @@ def writing_node(state: AgentState) -> AgentState:
             from app.services.mission_steer import has_pending_steer
 
             for idx, chunk in enumerate(chunks):
+                from app.services.execution_control import check_for_control_signal
+
+                try:
+                    check_for_control_signal(
+                        task_id,
+                        phase="append_chunk",
+                        raise_on_pause=True,
+                        raise_on_cancel=True,
+                    )
+                except (PauseRequested, CancelRequested):
+                    report_status_trace(
+                        "writing",
+                        "检测到任务控制停止，本步写作提前结束（已写入部分将保留）",
+                    )
+                    payload["writing_stopped_for_steer"] = True
+                    break
                 if has_pending_steer(task_id):
                     report_status_trace(
                         "writing",
@@ -394,18 +432,27 @@ def writing_node(state: AgentState) -> AgentState:
                         raise ValueError(
                             f"Append rejected: near-duplicate of tail (ratio={ratio:.2f})"
                         )
-                outcome = handle_append_text_artifact(
-                    {"task_id": task_id, "filename": filename, "content": chunk}
+                chunk_step_id = f"{work_item_id}_append_{idx}"
+                chunk_state = merge_state(
+                    state,
+                    input_payload=payload,
+                    tool_results=results,
                 )
+                chunk_committer = StepCommitter(
+                    chunk_state,
+                    step_id=chunk_step_id,
+                    kind="append_body",
+                    filename=filename,
+                    work_item_id=work_item_id,
+                    tool_name="append_text_artifact",
+                )
+                chunk_state, commit_result = chunk_committer.commit(chunk, partial=True)
+                outcome = commit_result.artifact_outcome
                 results.append(
                     {"tool": "append_text_artifact", "status": "ok", "result": outcome}
                 )
-                from app.services.manuscript_checkpoint import checkpoint_writing_state
-
-                checkpoint_writing_state(
-                    merge_state(state, input_payload=payload),
-                    tool_results=results,
-                )
+                state = merge_state(chunk_state, tool_results=results)
+                payload = dict(state.get("input_payload") or {})
             ms.body_path = filename
             ms = resolve_manuscript(task_id, ms.to_dict())
             ms.body_outline_revision_seen = int(ms.outline_revision or 0)
@@ -558,14 +605,29 @@ def writing_node(state: AgentState) -> AgentState:
         get_state_store().save(updated)
         return updated
     except Exception as exc:
-        if isinstance(exc, SteerPreempted):
+        if isinstance(exc, (SteerPreempted, PauseRequested, CancelRequested)):
+            from app.services.mission_execution import (
+                PAUSE_USER_REQUESTED_CANCEL,
+                PAUSE_USER_REQUESTED_PAUSE,
+            )
+
             payload = dict(state.get("input_payload") or {})
             payload["writing_stopped_for_steer"] = True
+            paused = isinstance(exc, (SteerPreempted, PauseRequested))
+            status = (
+                TaskStatus.MISSION_PAUSED.value
+                if paused
+                else TaskStatus.CANCELLED.value
+            )
+            pause_reason = (
+                PAUSE_USER_REQUESTED_PAUSE if paused else PAUSE_USER_REQUESTED_CANCEL
+            )
             return merge_state(
                 state,
                 input_payload=payload,
-                status=TaskStatus.WRITTEN.value,
+                status=status,
                 current_node="writing",
+                mission_control={"pause_reason": pause_reason, "reason": str(exc)},
                 audit_log=append_audit(
                     state,
                     "writing",

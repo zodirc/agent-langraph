@@ -160,10 +160,16 @@ def resolve_target_mode(
     state: AgentState | dict[str, Any],
     *,
     route_cfg: RouteAuditConfig | None = None,
+    intent_observation: dict[str, Any] | None = None,
 ) -> ModeResolution:
     route_cfg = route_cfg or load_route_audit_config()
-    intent_kind, confidence = infer_intent_kind(state, route_cfg=route_cfg)
-    target_mode = map_intent_to_mode(intent_kind)
+    if intent_observation:
+        intent_kind = normalize_intent_kind(str(intent_observation.get("intent_kind") or "general"))
+        confidence = float(intent_observation.get("confidence") or 0.0)
+        target_mode = str(intent_observation.get("target_mode") or map_intent_to_mode(intent_kind))
+    else:
+        intent_kind, confidence = infer_intent_kind(state, route_cfg=route_cfg)
+        target_mode = map_intent_to_mode(intent_kind)
     payload = state.get("input_payload") or {}
     goal = str(payload.get("goal") or "")
     current_mode = str(payload.get("current_mode") or payload.get("target_mode") or "").strip() or None
@@ -183,6 +189,14 @@ def resolve_target_mode(
     )
     if switch_note:
         reason = f"{reason};{switch_note}"
+    if intent_observation:
+        session_rel = str(intent_observation.get("session_relation") or "")
+        if session_rel == "isolate" and action != "isolate":
+            action = "isolate"
+            reason = f"{reason};intent_observation_isolate"
+        elif session_rel == "stay" and current_mode == target_mode:
+            action = "stay"
+            reason = f"{reason};intent_observation_stay"
     return ModeResolution(
         intent_kind=intent_kind,
         target_mode=target_mode,

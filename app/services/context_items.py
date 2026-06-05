@@ -58,6 +58,7 @@ ContextPurpose = Literal[
     "summarization",
     "routing",
     "code_agent",
+    "intent_observation",
 ]
 
 KIND_TO_BUCKET: dict[str, ContextBucketName] = {

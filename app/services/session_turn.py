@@ -155,10 +155,13 @@ def prepare_session_turn(
                 if is_mechanical_resume_decision(decision) and not steer_needs_planning_llm(
                     message=goal
                 ):
-                    merged = issue_execution_grant_to_payload(
-                        merged, source=str(decision.source)
-                    )
-                    merged = complete_steer_planning(merged)
+                    from app.services.mission_execution import mechanical_resume_allowed
+
+                    if mechanical_resume_allowed(existing, decision):
+                        merged = issue_execution_grant_to_payload(
+                            merged, source=str(decision.source)
+                        )
+                        merged = complete_steer_planning(merged)
             elif existing.get("mission") and decision.intent == "isolate_qa":
                 merged = apply_qa_turn_isolation(merged, existing)
         if goal:

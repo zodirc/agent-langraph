@@ -294,6 +294,12 @@ def run_pipeline_request(state: AgentState) -> AgentState:
     if should_use_mission_oma(state):
         return _oma_pipeline_redirect(state)
 
+    mission = state.get("mission") or {}
+    if str(mission.get("kind", "")).lower() == "writing":
+        from app.services.legacy_mission_paths import record_legacy_mission_path
+
+        record_legacy_mission_path("pipeline_reasoning_writing_fallback")
+
     from app.runtime.state import TaskStatus
     from app.services.mission_execution import build_mission_checkpoint_summary
     from app.services.mission_steer_confirm import (

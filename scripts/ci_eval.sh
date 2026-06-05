@@ -71,6 +71,17 @@ case "$SUITE" in
     exec "$PY" -m pytest tests/integration/test_mission_oma_golden.py tests/services/test_mission_oma.py -q \
       "$@"
     ;;
+  intent_observation)
+    echo "==> eval suite: intent_observation + legacy mission"
+    exec "$PY" -m pytest \
+      tests/services/test_intent_observation.py \
+      tests/services/test_legacy_mission_paths.py \
+      tests/services/test_legacy_manifest_ci.py \
+      tests/eval/test_intent_observation_golden.py \
+      tests/services/test_pre_planning.py \
+      -q \
+      "$@"
+    ;;
   rag)
     echo "==> eval suite: rag (thresholds: recall>=${RAG_MIN_RECALL}, mrr>=${RAG_MIN_MRR}, faithfulness>=${RAG_MIN_FAITHFULNESS})"
     exec "$PY" -m pytest \
@@ -93,6 +104,14 @@ case "$SUITE" in
     echo "==> eval suite: oma (ADR-001 M8)"
     "$PY" -m pytest tests/integration/test_mission_oma_golden.py tests/services/test_mission_oma.py -q \
       "$@"
+    echo "==> eval suite: intent_observation"
+    "$PY" -m pytest \
+      tests/services/test_intent_observation.py \
+      tests/services/test_legacy_mission_paths.py \
+      tests/services/test_legacy_manifest_ci.py \
+      tests/eval/test_intent_observation_golden.py \
+      -q \
+      "$@"
     "$PY" -m pytest \
       tests/eval/test_rag_golden.py \
       tests/eval/test_rag_pipeline.py \
@@ -102,7 +121,7 @@ case "$SUITE" in
       "$@"
     ;;
   *)
-    echo "Unknown SUITE=$SUITE (use unit|integration|engineering|oma|rag|all)" >&2
+    echo "Unknown SUITE=$SUITE (use unit|integration|engineering|oma|intent_observation|rag|all)" >&2
     exit 1
     ;;
 esac

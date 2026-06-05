@@ -646,3 +646,19 @@ rag:
 - **废弃**「单循环 + `writing_llm_decide` 自选」作为默认产品路径。  
 - **复用** A2A/Supervisor 基础设施，但 **域绑定手稿** `task_id`。  
 - **保留** 单图 `execution_mode=single` 仅用于无 mission QA。
+
+---
+
+## 14. Legacy removal checklist
+
+迁移方案：[`INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md`](INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md)
+
+| 项 | 状态 | 核验 |
+|----|------|------|
+| OMAW 为写作唯一默认执行面 | ✅ | `execution_mode=mission_oma`；`oma_default_for_writing=true` |
+| `writing_llm_decide` hard-off | ✅ | 默认 `false` + `allow_legacy_writing_path=false` |
+| `FactBundle` 写作前硬约束 | ✅ | `mission.require_fact_bundle` + `prepare_worker_execution` |
+| `ReviewVerdict` 绑定 `fact_bundle_id` | ✅ | `review_verdict.py` + `require_review_verdict` |
+| Legacy path 审计指标 | ✅ | `agent_legacy_mission_path_total`；manifest `config/legacy_mission_manifest.yaml` |
+| Intent observation 结构化层 | ✅ | `app/domain/intent_observation.py` + `pre_planning` 接线 |
+| 物理删除旧 writing_phase 主分支 | 🔶 | 兼容层封存；Phase 3 待 legacy 命中率清零后删除 |

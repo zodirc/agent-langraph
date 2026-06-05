@@ -1,0 +1,6 @@
+# Legacy mission writing paths — tracked for retirement (see docs/INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md)
+legacy_mission_paths:
+  - writing_llm_decide
+  - mission_act.inline_writing_phase
+  - pipeline_reasoning_writing_fallback
+  - manuscript_without_fact_bundle

@@ -40,6 +40,26 @@ def tool_execution_node(state: AgentState) -> AgentState:
     Writes: tool_results, turn_facts, status, current_node, audit_log
     """
     try:
+        from app.services.execution_control import (
+            CancelRequested,
+            PauseRequested,
+            check_for_control_signal,
+            handle_control_exception,
+        )
+
+        try:
+            check_for_control_signal(
+                str(state["task_id"]),
+                phase="tool_execution_enter",
+                raise_on_pause=True,
+                raise_on_cancel=True,
+            )
+        except (PauseRequested, CancelRequested) as exc:
+            handled = handle_control_exception(state, exc)
+            if handled is not None:
+                get_state_store().save(handled)
+                return handled
+
         registry = get_tool_registry()
         tools = [
             t
@@ -58,6 +78,18 @@ def tool_execution_node(state: AgentState) -> AgentState:
 
         # Per-tool invoke closure passed to execute_tool_stages (may run in thread pool)
         def _invoke(tool_name: str, st: AgentState) -> dict[str, Any]:
+            from app.services.execution_control import (
+                CancelRequested,
+                PauseRequested,
+                check_for_control_signal,
+            )
+
+            check_for_control_signal(
+                str(st["task_id"]),
+                phase="tool_invoke",
+                raise_on_pause=True,
+                raise_on_cancel=True,
+            )
             report_status_trace("tool_execution", f"调用工具: {tool_name}")
             params = _build_tool_params(tool_name, st)
             spec = registry.get(tool_name)
@@ -216,6 +248,12 @@ def tool_execution_node(state: AgentState) -> AgentState:
         get_state_store().save(updated)
         return updated
     except Exception as exc:
+        from app.services.execution_control import CancelRequested, PauseRequested, handle_control_exception
+
+        handled = handle_control_exception(state, exc)
+        if handled is not None:
+            get_state_store().save(handled)
+            return handled
         get_metrics_service().inc_tool_failure()
         retry = state.get("retry_count", 0) + 1
         return merge_state(

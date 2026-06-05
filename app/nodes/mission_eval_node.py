@@ -26,11 +26,15 @@ def mission_eval_node(state: AgentState) -> AgentState:
         phase = "paused"
 
     state = mark_mission_phase(state, phase)
+    from app.services.mission_execution import PAUSE_USER_REQUESTED_CANCEL
+
     status = (
         TaskStatus.MISSION_PAUSED.value
         if phase == "paused"
         else TaskStatus.MISSION_RUNNING.value
     )
+    if phase == "paused" and control.get("pause_reason") == PAUSE_USER_REQUESTED_CANCEL:
+        status = TaskStatus.CANCELLED.value
     if phase == "completed":
         status = TaskStatus.REASONED.value
 

@@ -117,7 +117,7 @@ def _mock_review(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(
         "app.services.writing_phases._invoke_phase_structured",
-        lambda system, payload: fake_invoke(system, payload),
+        lambda state, system, payload: fake_invoke(system, payload),
     )
     monkeypatch.setattr(
         "app.services.writing_quality.score_chapter_quality",
@@ -305,7 +305,7 @@ def test_oma_full_journey_write_review_polish_rereview(oma_state, monkeypatch):
 
     monkeypatch.setattr(
         "app.services.writing_phases._invoke_phase_structured",
-        lambda system, payload: fake_invoke(system, payload),
+        lambda state, system, payload: fake_invoke(system, payload),
     )
     monkeypatch.setattr(
         "app.services.writing_quality.score_chapter_quality",
@@ -408,7 +408,7 @@ def test_oma_adr_8_1_complete_pipeline(oma_state, monkeypatch, test_settings):
     }
     monkeypatch.setattr(
         "app.services.writing_phases._invoke_phase_structured",
-        lambda s, p: fake_invoke(s, p),
+        lambda state, system, payload: fake_invoke(system, payload),
     )
     monkeypatch.setattr(
         "app.services.writing_quality.score_chapter_quality",

@@ -1,6 +1,6 @@
 # 实现状态追踪（对齐代码库）
 
-> **最后更新**：2026-06-04（`pre_planning` + Web 交互模式 + planning 健壮性；见 [`CODE_AND_ENGINEERING_PATHS.md`](CODE_AND_ENGINEERING_PATHS.md)）  
+> **最后更新**：2026-06-05（intent observation model + OMAW legacy path hard-off；见 [`INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md`](INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md)）  
 > **对照文档**：[`CAPABILITY_MATRIX.md`](CAPABILITY_MATRIX.md)  
 > **图例**：✅ 已实现并有用例覆盖 · 🔶 部分实现 / 默认关 · ❌ 未实现
 
@@ -220,7 +220,8 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 | Mission OMAW（ADR-001） | ✅ | M1–M8 闭环；`SUITE=oma` CI；§8.1 全链 golden；`chapter_facts`→KnowledgeStore；`run_pipeline_request` OMAW 重定向；12 章并行 subtasks 单测 |
 | `FactBundle` / `ReviewVerdict` 领域模型 | ✅ | 新增 capability-aware 事实包与统一章节验收语义；review verdict 强制绑定 `fact_bundle_id` |
 | turn kind / planning→executor 路由 | ✅ | `turn_kind.py` 区分 `steer_replan` / `steer_execute` / `mission_step_execute` / `mechanical_continue`；禁止执行回合误以 reasoning 收尾 |
-| 写作阶段（模型自选） | 🔶 遗留 | 仅 `writing_llm_decide=true` 时启用 |
+| **Intent observation model（L0–L3）** | ✅ | `intent_observation.py` + `intent_observation_policy.py`；`pre_planning` 消费结构化结果；`purpose=intent_observation` 上下文治理；Prometheus `agent_intent_observation_*` |
+| 写作阶段（模型自选） | ✅ **已退役** | 默认 hard-off；兼容层见 `allow_legacy_writing_path`；`IMPLEMENTATION_STATUS` 跟踪见迁移方案 §12 |
 | autonomous 连续执行 | ✅ | `init_mission_state` 保留 autonomous；`stepwise_pause` 对 autonomous 为 false |
 | 输出保留 `MISSION_PAUSED` | ✅ | `output_node._resolve_output_status` |
 | Streaming 深合并修复 | ✅ | `merge_state` 深合并 `progress/input_payload` |

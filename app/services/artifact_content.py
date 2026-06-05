@@ -23,7 +23,40 @@ _WAN_RE = re.compile(r"([一二两三四五六七八九十\d]+)\s*万\s*字?")
 
 
 class SteerPreempted(Exception):
-    """Raised when queued steer requests immediate generation stop."""
+    """Raised when pause/cancel is requested during generation."""
+
+
+def _check_generation_control(task_id: str) -> None:
+    from app.services.execution_control import CancelRequested, PauseRequested, check_for_control_signal
+
+    try:
+        check_for_control_signal(
+            str(task_id),
+            phase="pre_generate",
+            raise_on_pause=True,
+            raise_on_cancel=True,
+        )
+    except (PauseRequested, CancelRequested) as exc:
+        raise SteerPreempted(str(exc)) from exc
+    # Legacy steer queue still honored when task control registry is absent
+    try:
+        from app.services.mission_steer import (
+            has_pending_steer,
+            pending_has_forced_action,
+            pending_steer_priority,
+        )
+        from app.services.state_store import get_state_store
+
+        stored = get_state_store().load(task_id, read_only=True) or {}
+        pending = stored.get("pending_user_message")
+        if pending_has_forced_action(pending, "pause"):
+            raise SteerPreempted("forced pause requested")
+        if has_pending_steer(str(task_id)) and pending_steer_priority(pending) > 0:
+            raise SteerPreempted("steer preempt requested")
+    except SteerPreempted:
+        raise
+    except Exception:
+        pass
 
 
 def parse_requested_chars(goal: str) -> Optional[int]:
@@ -105,26 +138,7 @@ def generate_artifact_content(
 ) -> str:
     """Use LLM to produce outline or chapter text when planning did not supply real content."""
     task_id = str(state["task_id"])
-    # Best-effort: if a high-priority steer is queued, avoid starting another long LLM draft.
-    try:
-        from app.services.mission_steer import (
-            has_pending_steer,
-            pending_has_forced_action,
-            pending_steer_priority,
-        )
-        from app.services.state_store import get_state_store
-
-        stored = get_state_store().load(task_id, read_only=True) or {}
-        pending = stored.get("pending_user_message")
-        if pending_has_forced_action(pending, "pause"):
-            raise SteerPreempted("forced pause requested")
-        if has_pending_steer(task_id) and pending_steer_priority(pending) > 0:
-            raise SteerPreempted("steer preempt requested")
-    except SteerPreempted:
-        raise
-    except Exception:
-        # Never fail hard if steer inspection breaks; generation will proceed normally.
-        pass
+    _check_generation_control(task_id)
     payload = state.get("input_payload") or {}
     history = payload.get("conversation_history") or state.get("conversation_history") or []
 
@@ -293,6 +307,7 @@ def _build_append_chunks(
 
     planned_chunks = max(1, min(max_chunks, (budget + chunk_size - 1) // chunk_size))
     while remaining > 0 and len(chunks) < max_chunks:
+        _check_generation_control(str(state["task_id"]))
         if has_pending_steer(str(state["task_id"])):
             report_status_trace(
                 "writing",

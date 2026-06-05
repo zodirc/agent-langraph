@@ -122,15 +122,26 @@ def save_chapter_reviews(task_id: str, data: dict[str, Any]) -> None:
 
 
 def should_use_writing_llm_decide(mission: dict[str, Any]) -> bool:
+    """Deprecated legacy path — blocked unless allow_legacy_writing_path=true."""
     if str(mission.get("kind", "")).lower() != "writing":
         return False
     if not orchestration_enabled(mission):
         return False
     if getattr(settings, "MISSION_OMA_DEFAULT_FOR_WRITING", True):
-        return bool(getattr(settings, "MISSION_WRITING_LLM_DECIDE", False))
-    if getattr(settings, "MISSION_WRITING_LLM_DECIDE", True):
-        return True
-    return bool(getattr(settings, "MISSION_LLM_DECIDE", False))
+        enabled = bool(getattr(settings, "MISSION_WRITING_LLM_DECIDE", False))
+    elif getattr(settings, "MISSION_WRITING_LLM_DECIDE", True):
+        enabled = True
+    else:
+        enabled = bool(getattr(settings, "MISSION_LLM_DECIDE", False))
+    if not enabled:
+        return False
+    from app.services.legacy_mission_paths import (
+        legacy_writing_path_allowed,
+        record_legacy_mission_path,
+    )
+
+    record_legacy_mission_path("writing_llm_decide")
+    return legacy_writing_path_allowed()
 
 
 def resolve_chapter_index(state: AgentState, params: dict[str, Any]) -> int:
@@ -289,8 +300,16 @@ def _invoke_phase_structured(
     *,
     purpose: str = "reviewing",
 ) -> dict[str, Any]:
+    from app.services.execution_control import check_for_control_signal, resolve_worker_id
     from app.services.llm_client import invoke_structured
 
+    check_for_control_signal(
+        str(state["task_id"]),
+        worker_id=resolve_worker_id(state),
+        phase=purpose,
+        raise_on_pause=True,
+        raise_on_cancel=True,
+    )
     return invoke_structured(
         purpose,
         system,
@@ -313,7 +332,16 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
     if action not in PHASE_ACTIONS:
         raise ValueError(f"unknown writing phase action: {action}")
 
+    from app.services.execution_control import check_for_control_signal, resolve_worker_id
+
     task_id = state["task_id"]
+    check_for_control_signal(
+        str(task_id),
+        worker_id=resolve_worker_id(state),
+        phase=f"writing_phase:{action}",
+        raise_on_pause=True,
+        raise_on_cancel=True,
+    )
     chapter = int(intent.get("chapter_index") or resolve_chapter_index(state, {}))
     ms = resolve_manuscript(task_id, state.get("manuscript"))
     body_name = ms.body_path or "novel.txt"
@@ -473,6 +501,13 @@ def run_writing_phase(state: AgentState, intent: dict[str, Any]) -> AgentState:
 
         body_path = task_artifact_dir(task_id) / str(body_name)
         for round_idx in range(1, max_rounds + 1):
+            check_for_control_signal(
+                str(task_id),
+                worker_id=resolve_worker_id(state),
+                phase="polish_chapter",
+                raise_on_pause=True,
+                raise_on_cancel=True,
+            )
             rounds_used = round_idx
             # Refresh the latest chapter text for safe incremental edits.
             body_text = read_body_text(task_id, body_name, state=state)
@@ -614,12 +649,25 @@ def _finish_phase(
     *,
     tool_results_extra: Optional[list[dict[str, Any]]] = None,
 ) -> AgentState:
+    from app.services.step_committer import commit_phase_checkpoint
+
     tools = [_phase_summary_result(phase, chapter, result)]
     if tool_results_extra:
         tools.extend(tool_results_extra)
     summary = f"【{phase}】第{chapter}章完成"
     if result.get("summary"):
         summary += f"：{result['summary'][:200]}"
+    payload = state.get("input_payload") or {}
+    item = payload.get("current_work_item") or {}
+    body_name = ms.body_path or "novel.txt"
+    artifact_ref = body_name if phase == "polish_chapter" else ""
+    state = commit_phase_checkpoint(
+        state,
+        phase=phase,
+        chapter=chapter,
+        work_item_id=str(item.get("id") or ""),
+        artifact_ref=artifact_ref,
+    )
     return merge_state(
         state,
         manuscript=ms.to_dict(),

@@ -54,6 +54,8 @@ def prepare_worker_execution(state: AgentState) -> AgentState:
 
     chapter_index = _chapter_from_state(state)
     policy = policy_for_work_item(kind)
+    if not policy:
+        get_metrics_service().inc_acceptance_fail("missing_worker_execution_policy")
     bundle = build_fact_bundle(
         state,
         agent=agent,
@@ -83,6 +85,10 @@ def prepare_worker_execution(state: AgentState) -> AgentState:
     if getattr(settings, "MISSION_OMA_REQUIRE_FACT_BUNDLE", True) and not bundle.get(
         "fact_bundle_id"
     ):
+        get_metrics_service().inc_writing_without_fact_bundle()
+        from app.services.legacy_mission_paths import record_legacy_mission_path
+
+        record_legacy_mission_path("manuscript_without_fact_bundle")
         from app.services.mission_oma.failure_recovery import handle_worker_failure
 
         state = handle_worker_failure(
@@ -123,6 +129,24 @@ def stamp_worker_task_state(state: AgentState) -> AgentState:
     return merge_state(state, input_payload=payload, oma_worker_state=worker_state)
 
 
+def _worker_scope_id(state: AgentState) -> str:
+    from app.services.execution_control import resolve_worker_id
+
+    return resolve_worker_id(state)
+
+
+def _check_worker_control(state: AgentState, *, phase: str = "oma_worker") -> None:
+    from app.services.execution_control import check_for_control_signal
+
+    check_for_control_signal(
+        str(state["task_id"]),
+        worker_id=_worker_scope_id(state),
+        phase=phase,
+        raise_on_pause=True,
+        raise_on_cancel=True,
+    )
+
+
 def execute_oma_worker(state: AgentState) -> AgentState:
     """
     Run worker capability after FactBundle construction.
@@ -143,6 +167,7 @@ def execute_oma_worker(state: AgentState) -> AgentState:
 
     state = prepare_worker_execution(state)
     state = stamp_worker_task_state(state)
+    _check_worker_control(state, phase="oma_worker_entry")
     payload = state.get("input_payload") or {}
     intent = dict(payload.get("writing_intent") or {})
     action = str(intent.get("action") or "")
@@ -167,6 +192,17 @@ def execute_oma_worker(state: AgentState) -> AgentState:
             else:
                 current = writing_node(state)
         except Exception as exc:
+            from app.services.execution_control import (
+                CancelRequested,
+                PauseRequested,
+                handle_control_exception,
+            )
+
+            handled = handle_control_exception(state, exc)
+            if handled is not None:
+                return handled
+            if isinstance(exc, (PauseRequested, CancelRequested)):
+                raise
             from app.services.mission_oma.failure_recovery import handle_worker_failure
 
             current = handle_worker_failure(
@@ -226,9 +262,25 @@ def run_chapter_review_worker(
     }
     local = merge_state(state, input_payload=payload)
     local = prepare_worker_execution(local)
+    _check_worker_control(local, phase="chapter_review_worker")
     from app.services.writing_phases import run_writing_phase
 
-    result_state = run_writing_phase(local, payload["writing_intent"])
+    try:
+        result_state = run_writing_phase(local, payload["writing_intent"])
+    except Exception as exc:
+        from app.services.execution_control import (
+            CancelRequested,
+            PauseRequested,
+            handle_control_exception,
+        )
+
+        handled = handle_control_exception(local, exc)
+        if handled is not None:
+            result_state = handled
+        elif isinstance(exc, (PauseRequested, CancelRequested)):
+            raise
+        else:
+            raise
     tr = (result_state.get("tool_results") or [{}])[0]
     inner = tr.get("result") if isinstance(tr, dict) else {}
     from app.domain.review_verdict import load_review_verdict

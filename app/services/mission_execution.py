@@ -25,6 +25,8 @@ PAUSE_FAILURE = "failure"
 PAUSE_BUDGET = "budget"
 PAUSE_FORCED = "forced"
 PAUSE_WORKER_LOST = "worker_lost"
+PAUSE_USER_REQUESTED_PAUSE = "user_requested_pause"
+PAUSE_USER_REQUESTED_CANCEL = "user_requested_cancel"
 
 _MECHANICAL_RESUME_SOURCES = frozenset(
     {
@@ -41,7 +43,11 @@ def _now_iso() -> str:
 
 
 def is_mechanical_resume_decision(decision: Any) -> bool:
-    """Resume without mandatory planning (control-plane / continue signal)."""
+    """Resume without mandatory planning (control-plane / continue signal).
+
+    Semantic mixed input (steer + continue) must pass intent observation first;
+    see mechanical_resume_allowed() and intent_observation_policy.
+    """
     source = str(getattr(decision, "source", "") or (decision or {}).get("source", ""))
     intent = str(getattr(decision, "intent", "") or (decision or {}).get("intent", ""))
     if intent != "resume_mission":
@@ -51,6 +57,15 @@ def is_mechanical_resume_decision(decision: Any) -> bool:
     if source.startswith("pattern_kind"):
         return True
     return False
+
+
+def mechanical_resume_allowed(state: AgentState, decision: Any) -> bool:
+    """Combine mechanical decision with intent observation guard."""
+    if not is_mechanical_resume_decision(decision):
+        return False
+    from app.services.intent_observation_policy import mechanical_resume_allowed_by_observation
+
+    return mechanical_resume_allowed_by_observation(state)
 
 
 def issue_execution_grant_to_payload(

@@ -278,6 +278,42 @@ _POLICIES: dict[ContextPurpose, PromptContextPolicy] = {
         ),
         default_token_budget=12000,
     ),
+    "intent_observation": PromptContextPolicy(
+        purpose="intent_observation",
+        required_buckets=frozenset(
+            {"current_turn", "semantic_summary", "working_memory", "recent_transcript"}
+        ),
+        bucket_max_tokens={
+            "current_turn": 4000,
+            "working_memory": 2500,
+            "recent_transcript": 3000,
+            "semantic_summary": 1500,
+            "retrieved_memory": 800,
+            "retrieved_knowledge": 0,
+            "tool_observations": 0,
+            "file_context": 0,
+            "diagnostics": 0,
+            "system_policy": 500,
+        },
+        compressible_buckets=frozenset(
+            {"recent_transcript", "semantic_summary", "retrieved_memory"}
+        ),
+        droppable_buckets=frozenset(
+            {
+                "retrieved_knowledge",
+                "tool_observations",
+                "file_context",
+                "diagnostics",
+            }
+        ),
+        degrade_order=(
+            "retrieved_knowledge",
+            "tool_observations",
+            "recent_transcript",
+            "retrieved_memory",
+        ),
+        default_token_budget=10000,
+    ),
     "code_agent": PromptContextPolicy(
         purpose="code_agent",
         required_buckets=frozenset(
@@ -328,6 +364,8 @@ _POLICIES: dict[ContextPurpose, PromptContextPolicy] = {
 def get_prompt_context_policy(purpose: str) -> PromptContextPolicy:
     if purpose == "session_turn":
         return _POLICIES["routing"]
+    if purpose == "intent_observation":
+        return _POLICIES["intent_observation"]
     key = purpose if purpose in _POLICIES else "reasoning"
     return _POLICIES[key]  # type: ignore[index]
 

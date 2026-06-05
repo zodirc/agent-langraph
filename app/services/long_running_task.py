@@ -47,17 +47,30 @@ def build_lazy_work_item(
     mission: dict[str, Any],
 ) -> Optional[dict[str, Any]]:
     """Build next lazy work_plan item from resolved step intent."""
+    from app.services.execution_control import ensure_interrupt_context
+
+    ctx = ensure_interrupt_context(state)
+    resume = ctx.get("resume_from_checkpoint") if isinstance(ctx.get("resume_from_checkpoint"), dict) else {}
+    last = ctx.get("last_committed_step") if isinstance(ctx.get("last_committed_step"), dict) else {}
+    skip_id = str(resume.get("step_id") or last.get("work_item_id") or "")
+
     step = int(state.get("mission_step") or 1)
     pack = resolve_mission_pack_for_state(state, mission)
     from app.services.action_resolver import select_action
 
     selected = select_action(state, mission, pack)
     item = pack.map_action_to_work_item(selected, mission, step=step, state=state)
-    if item is not None:
-        return item
-
-    intent = resolve_step_intent(state, mission=mission)
-    return pack.map_intent_to_work_item(intent, mission, step=step)
+    if item is None:
+        intent = resolve_step_intent(state, mission=mission)
+        item = pack.map_intent_to_work_item(intent, mission, step=step)
+    if item is not None and skip_id and str(item.get("id") or "") == skip_id:
+        progress = dict(state.get("progress") or {})
+        wp = progress.get("work_plan")
+        if isinstance(wp, dict):
+            for row in wp.get("items") or []:
+                if isinstance(row, dict) and str(row.get("id") or "") == skip_id and row.get("committed"):
+                    return None
+    return item
 
 
 def apply_step_artifacts_to_payload(

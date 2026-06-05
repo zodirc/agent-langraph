@@ -1,5 +1,8 @@
 """
 Observation layer — domain-agnostic facts after each mission step (generalizes turn_facts).
+
+This records post-execution facts only. It does NOT replace pre-planning intent observation
+(see app/services/intent_observation.py).
 """
 
 from __future__ import annotations

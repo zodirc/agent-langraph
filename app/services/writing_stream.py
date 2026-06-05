@@ -55,11 +55,30 @@ def emit_writing_content_deltas(
     phase: str = "artifact",
     min_delta: int = 24,
     parser: "ArtifactArgsParserType | None" = None,
+    task_id: str | None = None,
 ) -> int:
     """
     Push incremental artifact ``content`` field text to writing_delta SSE.
     Returns new seen length.
     """
+    if task_id:
+        try:
+            from app.services.execution_control import (
+                CancelRequested,
+                PauseRequested,
+                check_for_control_signal,
+            )
+
+            check_for_control_signal(
+                str(task_id),
+                phase="writing_delta",
+                raise_on_pause=True,
+                raise_on_cancel=True,
+            )
+        except (PauseRequested, CancelRequested):
+            raise
+        except Exception:
+            pass
     if not writing_stream_enabled():
         return seen_len
     text = extract_streaming_content(accumulated, parser)
