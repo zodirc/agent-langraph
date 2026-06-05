@@ -16,13 +16,13 @@ def test_apply_planning_intervention_from_llm():
             "mission_intervention": {
                 "action": "edit_plot",
                 "force": True,
-                "edit_spec": {"filename": "novel.txt", "old_text": "a", "new_text": "b"},
+                "intent_anchor": {"old_text": "a", "new_text": "b", "target_hint": "body"},
             }
         },
         {"goal": "第2章不对，请改对话"},
     )
     assert payload.get("mission_intervention", {}).get("force") is True
-    assert payload.get("revision_intent") == "edit_plot"
+    assert (payload.get("writing_command") or {}).get("action") == "edit_plot"
 
 
 def test_intervention_from_payload_forced():

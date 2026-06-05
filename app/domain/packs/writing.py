@@ -378,13 +378,11 @@ class WritingPack(DomainPack):
                 "require_read_first": True,
             }
         if action.action == "edit_plot":
-            return {
-                "enabled": False,
-                "action": "edit_plot",
-                "source": "mission_intervention",
-                "mission_step": step,
-                "edit_spec": dict(payload.get("edit_plot_spec") or {}),
-            }
+            from app.services.writing.command_builder import build_writing_command
+            from app.services.writing.command_intent import command_to_writing_intent
+
+            command = build_writing_command(state, action="edit_plot")
+            return command_to_writing_intent(command, mission_step=step)
         if action.action == "review_outline":
             return {
                 "enabled": False,
@@ -448,12 +446,13 @@ class WritingPack(DomainPack):
         if not intent.get("enabled"):
             action = str(intent.get("action") or "")
             if action == "edit_plot":
+                cmd_id = str(intent.get("command_id") or "")
                 return {
                     "id": f"wi-step-{step}",
                     "kind": "edit_plot",
                     "title": "edit_plot",
                     "status": "pending",
-                    "params": {"edit_spec": intent.get("edit_spec") or {}},
+                    "params": {"command_id": cmd_id} if cmd_id else {},
                 }
             if action == "human_gate":
                 return {
@@ -573,12 +572,11 @@ class WritingPack(DomainPack):
                 "require_read_first": bool(params.get("require_read_first", True)),
             }
         if kind == "edit_plot":
-            return {
-                **base,
-                "enabled": False,
-                "action": "edit_plot",
-                "edit_spec": params.get("edit_spec") or {},
-            }
+            from app.services.writing.command_builder import build_writing_command
+            from app.services.writing.command_intent import command_to_writing_intent
+
+            command = build_writing_command({"mission": mission, "input_payload": {}}, item)
+            return command_to_writing_intent(command, mission_step=mission_step)
         if kind == "run_tools":
             return {**base, "enabled": False, "action": "run_tools"}
         if kind == "human_gate":

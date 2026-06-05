@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Callable, Optional
 
 _handler: Optional[Callable[[str], None]] = None
+_stream_run_context = threading.local()
 _trace_handler: Optional[Callable[[dict[str, Any]], None]] = None
 _answer_handler: Optional[Callable[[dict[str, Any]], None]] = None
 _thinking_handler: Optional[Callable[[dict[str, Any]], None]] = None
@@ -36,6 +38,32 @@ def set_writing_handler(handler: Optional[Callable[[dict[str, Any]], None]]) -> 
     _writing_handler = handler
 
 
+def set_stream_run_context(
+    *,
+    run_id: Optional[str] = None,
+    foreground_epoch: Optional[int] = None,
+) -> None:
+    """Tag SSE side-channel events with the active graph run (thread-local)."""
+    _stream_run_context.run_id = run_id
+    _stream_run_context.foreground_epoch = foreground_epoch
+
+
+def clear_stream_run_context() -> None:
+    _stream_run_context.run_id = None
+    _stream_run_context.foreground_epoch = None
+
+
+def _stream_context_tags() -> dict[str, Any]:
+    tags: dict[str, Any] = {}
+    run_id = getattr(_stream_run_context, "run_id", None)
+    if run_id:
+        tags["run_id"] = str(run_id)
+    epoch = getattr(_stream_run_context, "foreground_epoch", None)
+    if epoch is not None:
+        tags["foreground_epoch"] = int(epoch)
+    return tags
+
+
 def get_progress_handler() -> Optional[Callable[[str], None]]:
     return _handler
 
@@ -63,6 +91,7 @@ def report_trace(
             "field": field,
             "text": snippet,
             "level": level,
+            **_stream_context_tags(),
         }
     )
 
@@ -83,6 +112,7 @@ def report_answer_delta(
             "phase": phase,
             "field": field,
             "text": text,
+            **_stream_context_tags(),
         }
     )
 
@@ -101,6 +131,7 @@ def report_thinking_delta(
             "node": node,
             "phase": phase,
             "text": text,
+            **_stream_context_tags(),
         }
     )
 
@@ -123,5 +154,6 @@ def report_writing_delta(
             "text": text,
             "filename": filename,
             "reset": reset,
+            **_stream_context_tags(),
         }
     )

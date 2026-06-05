@@ -59,16 +59,18 @@ def _resolve_filename(
     *,
     mission: dict[str, Any],
 ) -> str:
+    from app.services.writing.command_builder import build_writing_command
+    from app.services.writing.confirmation_service import build_state_snapshot
+
     kind = str(item.get("kind") or "")
+    if kind in ("edit_plot", "review_outline", "reset_body", "write_outline", "write_body"):
+        command = build_writing_command({**state, "mission": mission}, item)
+        return command.target_filename
+
     manuscript = state.get("manuscript") or {}
     policy = StepPolicy.from_dict(mission.get("step_policy") or {})
-    payload = state.get("input_payload") or {}
-
     if kind == "write_outline":
         return str(manuscript.get("outline_path") or policy.outline_artifact or "outline.txt")
-    if kind == "edit_plot":
-        spec = payload.get("edit_plot_spec") or (item.get("params") or {}).get("edit_spec") or {}
-        return str(spec.get("filename") or manuscript.get("body_path") or "novel.txt")
     return str(manuscript.get("body_path") or policy.body_artifact or "novel.txt")
 
 
@@ -115,11 +117,18 @@ def resolve_outcome_preview(
     state: dict[str, Any],
     completed_item: dict[str, Any],
 ) -> PreviewResult:
+    from app.services.writing.command_builder import build_writing_command
+    from app.services.writing.confirmation_service import build_state_snapshot, resolve_command_preview
+
+    kind = str(completed_item.get("kind") or "work_item")
+    if kind in ("edit_plot", "review_outline", "reset_body", "write_outline", "write_body"):
+        command = build_writing_command(state, completed_item)
+        return resolve_command_preview(command, build_state_snapshot(state), completed_item=completed_item)
+
     cfg = load_confirmation_gates_config()
     mission = state.get("mission") or {}
     payload = state.get("input_payload") or {}
     task_id = str(state["task_id"])
-    kind = str(completed_item.get("kind") or "work_item")
     intervention = intervention_from_payload(payload) or {}
     action = str(intervention.get("action") or "")
 
@@ -182,8 +191,7 @@ def resolve_outcome_preview(
         content = tail.strip()
         truncated = total > len(content)
     elif mode == "range":
-        spec = payload.get("edit_plot_spec") or params.get("edit_spec") or intervention.get("edit_spec") or {}
-        content, truncated = _range_excerpt(text, spec, max_chars)
+        content, truncated = _truncate(text, max_chars)
     elif mode == "none":
         return PreviewResult(filename=filename, mode="none", content="", total_chars=total)
     else:

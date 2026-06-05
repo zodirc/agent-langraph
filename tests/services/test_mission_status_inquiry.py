@@ -10,3 +10,8 @@ def test_goal_is_mission_status_query():
 
 def test_steer_status_query_skips_planning_llm():
     assert steer_needs_planning_llm(message="你正在做什么") is False
+
+
+def test_steer_continue_skips_planning_llm():
+    assert steer_needs_planning_llm(message="继续") is False
+    assert steer_needs_planning_llm(message="请继续写下一章") is False

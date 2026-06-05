@@ -75,8 +75,8 @@ def test_steer_forced_edit_inserts_work_item(base_state):
         intervention={
             "action": "edit_plot",
             "force": True,
-            "edit_spec": {
-                "filename": "novel.txt",
+            "intent_anchor": {
+                "target_hint": "body",
                 "old_text": "旧台词",
                 "new_text": "新台词",
             },

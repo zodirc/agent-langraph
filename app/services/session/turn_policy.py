@@ -21,7 +21,7 @@ from app.services.route_audit.inference import infer_goal_kind_from_text
 from app.services.session.config import SessionTurnPolicyConfig, load_session_turn_policy_config
 from app.services.session.intent_classifier import classify_turn_intent_llm
 
-TurnIntent = Literal["resume_mission", "isolate_qa"]
+TurnIntent = Literal["resume_mission", "supersede_active_mission", "isolate_qa"]
 
 
 @dataclass(frozen=True)
@@ -115,6 +115,15 @@ def _evaluate_active_mission_turn(
             reason="continue writing signal",
         )
 
+    from app.services.mission_steer import steer_needs_planning_llm
+
+    if steer_needs_planning_llm(message=text):
+        return TurnDecision(
+            intent="supersede_active_mission",
+            source="steer_correction",
+            reason="mid-mission correction requires replan (not mechanical append)",
+        )
+
     pattern = _pattern_kind_decision(text, turn_cfg=turn_cfg, route_cfg=route_cfg)
     if pattern is not None:
         return pattern
@@ -205,6 +214,23 @@ def resolve_session_turn(
         )
 
     if intervention_from_payload(req):
+        iv = intervention_from_payload(req) or {}
+        action = str(iv.get("action") or "")
+        supersede_actions = frozenset(
+            {
+                "rewrite_outline",
+                "reset_body",
+                "edit_plot",
+                "review_outline",
+                "batch_unit_quality",
+            }
+        )
+        if action in supersede_actions:
+            return TurnDecision(
+                intent="supersede_active_mission",
+                source="intervention",
+                reason=f"corrective intervention {action}",
+            )
         return TurnDecision(
             intent="resume_mission",
             source="intervention",
@@ -272,7 +298,7 @@ def should_enter_mission_runtime(
 ) -> bool:
     """True when this turn should run mission graph (writing / orchestration)."""
     decision = resolve_session_turn(state, payload, goal, incoming=incoming)
-    return decision.intent == "resume_mission"
+    return decision.intent in ("resume_mission", "supersede_active_mission")
 
 
 def apply_qa_turn_isolation(payload: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:

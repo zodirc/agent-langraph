@@ -26,22 +26,39 @@ class SteerPreempted(Exception):
     """Raised when pause/cancel is requested during generation."""
 
 
-def _check_generation_control(task_id: str) -> None:
+def _check_generation_control(task_id: str, *, step_epoch: int | None = None) -> None:
     from app.services.execution_control import CancelRequested, PauseRequested, check_for_control_signal
+    from app.services.foreground_execution import EpochStale, get_foreground_epoch
+
+    bound_epoch = step_epoch
+    if bound_epoch is None:
+        try:
+            from app.services.state_store import get_state_store
+
+            stored = get_state_store().load(task_id, read_only=True) or {}
+            bound_epoch = get_foreground_epoch(stored)
+        except Exception:
+            bound_epoch = 0
 
     try:
         check_for_control_signal(
             str(task_id),
             phase="pre_generate",
+            step_epoch=bound_epoch,
             raise_on_pause=True,
             raise_on_cancel=True,
+            raise_on_epoch_stale=True,
         )
+    except EpochStale as exc:
+        raise SteerPreempted(str(exc)) from exc
     except (PauseRequested, CancelRequested) as exc:
         raise SteerPreempted(str(exc)) from exc
     # Legacy steer queue still honored when task control registry is absent
     try:
+        from app.services.foreground_execution import INTERRUPT_P0, classify_steer_interrupt
         from app.services.mission_steer import (
             has_pending_steer,
+            normalize_pending_entries,
             pending_has_forced_action,
             pending_steer_priority,
         )
@@ -53,6 +70,15 @@ def _check_generation_control(task_id: str) -> None:
             raise SteerPreempted("forced pause requested")
         if has_pending_steer(str(task_id)) and pending_steer_priority(pending) > 0:
             raise SteerPreempted("steer preempt requested")
+        for entry in normalize_pending_entries(pending):
+            tier = classify_steer_interrupt(
+                str(entry.get("message") or ""),
+                intervention=entry.get("intervention") if isinstance(entry.get("intervention"), dict) else None,
+                priority=int(entry.get("priority") or 0),
+                preempt=bool(entry.get("preempt")),
+            )
+            if tier == INTERRUPT_P0:
+                raise SteerPreempted("steer P0 preempt requested")
     except SteerPreempted:
         raise
     except Exception:

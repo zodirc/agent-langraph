@@ -18,6 +18,9 @@ CONTROL_IDLE = "IDLE"
 CONTROL_RUNNING_STEP = "RUNNING_STEP"
 CONTROL_STREAMING_OUTPUT = "STREAMING_OUTPUT"
 CONTROL_COMMITTING_STEP = "COMMITTING_STEP"
+CONTROL_INTERRUPT_REQUESTED = "INTERRUPT_REQUESTED"
+CONTROL_REPLANNING = "REPLANNING"
+CONTROL_CANCELLING = "CANCELLING"
 CONTROL_PAUSE_REQUESTED = "PAUSE_REQUESTED"
 CONTROL_PAUSED_AT_CHECKPOINT = "PAUSED_AT_CHECKPOINT"
 CONTROL_CANCEL_REQUESTED = "CANCEL_REQUESTED"
@@ -54,6 +57,7 @@ def empty_interrupt_context() -> dict[str, Any]:
         "last_committed_step": None,
         "resume_from_checkpoint": None,
         "control_state": CONTROL_IDLE,
+        "foreground_epoch": 0,
         "worker_controls": {},
     }
 
@@ -110,9 +114,11 @@ def check_for_control_signal(
     *,
     worker_id: str | None = None,
     phase: str = "",
+    step_epoch: int | None = None,
     raise_on_pause: bool = False,
     raise_on_cancel: bool = False,
     raise_on_stream_interrupt: bool = False,
+    raise_on_epoch_stale: bool = False,
 ) -> TaskControl | None:
     """
     Inspect in-process control registry (task-scope and optional worker-scope).
@@ -142,6 +148,13 @@ def check_for_control_signal(
         return control
     if control.stream_interrupted and raise_on_stream_interrupt:
         raise StreamInterrupted(control.reason or "stream interrupted")
+    if raise_on_epoch_stale and step_epoch is not None:
+        from app.services.foreground_execution import EpochStale
+
+        if int(control.foreground_epoch or 0) > int(step_epoch):
+            raise EpochStale(
+                f"foreground epoch {control.foreground_epoch} > step {step_epoch} ({phase})"
+            )
     return control
 
 

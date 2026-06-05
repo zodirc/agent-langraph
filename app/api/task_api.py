@@ -2,7 +2,7 @@
 
 创建与执行：POST /tasks、POST /tasks/stream → _prepare_task_request → GraphRunner。
 _prepare_task_request：sanitize_input_payload，可选 attach_skill_to_payload（仅 payload）。
-Mission 控制：POST /tasks/{id}/steer、resume、stop、pause、cancel、interrupt-stream。
+Mission 控制：POST /tasks/{id}/steer、steer/stream、supersede、resume、stop、pause、cancel、interrupt-stream。
 查询：GET /tasks/{id}/status、result、audit、llm-interactions 与任务列表。
 
 Task HTTP API for create, stream, mission steer/resume/stop, and status queries.
@@ -68,6 +68,10 @@ class TaskStatusResponse(BaseModel):
     executor_active: bool = False
     pause_reason: Optional[str] = None
     pending_steer_queued: bool = False
+    foreground_operation: Optional[dict[str, Any]] = None
+    latest_steer_message: Optional[str] = None
+    intent_revision: Optional[int] = None
+    turn_contract_primary_op: Optional[str] = None
 
 
 class TaskResultResponse(BaseModel):
@@ -276,9 +280,10 @@ class MissionInterventionModel(BaseModel):
         default=False,
         description="When true, bypass normal step_policy and honor this action",
     )
-    edit_spec: dict[str, Any] = Field(default_factory=dict)
-    tools: list[str] = Field(default_factory=list)
-    tool_params: dict[str, Any] = Field(default_factory=dict)
+    intent_anchor: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional edit anchors: old_text, new_text, steer_correction, target_hint (outline|body)",
+    )
     work_item: Optional[dict[str, Any]] = None
     use_planning: bool = False
     reason: str = ""
@@ -315,7 +320,7 @@ class SteerTaskRequest(BaseModel):
 class SteerTaskResponse(BaseModel):
     task_id: str
     status: str
-    revision_intent: Optional[str] = None
+    writing_command_action: Optional[str] = None
     message: str = ""
     client_display: Optional[dict[str, Any]] = None
 
@@ -417,10 +422,55 @@ def steer_task(
     return SteerTaskResponse(
         task_id=task_id,
         status=str(state["status"]),
-        revision_intent=payload.get("revision_intent"),
+        writing_command_action=str((payload.get("writing_command") or {}).get("action") or "") or None,
         message=str(client_display.get("kind") or ("queued" if queued else "applied")),
         client_display=client_display,
     )
+
+
+@router.post("/{task_id}/steer/stream")
+def stream_steer_task(
+    task_id: str,
+    request: SteerTaskRequest,
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> StreamingResponse:
+    """Steer + supersede replan in one SSE (no separate /supersede round-trip)."""
+    if not request.message.strip() and not request.intervention and not request.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide message, intervention, and/or confirm=true",
+        )
+    intervention = (
+        request.intervention.model_dump(exclude_none=True)
+        if request.intervention
+        else None
+    )
+
+    def safe_generator():
+        try:
+            yield from get_graph_runner().stream_steer_mission(
+                task_id,
+                request.message,
+                intervention=intervention,
+                confirm=request.confirm,
+                priority=int(request.priority or 0),
+                preempt=bool(request.preempt),
+                replace_goal=bool(request.replace_goal),
+            )
+        except KeyError as exc:
+            payload = {"task_id": task_id, "detail": str(exc), "status": "NOT_FOUND"}
+            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except ValueError as exc:
+            payload = {"task_id": task_id, "detail": str(exc), "status": "INVALID_STEER"}
+            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            payload = {"task_id": task_id, "detail": str(exc), "status": "STREAM_ERROR"}
+            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            done = {"task_id": task_id, "status": "FAILED"}
+            yield f"event: done\ndata: {json.dumps(done, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(safe_generator(), media_type="text/event-stream")
 
 
 @router.post("/{task_id}/stop", response_model=StopTaskResponse)
@@ -567,6 +617,105 @@ class ResumeTaskRequest(BaseModel):
             "or outcome (after work item)"
         ),
     )
+
+
+class SupersedeTaskRequest(BaseModel):
+    message: str = Field(
+        default="",
+        description="Optional new steer text; omit when replanning already-queued steer",
+    )
+    intervention: Optional[MissionInterventionModel] = None
+    confirm: bool = Field(default=False, description="Approve pending steer confirmation gate")
+
+
+class SupersedeTaskResponse(BaseModel):
+    task_id: str
+    status: str
+    current_node: str
+    final_answer: Optional[str] = None
+    client_display: Optional[dict[str, Any]] = None
+
+
+@router.post("/{task_id}/supersede", response_model=SupersedeTaskResponse)
+def supersede_task(
+    task_id: str,
+    request: SupersedeTaskRequest = SupersedeTaskRequest(),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> SupersedeTaskResponse:
+    """Supersede active mission with new input and replan (not checkpoint resume)."""
+    try:
+        intervention = (
+            request.intervention.model_dump(exclude_none=True)
+            if request.intervention
+            else None
+        )
+        state = get_graph_runner().supersede_mission_with_input(
+            task_id,
+            message=request.message,
+            intervention=intervention,
+            source="api_supersede",
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    from app.services.client_display import build_steer_task_client_display
+    from app.services.confirmation.stream_display import client_final_answer
+
+    return SupersedeTaskResponse(
+        task_id=task_id,
+        status=str(state["status"]),
+        current_node=str(state.get("current_node") or ""),
+        final_answer=client_final_answer(state),
+        client_display=build_steer_task_client_display(state, queued=False),
+    )
+
+
+@router.post("/{task_id}/supersede/stream")
+def stream_supersede_task(
+    task_id: str,
+    request: SupersedeTaskRequest = SupersedeTaskRequest(),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> StreamingResponse:
+    """SSE stream for supersede replan (foreground_superseded, replan_started, graph events)."""
+    if request.message.strip() or request.intervention:
+        intervention = (
+            request.intervention.model_dump(exclude_none=True)
+            if request.intervention
+            else None
+        )
+        try:
+            get_graph_runner().steer_mission(
+                task_id,
+                request.message,
+                intervention=intervention,
+                confirm=request.confirm,
+                preempt=True,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    def safe_generator():
+        try:
+            yield from get_graph_runner().stream_supersede_mission(task_id)
+        except KeyError as exc:
+            payload = {"task_id": task_id, "detail": str(exc), "status": "NOT_FOUND"}
+            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except ValueError as exc:
+            payload = {"task_id": task_id, "detail": str(exc), "status": "INVALID_SUPERSEDE"}
+            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            payload = {"task_id": task_id, "detail": str(exc), "status": "STREAM_ERROR"}
+            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            done = {"task_id": task_id, "status": "FAILED"}
+            yield f"event: done\ndata: {json.dumps(done, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(safe_generator(), media_type="text/event-stream")
 
 
 @router.post("/{task_id}/resume", response_model=ResumeTaskResponse)
@@ -863,6 +1012,11 @@ def get_task_status(
         if manuscript.get("body_path"):
             display_node = "writing"
     mission_control = state.get("mission_control") if isinstance(state.get("mission_control"), dict) else {}
+    payload = state.get("input_payload") or {}
+    ctx = state.get("interrupt_context") or {}
+    fg_op = ctx.get("foreground_operation") if isinstance(ctx, dict) else None
+    contract = payload.get("turn_contract") if isinstance(payload.get("turn_contract"), dict) else {}
+    latest_steer = str(payload.get("latest_steer_message") or "").strip() or None
     return TaskStatusResponse(
         task_id=task_id,
         status=str(state["status"]),
@@ -874,6 +1028,10 @@ def get_task_status(
         executor_active=executor_active_for_state(state),
         pause_reason=str(mission_control.get("pause_reason") or "") or None,
         pending_steer_queued=pending_steer_is_set(state.get("pending_user_message")),
+        foreground_operation=dict(fg_op) if isinstance(fg_op, dict) else None,
+        latest_steer_message=latest_steer,
+        intent_revision=int(payload.get("intent_revision") or 0) or None,
+        turn_contract_primary_op=str(contract.get("primary_op") or "") or None,
     )
 
 

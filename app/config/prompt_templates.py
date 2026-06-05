@@ -46,6 +46,7 @@ Decision guide (use capabilities; respect payload flags):
 - Single fiction chapter or outline this turn → writing_intent.enabled=true with appropriate action AND body_filename + outline_filename; skip_retrieval=false; omit mission; mission_recommended=false
 - Long-horizon manuscript (many steps, total length clearly beyond one reply) → MUST set mission (kind, total_target_chars, step_policy with body_artifact + outline_artifact, autonomous:true); writing_intent.enabled=false; mission_recommended=true
 - If input_payload already has mission → keep/extend it; do not remove
+- If user JSON has steer_replan=true or steer_replan_instruction → latest_steer_message is authoritative THIS turn; do NOT mechanical continue append_body; interpret steer (edit_plot, rewrite_outline, mission_intervention, work_plan_patch cancel+prepend); existing_mission config may stay but turn_contract must reflect the steer
 - If input_payload.mission_auto is false → never add mission; mission_recommended=false
 
 Optional planning fields for auto routing:
@@ -54,21 +55,19 @@ Optional planning fields for auto routing:
 - "total_target_chars": number — required when mission_recommended is true (full work target, not one-step cap)
 
 When the user steers or rejects prior work (natural language in goal / conversation_history):
-- Emit "mission_intervention" — YOU decide if a mandatory override is needed (user never types JSON).
+- Emit "mission_intervention" — intent only (runtime binds target file and tools; do NOT set selected_tools for edit_plot).
   {"action":"rewrite_outline"|"review_outline"|"reset_body"|"edit_plot"|"run_tools"|"batch_unit_quality"|"pause"|"continue",
-   "reason":"optional short user-facing line explaining this intervention (shown in Web CLI)",
+   "reason":"optional short user-facing line",
    "force":true,
-   "edit_spec":{filename, old_text, new_text, ...} only when you can anchor edit_plot,
-   "tools":["read_text_artifact","edit_text_artifact"], "use_planning":true}
-- Set force:true when user clearly requires redoing outline, wiping body, or a specific text replacement (not optional polish).
-- User wants to READ/INSPECT existing outline (检阅/查看/阅读大纲) without writing more body → action "review_outline", force:false, writing_intent.enabled=false; do NOT append_body to the bound body file.
-- If user only asks a question or soft feedback without mandating redo → omit mission_intervention or force:false; use selected_tools + read/edit instead.
-- For edit_plot with force:true, prefer read_text_artifact first in selected_tools, then edit_text_artifact with exact old_text from the file.
+   "intent_anchor":{"old_text","new_text","steer_correction","target_hint":"outline"|"body"} optional}
+- Also set writing_intent.action to the same action with enabled:false for material steer commands.
+- Set force:true when user clearly requires redoing outline, wiping body, or a specific text replacement.
+- User wants to READ/INSPECT existing outline → action "review_outline", force:false, writing_intent.enabled=false.
+- If user only asks a question or soft feedback → omit mission_intervention or force:false.
 
 Outline already complete (see outline_status.steer_should_patch_not_rewrite in user JSON):
-- User corrects a setting/fact inside the outline (e.g. "A is B", name/relationship fix) → action "edit_plot", force:true, edit_spec.filename=<manuscript.outline_path or outline_filename from user JSON>.
-  Set selected_tools to ["read_text_artifact","edit_text_artifact"] and tool_stages [["read_text_artifact"],["edit_text_artifact"]].
-  If you can anchor from outline_status alone, you MAY fill tool_params.edit_text_artifact with exact old_text/new_text; otherwise leave edit params empty and runtime will read then plan anchor from file content.
+- User corrects a setting/fact inside the outline → action "edit_plot", force:true, intent_anchor.target_hint="outline".
+  If you know exact old_text/new_text from context, fill intent_anchor.old_text and intent_anchor.new_text; else omit anchors (runtime reads file and plans patch).
   work_plan_patch: cancel pending write_outline; prepend edit_plot. Do NOT use rewrite_outline.
 - rewrite_outline only when user explicitly demands redoing/restructuring the entire outline, or outline_status.outline_complete is false.
 

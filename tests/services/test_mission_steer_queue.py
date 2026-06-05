@@ -27,8 +27,9 @@ def test_review_outline_via_explicit_intervention(base_state):
         },
     )
     assert review_outline_requested(payload) is True
-    assert (payload.get("writing_intent") or {}).get("enabled") is False
-    assert payload.get("tool_params", {}).get("read_text_artifact", {}).get("filename") == "outline.txt"
+    command = payload.get("writing_command") or {}
+    assert command.get("action") == "review_outline"
+    assert command.get("target_filename") == "outline.txt"
 
 
 def test_apply_steer_message_does_not_regex_infer_review(base_state):
@@ -49,8 +50,9 @@ def test_apply_review_outline_mode_disables_writing(base_state):
     mission = {"kind": "writing", "step_policy": {"outline_artifact": "outline.txt"}}
     payload = apply_review_outline_mode({"goal": "x"}, mission)
     assert payload.get("steer_review_outline") is True
-    assert (payload.get("writing_intent") or {}).get("enabled") is False
-    assert "read_text_artifact" in (payload.get("selected_tools") or [])
+    command = payload.get("writing_command") or {}
+    assert command.get("action") == "review_outline"
+    assert command.get("target_filename") == "outline.txt"
 
 
 def test_build_pending_queue_merges_messages(base_state):
@@ -155,16 +157,20 @@ def test_orchestration_summary_distinguishes_done_and_current(base_state):
 
 
 def test_queue_steer_while_running_accumulates(base_state, monkeypatch):
+    from app.services.graph_run_registry import begin_graph_run
+
     mission = build_mission_dict(
         base_state,
         {"mission": {"kind": "writing", "total_target_chars": 50000}},
         kind="writing",
     )
     state = merge_state(base_state, mission=mission, status="MISSION_RUNNING")
+    run_id = begin_graph_run(state["task_id"])
+    state = merge_state(state, execution_run={"run_id": run_id})
     get_state_store().save(state)
 
-    queue_steer_message(state["task_id"], "第一条 steer")
-    queue_steer_message(state["task_id"], "第二条 steer")
+    queue_steer_message(state["task_id"], "第一条 steer", preempt=False)
+    queue_steer_message(state["task_id"], "第二条 steer", preempt=False)
     loaded = get_state_store().load(state["task_id"])
     entries = normalize_pending_entries(loaded.get("pending_user_message"))
     assert len(entries) == 2
@@ -196,13 +202,95 @@ def test_queue_steer_after_completed_starts_new_turn(base_state):
     assert "2048" in str(payload.get("goal") or "")
 
 
+def test_queue_steer_while_running_stages_goal_immediately(base_state, monkeypatch):
+    from app.services.graph_run_registry import begin_graph_run
+
+    mission = build_mission_dict(
+        base_state,
+        {"mission": {"kind": "writing", "total_target_chars": 50000}},
+        kind="writing",
+    )
+    steer_text = "基于原电影编写，人物需要为原电影人物，只改动剧情走向"
+    state = merge_state(
+        base_state,
+        mission=mission,
+        status="MISSION_RUNNING",
+        input_payload={
+            "goal": "写一部长篇小说",
+            "turn_contract": {"primary_op": "reasoning"},
+        },
+    )
+    run_id = begin_graph_run(state["task_id"])
+    state = merge_state(state, execution_run={"run_id": run_id})
+    get_state_store().save(state)
+
+    updated = queue_steer_message(
+        state["task_id"],
+        steer_text,
+        preempt=True,
+    )
+    payload = updated.get("input_payload") or {}
+    goal = str(payload.get("goal") or "")
+    assert "原电影" in goal
+    assert not updated.get("pending_user_message")
+    assert updated.get("status") == "MISSION_PAUSED"
+    assert (updated.get("mission_control") or {}).get("pause_reason") == "superseded_by_new_input"
+    assert payload.get("require_planning_after_steer") is True
+    assert payload.get("foreground_preempt_consumed") is True
+    assert not (payload.get("turn_contract") or {}).get("primary_op")
+
+
+def test_preempt_steer_enters_replan_without_waiting_for_step_boundary(base_state, monkeypatch):
+    from app.services.graph_run_registry import begin_graph_run
+
+    mission = build_mission_dict(
+        base_state,
+        {"mission": {"kind": "writing", "total_target_chars": 50000}},
+        kind="writing",
+    )
+    steer_text = "我认为你需要使用原电影的人物，只是在一些原电影的剧情走向上改动"
+    state = merge_state(
+        base_state,
+        mission=mission,
+        status="MISSION_RUNNING",
+        input_payload={
+            "goal": "写同人小说",
+            "turn_contract": {"primary_op": "reasoning"},
+        },
+    )
+    run_id = begin_graph_run(state["task_id"])
+    state = merge_state(state, execution_run={"run_id": run_id})
+    get_state_store().save(state)
+
+    updated = queue_steer_message(state["task_id"], steer_text, preempt=True)
+    ctx = updated.get("interrupt_context") or {}
+    assert str(ctx.get("control_state") or "") == "REPLANNING"
+    from app.services.client_display import build_steer_task_client_display
+
+    display = build_steer_task_client_display(updated, queued=False)
+    text = "\n".join(display["system_lines"])
+    assert "steer_applied" in text
+    assert "steer_replan_pending" in text
+    assert display.get("supersede_stream_recommended") is True
+    assert "/supersede" in text
+    plan = (updated.get("progress") or {}).get("work_plan") or {}
+    pending_items = [
+        i for i in (plan.get("items") or []) if str(i.get("status") or "") == "pending"
+    ]
+    assert not pending_items
+
+
 def test_forced_pause_queue_also_sets_immediate_intervention(base_state):
+    from app.services.graph_run_registry import begin_graph_run
+
     mission = build_mission_dict(
         base_state,
         {"mission": {"kind": "writing", "total_target_chars": 50000}},
         kind="writing",
     )
     state = merge_state(base_state, mission=mission, status="MISSION_RUNNING", input_payload={})
+    run_id = begin_graph_run(state["task_id"])
+    state = merge_state(state, execution_run={"run_id": run_id})
     get_state_store().save(state)
 
     queue_steer_message(

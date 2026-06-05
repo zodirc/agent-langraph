@@ -34,7 +34,7 @@ def detect_revision_intent(goal: str, conversation_history=None) -> None:
 
 
 def detect_edit_plot_intent(goal: str, conversation_history=None) -> None:
-    """Removed — use mission_intervention with action=edit_plot and edit_spec."""
+    """Removed — use mission_intervention with action=edit_plot and intent_anchor."""
     return None
 
 

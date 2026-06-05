@@ -25,7 +25,7 @@ def test_augment_intervention_from_read_edit_tools(base_state):
     block = payload.get("mission_intervention") or {}
     assert block.get("action") == "edit_plot"
     assert block.get("force") is True
-    assert payload.get("edit_plot_spec")
+    assert (payload.get("writing_command") or {}).get("action") == "edit_plot"
 
 
 def test_finalize_turn_execution_plan_blocks_append(base_state):
@@ -52,8 +52,7 @@ def test_finalize_turn_execution_plan_blocks_append(base_state):
         },
     )
     result = {
-        "selected_tools": ["read_text_artifact", "edit_text_artifact"],
-        "writing_intent": {"enabled": False},
+        "writing_intent": {"enabled": False, "action": "edit_plot"},
         "plan": ["read outline", "edit outline"],
         "skip_retrieval": True,
     }
@@ -65,12 +64,10 @@ def test_finalize_turn_execution_plan_blocks_append(base_state):
         mission=mission,
         steer_planning_turn=True,
     )
-    assert "read_text_artifact" in exec_tools
-    assert "edit_text_artifact" in exec_tools
     assert contract_blocks_writing(payload)
-    intent = payload.get("writing_intent") or {}
-    assert intent.get("enabled") is False
-    assert intent.get("action") == "edit_plot"
+    assert (payload.get("writing_command") or {}).get("action") == "edit_plot"
+    assert (payload.get("writing_intent_record") or {}).get("action") == "edit_plot"
+    assert payload.get("writing_intent") is None
 
 
 def test_resolve_writing_intent_honors_contract_over_step_policy(base_state):
@@ -146,7 +143,7 @@ def test_apply_planning_intervention_sets_turn_contract(base_state):
             "mission_intervention": {
                 "action": "edit_plot",
                 "force": True,
-                "edit_spec": {"filename": "outline.txt"},
+                "intent_anchor": {"target_hint": "outline"},
             }
         },
         {"goal": "改设定"},

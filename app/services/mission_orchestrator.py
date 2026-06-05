@@ -296,39 +296,6 @@ def work_item_to_writing_intent(
     return pack.work_item_to_intent(item, mission=mission, mission_step=mission_step)
 
 
-def _apply_tools_for_edit_plot(payload: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
-    from app.config.settings import settings
-    from app.services.mission_intervention import normalize_payload_execution_fields
-
-    outline_name = str(
-        spec.get("filename")
-        or getattr(settings, "MANUSCRIPT_DEFAULT_OUTLINE", "outline.txt")
-    )
-    payload = normalize_payload_execution_fields(dict(payload))
-    payload["selected_tools"] = ["read_text_artifact", "edit_text_artifact"]
-    payload["tool_params"]["read_text_artifact"] = {
-        "filename": outline_name,
-        "max_chars": int(spec.get("read_max_chars", 12000)),
-    }
-    edit_params = {
-        k: spec[k]
-        for k in (
-            "filename",
-            "old_text",
-            "new_text",
-            "replace_all",
-            "occurrence_index",
-            "start_line",
-            "end_line",
-            "dry_run",
-        )
-        if k in spec
-    }
-    if edit_params:
-        payload["tool_params"]["edit_text_artifact"] = edit_params
-    return payload
-
-
 def _apply_tools_for_work_item(
     payload: dict[str, Any],
     item: dict[str, Any],
@@ -428,18 +395,20 @@ def apply_work_plan_to_payload(state: AgentState) -> AgentState:
         from app.services.mission_intervention import apply_intervention_to_payload
 
         payload = apply_intervention_to_payload(payload, intervention)
+        from app.services.writing.state_machine import get_current_command, work_item_params_for_command
+
+        command = get_current_command(payload)
         wi = intervention.get("work_item")
         if wi or intervention.get("action") in ("edit_plot", "run_tools", "reset_body"):
+            cmd_params = work_item_params_for_command(command) if command else {}
             wi = wi or {
                 "id": f"wi-forced-{step}",
                 "kind": str(intervention.get("action") or "forced"),
                 "title": str(intervention.get("action") or "forced"),
-                "params": (
-                    {"edit_spec": intervention.get("edit_spec") or {}}
-                    if intervention.get("action") == "edit_plot"
-                    else {}
-                ),
+                "params": cmd_params,
             }
+            if command and not (wi.get("params") or {}).get("command_id"):
+                wi = {**wi, "params": cmd_params}
             state = insert_work_item_after_current(
                 state,
                 {
@@ -449,12 +418,6 @@ def apply_work_plan_to_payload(state: AgentState) -> AgentState:
                     "status": "pending",
                     "params": dict(wi.get("params") or {}),
                 },
-            )
-        intent = intervention_to_writing_intent(intervention, mission_step=step)
-        payload["writing_intent"] = intent
-        if intervention["action"] == "edit_plot":
-            payload = _apply_tools_for_edit_plot(
-                payload, intervention.get("edit_spec") or {}
             )
         item = get_current_work_item(state)
         if item:
@@ -469,8 +432,6 @@ def apply_work_plan_to_payload(state: AgentState) -> AgentState:
     state = activate_work_item(state, item)
     payload = dict(state.get("input_payload") or {})
     step = int(state.get("mission_step") or 1)
-    intent = work_item_to_writing_intent(item, mission=mission, mission_step=step)
-    payload["writing_intent"] = intent
     payload["current_work_item"] = item
     from app.config.settings import settings
 
@@ -480,8 +441,17 @@ def apply_work_plan_to_payload(state: AgentState) -> AgentState:
             item,
             default_body_name=str(getattr(settings, "MANUSCRIPT_DEFAULT_BODY", "novel.txt")),
         )
-    if str(item.get("kind")) == "edit_plot":
-        payload = _apply_tools_for_edit_plot(payload, dict(intent.get("edit_spec") or {}))
+    from app.services.writing.state_machine import COMMAND_WORK_ITEM_KINDS, enqueue_command, work_item_params_for_command
+    from app.services.writing.command_builder import build_writing_command
+
+    if str(item.get("kind")) in COMMAND_WORK_ITEM_KINDS:
+        command = build_writing_command(state, item)
+        payload = enqueue_command(payload, command)
+        item = {**item, "params": work_item_params_for_command(command)}
+        payload["current_work_item"] = item
+    else:
+        intent = work_item_to_writing_intent(item, mission=mission, mission_step=step)
+        payload["writing_intent"] = intent
     if str(item.get("kind")) == "run_tools":
         tools = (item.get("params") or {}).get("tools") or [
             "read_text_artifact",

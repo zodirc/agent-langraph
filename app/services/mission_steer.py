@@ -3,7 +3,7 @@ Mission steer：长任务中途纠偏。
 
 入口：task_api.steer_task → graph_runner.steer_mission → queue_steer_message；
 续聊 session_turn；边界 mission_decide/mission_act 前 consume_pending_steer。
-queue_steer_message：PAUSED/REASONED 立即 apply；RUNNING 写入 pending_user_message。
+queue_steer_message：PAUSED/REASONED 立即 apply；RUNNING 默认排队，foreground preempt 时立即消费并进入重规划暂停。
 apply_steer_message：合并文本与 intervention，可选 confirm 与 planning_gate。
 
 Mid-mission steer via API queue or immediate apply; integrates with planning and confirmation gates.
@@ -16,7 +16,6 @@ from typing import Any, Optional
 
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
 from app.services.mission_intervention import (
-    _normalize_intervention,
     apply_intervention_to_payload,
     intervention_from_payload,
 )
@@ -33,15 +32,48 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def steer_replan_planning_satisfied(payload: dict[str, Any]) -> bool:
+    """Steer replan already produced a turn_contract — block redundant planning passes."""
+    if not payload.get("steer_planning_done"):
+        return False
+    if payload.get("require_planning_after_steer") or payload.get("foreground_replan_dispatch"):
+        return False
+    from app.services.turn_contract import contract_from_payload
+
+    return contract_from_payload(payload) is not None
+
+
 def steer_requires_planning(payload: dict[str, Any]) -> bool:
     """True until planning runs after steer or after contract invalidation."""
     from app.services.turn_contract_lifecycle import contract_replan_required
 
+    if steer_replan_planning_satisfied(payload):
+        return False
     if contract_replan_required(payload):
         return True
     return bool(payload.get("require_planning_after_steer")) and not payload.get(
         "steer_planning_done"
     )
+
+
+def planning_steer_replan_active(
+    payload: dict[str, Any],
+    state: AgentState | dict[str, Any] | None = None,
+) -> bool:
+    """True when planning must interpret latest_steer_message (not mechanical resume)."""
+    if steer_requires_planning(payload):
+        return True
+    if payload.get("foreground_replan_dispatch"):
+        return True
+    steer = str(payload.get("latest_steer_message") or "").strip()
+    if steer and payload.get("steer_applied_at") and not payload.get("steer_planning_done"):
+        return True
+    if state is not None:
+        from app.services.mission_supersede import is_supersede_replan_pending
+
+        if is_supersede_replan_pending(payload, state):  # type: ignore[arg-type]
+            return True
+    return False
 
 
 def steer_needs_planning_llm(
@@ -51,8 +83,11 @@ def steer_needs_planning_llm(
 ) -> bool:
     """Whether steer must go through planning (not mechanical step_policy only)."""
     from app.services.interaction_goal import goal_is_mission_status_query
+    from app.services.manuscript_service import is_continue_writing_goal
 
     if goal_is_mission_status_query(message):
+        return False
+    if is_continue_writing_goal(message):
         return False
     if (message or "").strip():
         return True
@@ -133,28 +168,30 @@ def review_outline_requested(payload: dict[str, Any]) -> bool:
 def apply_review_outline_mode(
     payload: dict[str, Any],
     mission: Optional[dict[str, Any]] = None,
+    *,
+    intent: Optional[Any] = None,
+    intervention: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    """Route steer to read outline artifact, not novel body streaming."""
-    from app.config.settings import settings
-    from app.domain.mission import StepPolicy
+    """Route steer to read outline artifact via WritingCommand."""
+    from app.domain.writing_intent_model import WritingIntentRecord
+    from app.services.mission_intervention import normalize_payload_execution_fields
+    from app.services.writing.command_builder import build_from_intent
+    from app.services.writing.intent_parser import parse_intent_from_intervention
+    from app.services.writing.state_machine import enqueue_command
 
     mission = mission or {}
-    policy = StepPolicy.from_dict(mission.get("step_policy") or {})
-    outline_name = str(policy.outline_artifact or "outline.txt")
-    from app.services.mission_intervention import normalize_payload_execution_fields
-
     out = normalize_payload_execution_fields(dict(payload))
     out["steer_review_outline"] = True
-    out["writing_intent"] = {
-        "enabled": False,
-        "action": "review_outline",
-        "source": "steer_review",
-    }
-    out["selected_tools"] = ["read_text_artifact"]
-    out["tool_params"]["read_text_artifact"] = {
-        "filename": outline_name,
-        "max_chars": int(getattr(settings, "MISSION_OUTLINE_MAX_CHARS", 12000)),
-    }
+    record = intent
+    if record is None and intervention:
+        record = parse_intent_from_intervention(intervention, source="review_outline")
+    if record is None:
+        record = WritingIntentRecord(action="review_outline", force=False, source="steer_review")
+    command = build_from_intent(
+        {"input_payload": out, "mission": mission, "manuscript": out.get("manuscript") or {}},
+        record,
+    )
+    out = enqueue_command(out, command)
     out.pop("skip_planning_llm", None)
     return out
 
@@ -217,6 +254,7 @@ def build_pending_queue(
     priority: int = 0,
     preempt: bool = False,
     replace_goal: bool = False,
+    goal_staged: bool = False,
 ) -> dict[str, Any]:
     """Merge a new steer into the pending queue (preserves prior queued messages)."""
     entries = list(normalize_pending_entries(existing))
@@ -231,6 +269,8 @@ def build_pending_queue(
         entry["preempt"] = True
     if replace_goal:
         entry["replace_goal"] = True
+    if goal_staged:
+        entry["goal_staged"] = True
     if entry.get("message") or entry.get("intervention"):
         entries.append(entry)
     combined = "\n\n".join(
@@ -304,16 +344,18 @@ def apply_steer_message(
 
     norm: Optional[dict[str, Any]] = None
     if intervention:
-        norm = _normalize_intervention(intervention)
+        norm = dict(intervention)
     elif texts:
         existing = intervention_from_payload(payload)
         if existing and existing.get("force"):
-            norm = _normalize_intervention(existing)
+            norm = dict(existing)
 
     for text in texts:
         if not skip_history_append:
             history.append({"role": "user", "content": text, "steer": True, "at": _now_iso()})
         payload = _append_steer_goal(payload, text, replace_goal=replace_goal)
+        if text.strip():
+            payload["latest_steer_message"] = text.strip()
 
     if norm:
         payload = apply_intervention_to_payload(payload, norm)
@@ -361,9 +403,7 @@ def apply_steer_message(
     if status_inquiry:
         payload["mission_status_inquiry"] = True
         if not norm:
-            norm = _normalize_intervention(
-                {"action": "pause", "force": True, "reason": "status inquiry"}
-            )
+            norm = {"action": "pause", "force": True, "reason": "status inquiry"}
             payload = apply_intervention_to_payload(payload, norm)
         payload["writing_intent"] = {
             "enabled": False,
@@ -445,10 +485,28 @@ def apply_steer_message(
                 "kind": "edit_plot",
                 "title": "edit_plot",
                 "status": "pending",
-                "params": {"edit_spec": norm.get("edit_spec") or {}},
+                "params": {},
             },
         )
 
+    if persist and steer_requires_planning(dict(updated.get("input_payload") or {})):
+        if source != "pending":
+            from app.services.mission_supersede import finalize_steer_for_supersede_replan
+
+            updated = finalize_steer_for_supersede_replan(
+                updated,
+                source=source,
+                steer_text=combined,
+            )
+            if str(updated.get("status") or "") in (
+                TaskStatus.REJECTED.value,
+                TaskStatus.FAILED.value,
+            ):
+                updated = merge_state(
+                    updated,
+                    status=TaskStatus.MISSION_PAUSED.value,
+                    mission_control=None,
+                )
     if persist:
         get_state_store().save(updated)
     return updated
@@ -460,10 +518,32 @@ def has_pending_steer(task_id: str) -> bool:
     return bool(stored and pending_steer_is_set(stored.get("pending_user_message")))
 
 
+def finalize_preempt_steer_replan(state: AgentState) -> AgentState:
+    """Consume queued steer after preempt; queue supersede replan (not resume)."""
+    from app.services.execution_control import CONTROL_REPLANNING
+    from app.services.mission_supersede import mark_supersede_replan_queued
+
+    updated = consume_pending_steer(state)
+    ctx = updated.get("interrupt_context") or {}
+    payload = updated.get("input_payload") or {}
+    if str(ctx.get("control_state") or "") != CONTROL_REPLANNING and payload.get(
+        "require_planning_after_steer"
+    ):
+        from app.services.foreground_execution import enter_replanning_state
+
+        hint = str(payload.get("steer_action_hint") or payload.get("steer_replan_mode") or "rewrite")
+        updated = enter_replanning_state(updated, action_hint=hint)
+        ctx = updated.get("interrupt_context") or {}
+    if str(ctx.get("control_state") or "") == CONTROL_REPLANNING:
+        updated = mark_supersede_replan_queued(updated, source="steer_preempt")
+    get_state_store().save(updated)
+    return updated
+
+
 def consume_pending_steer(state: AgentState) -> AgentState:
     """在 Mission 步边界消费 pending_user_message。
 
-    Drain pending_user_message at step boundary into apply_steer_message.
+    After foreground preempt, enter REPLANNING — no mechanical append on stale plan.
     """
     pending = state.get("pending_user_message")
     if not pending_steer_is_set(pending):
@@ -475,6 +555,14 @@ def consume_pending_steer(state: AgentState) -> AgentState:
         return state
 
     texts = [str(e.get("message") or "").strip() for e in entries if e.get("message")]
+    payload_check = dict(state.get("input_payload") or {})
+    combined_early = "\n".join(t for t in texts if t).strip()
+    if (
+        payload_check.get("steer_planning_done")
+        and combined_early
+        and combined_early == str(payload_check.get("latest_steer_message") or "").strip()
+    ):
+        return merge_state(state, pending_user_message=None)
     intervention: Optional[dict[str, Any]] = None
     replace_goal = False
     for entry in reversed(entries):
@@ -486,13 +574,61 @@ def consume_pending_steer(state: AgentState) -> AgentState:
             replace_goal = True
             break
 
-    return apply_steer_message(
+    from app.services.foreground_execution import (
+        enter_replanning_state,
+        extract_writing_constraints,
+        foreground_preempt_active,
+        resolve_pending_steer_action_hint,
+    )
+
+    payload_before = dict(state.get("input_payload") or {})
+    preempted = foreground_preempt_active(state) or bool(
+        payload_before.get("foreground_preempt_pending")
+    )
+    action_hint = resolve_pending_steer_action_hint(
+        entries,
+        payload_hint=str(payload_before.get("steer_action_hint") or ""),
+    )
+    if preempted and action_hint == "append":
+        action_hint = "repair"
+    constraints = extract_writing_constraints(texts)
+    skip_history = bool(texts) and all(
+        bool(e.get("goal_staged"))
+        for e in entries
+        if str(e.get("message") or "").strip()
+    )
+
+    if texts:
+        payload_before = dict(payload_before)
+        payload_before["latest_steer_message"] = "\n".join(texts).strip()
+        state = merge_state(state, input_payload=payload_before)
+
+    updated = apply_steer_message(
         state,
         messages=texts,
         intervention=intervention,
         source="pending",
         replace_goal=replace_goal,
+        skip_history_append=skip_history,
     )
+
+    if preempted or action_hint in ("rewrite", "repair", "cancel_only"):
+        updated = enter_replanning_state(
+            updated,
+            action_hint=action_hint,
+            constraints=constraints,
+        )
+    elif constraints:
+        from app.services.foreground_execution import merge_writing_constraints
+
+        updated = merge_state(
+            updated,
+            input_payload=merge_writing_constraints(
+                dict(updated.get("input_payload") or {}),
+                constraints,
+            ),
+        )
+    return updated
 
 
 def queue_steer_message(
@@ -513,13 +649,33 @@ def queue_steer_message(
     if not (message or "").strip() and not intervention and not confirm:
         raise ValueError("steer requires message, intervention, and/or confirm=true")
 
+    from app.services.foreground_execution import (
+        INTERRUPT_P0,
+        classify_steer_interrupt,
+        steer_action_hint,
+        trigger_foreground_preempt,
+    )
     from app.services.interaction_goal import goal_is_mission_status_query
 
     msg_text = (message or "").strip()
+    interrupt_tier = classify_steer_interrupt(
+        msg_text,
+        intervention=intervention,
+        priority=priority,
+        preempt=preempt,
+    )
+    if interrupt_tier == INTERRUPT_P0:
+        preempt = True
+        priority = max(int(priority or 0), 100)
+    elif interrupt_tier == 1:
+        preempt = preempt or True
+        priority = max(int(priority or 0), 50)
+
     if msg_text and goal_is_mission_status_query(msg_text):
         replace_goal = False
         preempt = True
         priority = max(int(priority or 0), 100)
+        interrupt_tier = INTERRUPT_P0
         if not intervention:
             intervention = {
                 "action": "pause",
@@ -534,6 +690,11 @@ def queue_steer_message(
         raise KeyError(f"Task not found: {task_id}")
     stored = reconcile_worker_lost(stored)
     status = str(stored.get("status", ""))
+    is_forced_pause = bool(
+        intervention
+        and str(intervention.get("action") or "") == "pause"
+        and bool(intervention.get("force"))
+    )
 
     if status == TaskStatus.COMPLETED.value and (
         (message or "").strip() or intervention or confirm
@@ -568,7 +729,19 @@ def queue_steer_message(
         get_state_store().save(updated)
         return updated
 
-    if status in (TaskStatus.MISSION_PAUSED.value, TaskStatus.REASONED.value):
+    if (
+        stored.get("mission")
+        and not is_forced_pause
+        and status
+        in (
+            TaskStatus.MISSION_PAUSED.value,
+            TaskStatus.REASONED.value,
+            TaskStatus.REJECTED.value,
+            TaskStatus.FAILED.value,
+            TaskStatus.PLANNED.value,
+            TaskStatus.POLICY_CHECKED.value,
+        )
+    ):
         return apply_steer_message(
             stored,
             message,
@@ -593,14 +766,9 @@ def queue_steer_message(
             if status in (TaskStatus.COMPLETED.value, TaskStatus.NEW.value):
                 raise ValueError(f"Task {task_id} cannot accept steer in status {status}")
 
-    is_forced_pause = bool(
-        intervention
-        and str(intervention.get("action") or "") == "pause"
-        and bool(intervention.get("force"))
-    )
     if is_forced_pause:
         # Emergency stop lane: replace queued steers to avoid starvation behind queue tail.
-        norm_pause = _normalize_intervention(intervention or {})
+        norm_pause = dict(intervention or {})
         pending = build_pending_queue(
             None,
             message=message,
@@ -614,6 +782,34 @@ def queue_steer_message(
             norm_pause,
         )
     else:
+        payload_now = dict(stored.get("input_payload") or {})
+        stage_goal = bool(msg_text)
+        if stage_goal:
+            from app.services.foreground_execution import (
+                extract_writing_constraints,
+                merge_writing_constraints,
+            )
+            from app.services.turn_contract_lifecycle import (
+                REASON_STEER,
+                invalidate_turn_contract_payload,
+            )
+
+            payload_now = _append_steer_goal(
+                payload_now,
+                msg_text,
+                replace_goal=replace_goal,
+            )
+            payload_now["latest_steer_message"] = msg_text
+            payload_now = merge_writing_constraints(
+                payload_now,
+                extract_writing_constraints([msg_text]),
+            )
+            payload_now = invalidate_turn_contract_payload(payload_now, REASON_STEER)
+            if not payload_now.get("steer_applied_at"):
+                payload_now["steer_applied_at"] = _now_iso()
+            if steer_needs_planning_llm(message=msg_text, intervention=intervention):
+                payload_now = apply_steer_planning_gate(payload_now)
+                payload_now["skip_planning_llm"] = False
         pending = build_pending_queue(
             stored.get("pending_user_message"),
             message=message,
@@ -621,8 +817,8 @@ def queue_steer_message(
             priority=priority,
             preempt=preempt,
             replace_goal=replace_goal,
+            goal_staged=stage_goal,
         )
-        payload_now = dict(stored.get("input_payload") or {})
 
     updated = merge_state(
         stored,
@@ -644,8 +840,33 @@ def queue_steer_message(
             {
                 "has_intervention": bool(intervention),
                 "queue_depth": len(pending.get("messages") or []),
+                "interrupt_tier": interrupt_tier,
+                "steer_action_hint": steer_action_hint(
+                    interrupt_tier, msg_text, intervention
+                ),
             },
         ),
     )
+    if (
+        str(stored.get("status") or "") == TaskStatus.MISSION_RUNNING.value
+        and interrupt_tier <= 1
+        and not is_forced_pause
+    ):
+        updated = trigger_foreground_preempt(
+            str(task_id),
+            updated,
+            reason="steer_preempt",
+            tier=interrupt_tier,
+        )
+        payload_now = dict(updated.get("input_payload") or {})
+        payload_now["steer_action_hint"] = steer_action_hint(
+            interrupt_tier, msg_text, intervention
+        )
+        payload_now["foreground_preempt_pending"] = True
+        payload_now["require_planning_after_steer"] = True
+        payload_now["steer_planning_done"] = False
+        updated = merge_state(updated, input_payload=payload_now)
+        updated = finalize_preempt_steer_replan(updated)
+        return updated
     get_state_store().save(updated)
     return updated

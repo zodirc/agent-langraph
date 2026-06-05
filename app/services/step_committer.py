@@ -134,14 +134,24 @@ class StepCommitter:
             artifact_targets=[filename],
             generation_id=generation_id or f"gen_{step_id}",
         )
+        from app.services.foreground_execution import bind_step_epoch
+
+        step_meta = bind_step_epoch(state, self.buffer.to_meta())
         self._state = mark_step_boundary(
             state,
-            self.buffer.to_meta(),
+            step_meta,
             control_state=CONTROL_COMMITTING_STEP,
         )
 
     def check_control(self, *, phase: str = "") -> None:
         raise_if_cancel_requested(self.task_id, phase=phase)
+        from app.services.foreground_execution import assert_epoch_valid_for_commit
+
+        step_epoch = int((self.buffer.to_meta().get("foreground_epoch") or 0))
+        active = (self._state.get("interrupt_context") or {}).get("active_step") or {}
+        if isinstance(active, dict) and active.get("foreground_epoch") is not None:
+            step_epoch = int(active.get("foreground_epoch") or step_epoch)
+        assert_epoch_valid_for_commit(self._state, step_epoch=step_epoch, phase=phase)
 
     def append_stream(self, text: str) -> None:
         self.check_control(phase="writing_delta")
@@ -189,6 +199,15 @@ class StepCommitter:
         )
         if not ok and not partial:
             raise ValueError(f"validation failed: {reason}")
+
+        payload = self._state.get("input_payload") or {}
+        constraints = list(payload.get("writing_constraints") or [])
+        if constraints and not partial:
+            from app.services.foreground_execution import validate_commit_guard
+
+            guard_ok, guard_reason = validate_commit_guard(text, constraints)
+            if not guard_ok:
+                raise ValueError(f"commit guard failed: {guard_reason}")
 
         if on_progress:
             on_progress(f"提交 {self.filename}…")
@@ -377,7 +396,7 @@ def commit_phase_checkpoint(
 
 
 class StreamingStepSession:
-    """During LLM artifact stream, commit at safe outline/paragraph boundaries."""
+    """During LLM artifact stream, buffer until finalize (staging + atomic commit)."""
 
     def __init__(
         self,
@@ -388,6 +407,7 @@ class StreamingStepSession:
         filename: str,
         work_item_id: str = "",
         min_chars: int = 0,
+        staging_only: bool = True,
     ) -> None:
         tool = "append_text_artifact" if kind == "append_body" else "write_text_artifact"
         self.committer = StepCommitter(
@@ -400,6 +420,8 @@ class StreamingStepSession:
             min_chars=min_chars,
         )
         self._outline_blocks_committed = 0
+        self._staging_only = bool(staging_only)
+        self._staged_content = ""
 
     @classmethod
     def maybe_start(
@@ -439,6 +461,11 @@ class StreamingStepSession:
         return self.committer._state
 
     def on_content(self, full_content: str) -> AgentState:
+        self.committer.check_control(phase="stream_buffer")
+        self._staged_content = full_content
+        if self._staging_only:
+            self.committer.buffer.replace_text(full_content)
+            return self.committer._state
         if self.committer.kind == "write_outline":
             return self._commit_outline_blocks(full_content)
         result = self.committer.commit_from_accumulated(full_content)
@@ -460,9 +487,16 @@ class StreamingStepSession:
         return updated
 
     def finalize(self, full_content: str) -> AgentState:
-        text = full_content.strip()
+        text = (full_content or self._staged_content).strip()
         if not text:
             return self.committer._state
-        updated, _ = self.committer.commit(text, partial=False)
-        self.committer._state = updated
-        return updated
+        try:
+            updated, _ = self.committer.commit(text, partial=False)
+            self.committer._state = updated
+            return updated
+        except Exception as exc:
+            from app.services.foreground_execution import EpochStale
+
+            if isinstance(exc, EpochStale):
+                return self.committer.abort_uncommitted()
+            raise

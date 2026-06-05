@@ -30,6 +30,14 @@ def reconcile_worker_lost(state: AgentState, *, persist: bool = True) -> AgentSt
     """
     if not should_reconcile_worker_lost(state):
         return state
+    payload = state.get("input_payload") or {}
+    if payload.get("foreground_preempt_pending"):
+        from app.services.mission_steer import finalize_preempt_steer_replan, pending_steer_is_set
+
+        if pending_steer_is_set(state.get("pending_user_message")):
+            state = finalize_preempt_steer_replan(state)
+            if str(state.get("status") or "") == TaskStatus.MISSION_PAUSED.value:
+                return state
     updated = merge_state(
         state,
         status=TaskStatus.MISSION_PAUSED.value,

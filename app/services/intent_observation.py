@@ -98,7 +98,13 @@ def build_structural_observation(
 
     turn_kind: str | None = None
     if mission_active:
-        if payload.get("execution_grant"):
+        if payload.get("foreground_preempt_consumed") or payload.get("steer_replan_mode") in (
+            "rewrite",
+            "repair",
+        ):
+            turn_kind = "steer_replan"
+            needs_planning = True
+        elif payload.get("execution_grant"):
             turn_kind = "mechanical_continue"
         elif payload.get("steer_planning_done") is False or payload.get("require_planning_after_steer"):
             turn_kind = "steer_replan"
@@ -146,6 +152,9 @@ def _invoke_observation_model(
         "current_mode": payload.get("current_mode") or payload.get("target_mode"),
         "execution_grant_present": bool(payload.get("execution_grant")),
         "steer_pending": bool(payload.get("steer_intent_pending_confirm")),
+        "foreground_preempt_consumed": bool(payload.get("foreground_preempt_consumed")),
+        "steer_replan_mode": payload.get("steer_replan_mode"),
+        "writing_constraints": (payload.get("writing_constraints") or [])[:8],
     }
     user_payload, _ = prepare_governed_payload(
         state, "intent_observation", base_payload

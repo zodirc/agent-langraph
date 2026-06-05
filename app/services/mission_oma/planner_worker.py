@@ -28,6 +28,13 @@ def run_planner_worker(state: AgentState) -> AgentState:
     if _forced_stop_requested(state):
         return merge_state(state, status="MISSION_PAUSED", current_node="mission_act")
 
+    from app.services.mission_steer import steer_replan_planning_satisfied
+
+    payload = dict(state.get("input_payload") or {})
+    if steer_replan_planning_satisfied(payload):
+        current = _bootstrap_executor_routing(state)
+        return _run_executor_subgraph(current)
+
     current = planning_node(state)
     payload = current.get("input_payload") or {}
     if steer_confirmation_pending(payload):

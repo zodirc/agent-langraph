@@ -93,6 +93,15 @@ def decide_intent_observation_policy(
             skip_reason="mechanical_continue_grant",
         )
 
+    if payload.get("foreground_preempt_consumed") or payload.get("steer_replan_mode") in (
+        "rewrite",
+        "repair",
+    ):
+        return IntentObservationPolicyDecision(
+            invoke_model=True,
+            reason="foreground_preempt_replan",
+        )
+
     explicit_key = explicit_mode or parse_explicit_interaction_mode(payload)
     if explicit_key and explicit_key not in ("auto",):
         from app.services.interaction_goal import explicit_mode_should_apply

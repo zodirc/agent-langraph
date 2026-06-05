@@ -226,6 +226,14 @@ def apply_non_recoverable_failure_lifecycle(state: AgentState) -> AgentState:
     inv["signature"] = signature
     payload["turn_contract_invalidation"] = inv
 
+    item = (payload.get("current_work_item") or {}) if isinstance(payload.get("current_work_item"), dict) else {}
+    if str(item.get("kind") or "") == "edit_plot":
+        from app.services.writing.command_builder import build_writing_command
+        from app.services.writing.executor import record_command_failure
+
+        command = build_writing_command(state)
+        payload = record_command_failure(payload, command, reason=signature)
+
     progress = dict(state.get("progress") or {})
     progress["consecutive_failures"] = 0
     progress["last_replan_at"] = _now_iso()

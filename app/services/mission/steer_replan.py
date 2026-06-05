@@ -40,20 +40,74 @@ def intervention_to_work_item(
     if action not in mapping:
         return None
     kind, title = mapping[action]
-    params: dict[str, Any] = {}
-    if action == "edit_plot":
-        params["edit_spec"] = dict(intervention.get("edit_spec") or {})
     return {
         "id": f"wi-steer-{step}-{action}",
         "kind": kind,
         "title": title,
         "status": "pending",
-        "params": params,
+        "params": {},
     }
 
 
 def _plan(state: AgentState) -> dict[str, Any]:
     return dict((state.get("progress") or {}).get("work_plan") or {})
+
+
+def supersede_pending_work_plan(
+    state: AgentState,
+    *,
+    reason: str = "steer_replan",
+    superseded_by_revision: int | None = None,
+) -> AgentState:
+    """Cancel runnable work_plan rows so stale write_outline does not survive replan."""
+    from app.services.task_agenda import agenda_summary
+
+    progress = dict(state.get("progress") or {})
+    plan = dict(progress.get("work_plan") or {})
+    items = list(plan.get("items") or [])
+    if not items:
+        payload = dict(state.get("input_payload") or {})
+        payload.pop("current_work_item", None)
+        payload["current_work_item"] = None
+        return merge_state(state, input_payload=payload)
+
+    revision = superseded_by_revision
+    if revision is None:
+        revision = int((state.get("input_payload") or {}).get("intent_revision") or 0) or None
+
+    cancelled: list[str] = []
+    for idx, row in enumerate(items):
+        status = str(row.get("status") or "pending")
+        if status in ("pending", "running"):
+            patch = {**row, "status": "superseded", "superseded_by": reason}
+            if revision:
+                patch["superseded_by_revision"] = revision
+            items[idx] = patch
+            cancelled.append(str(row.get("id") or ""))
+
+    plan["items"] = items
+    plan["current_id"] = None
+    progress["work_plan"] = plan
+    progress["agenda_summary"] = agenda_summary(plan)
+
+    payload = dict(state.get("input_payload") or {})
+    payload.pop("current_work_item", None)
+    payload["current_work_item"] = None
+    impact = dict(payload.get("steer_replan_impact") or {})
+    impact["superseded_pending"] = [wid for wid in cancelled if wid]
+    payload["steer_replan_impact"] = impact
+
+    return merge_state(
+        state,
+        progress=progress,
+        input_payload=payload,
+        audit_log=append_audit(
+            state,
+            "steer_replan",
+            "supersede_pending",
+            {"reason": reason, "count": len(cancelled)},
+        ),
+    )
 
 
 def build_impact_manifest(

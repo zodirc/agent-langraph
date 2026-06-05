@@ -520,7 +520,10 @@ def run_subgraph_writing(state: AgentState) -> AgentState:
 
     if str(current.get("status", "")) == "WRITTEN" and writing_persisted_on_state(current):
         return _mission_writing_reasoning_summary(current)
-    if payload.get("force_slow_reasoning") or payload.get("revision_intent"):
+    command = (payload.get("writing_command") or {})
+    if payload.get("force_slow_reasoning") or (
+        isinstance(command, dict) and command.get("action") in ("edit_plot", "reset_body", "write_outline")
+    ):
         return reasoning_node(current)
     if str(current.get("status", "")) == "WRITTEN":
         return _mission_writing_reasoning_summary(current)
@@ -561,14 +564,11 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
                 status=state.get("status") or TaskStatus.MISSION_RUNNING.value,
             )
         )
-    if review_outline_requested(payload) and not mission_must_run_planning(state):
-        return _mission_act_for_writing(
-            state,
-            step_decision,
-            allow_pipeline=not _oma_act_available(state),
-        )
-
     if mission_must_run_planning(state):
+        payload_plan = dict(state.get("input_payload") or {})
+        payload_plan.pop("steer_replan_resume", None)
+        payload_plan.pop("foreground_replan_dispatch", None)
+        state = merge_state(state, input_payload=payload_plan)
         if _oma_act_available(state):
             from app.services.mission_oma.planner_worker import run_planner_worker
 
@@ -612,60 +612,25 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
     if kind == "run_tools":
         return tool_execution_node(state)
 
-    if kind == "edit_plot":
-        spec = dict((payload.get("edit_plot_spec") or item.get("params", {}).get("edit_spec") or {}))
-        from app.services.outline_steer_patch import is_outline_filename, run_outline_edit_via_tools
+    from app.services.writing.state_machine import COMMAND_WORK_ITEM_KINDS
 
-        from app.config.settings import settings
+    if kind in COMMAND_WORK_ITEM_KINDS or (
+        review_outline_requested(payload) and (payload.get("writing_command") or kind == "review_outline")
+    ):
+        from app.services.writing.command_builder import build_writing_command
+        from app.services.writing.executor import block_command_execution, execute_writing_command
+        from app.services.writing.command_validator import validate_target_bound
 
-        filename = str(
-            spec.get("filename")
-            or getattr(settings, "MANUSCRIPT_DEFAULT_OUTLINE", "outline.txt")
-        )
-        if is_outline_filename(filename) and not spec.get("old_text"):
-            return run_outline_edit_via_tools(state, spec={**spec, "filename": filename})
-        if spec.get("old_text"):
-            from app.services.artifact_tools import handle_edit_text_artifact, handle_read_text_artifact
-
-            task_id = state["task_id"]
-            filename = str(spec.get("filename") or "novel.txt")
-            read_out = handle_read_text_artifact(
-                {"task_id": task_id, "filename": filename, "max_chars": 12000}
-            )
-            edit_out = handle_edit_text_artifact(
-                {
-                    "task_id": task_id,
-                    "filename": filename,
-                    "old_text": str(spec.get("old_text")),
-                    "new_text": str(spec.get("new_text", "")),
-                    "replace_all": bool(spec.get("replace_all", False)),
-                    "occurrence_index": spec.get("occurrence_index"),
-                    "start_line": spec.get("start_line"),
-                    "end_line": spec.get("end_line"),
-                    "dry_run": bool(spec.get("dry_run", False)),
-                }
-            )
-            ms = resolve_manuscript(task_id, state.get("manuscript"))
-            nbytes = int(edit_out.get("bytes") or 0)
-            if is_outline_filename(filename):
-                ms.outline_path = filename
-                ms.outline_bytes = nbytes
-            elif ms.body_path == filename or not ms.body_path:
-                ms.body_path = filename
-                ms.body_bytes = nbytes
-            return merge_state(
-                state,
-                tool_results=[
-                    {"tool": "read_text_artifact", "status": "ok", "result": read_out},
-                    {"tool": "edit_text_artifact", "status": "ok", "result": edit_out},
-                ],
-                manuscript=ms.to_dict(),
-                status=TaskStatus.TOOL_EXECUTED.value,
-            )
-        return _mission_act_for_writing(
+        command = build_writing_command(state, item if item.get("kind") else None)
+        target_error = validate_target_bound(command)
+        if target_error is not None:
+            return block_command_execution(state, target_error)
+        return execute_writing_command(
             state,
-            step_decision,
-            allow_pipeline=not _oma_act_available(state),
+            command,
+            step_decision=step_decision,
+            mission_act_for_writing=_mission_act_for_writing,
+            oma_act_available=_oma_act_available,
         )
 
     from app.services.turn_contract import contract_blocks_writing

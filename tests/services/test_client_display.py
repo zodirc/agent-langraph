@@ -163,3 +163,25 @@ def test_steer_queued_display():
     d = build_steer_task_client_display(state, queued=True)
     assert d["kind"] == "steer_queued"
     assert any("queue" in line.lower() for line in d["system_lines"])
+
+
+def test_steer_queued_display_prefers_goal_over_stale_contract():
+    steer_text = "你应该基于原电影来编写，人物需要为原电影人物，只改动剧情走向"
+    state = merge_state(
+        {
+            "task_id": "t1",
+            "session_id": "s1",
+            "status": TaskStatus.MISSION_RUNNING.value,
+            "interrupt_context": {"control_state": "INTERRUPT_REQUESTED"},
+            "input_payload": {
+                "turn_contract": {"primary_op": "reasoning"},
+            },
+            "pending_user_message": {"messages": [{"message": steer_text}]},
+        },
+    )
+    d = build_steer_task_client_display(state, queued=True)
+    text = "\n".join(d["system_lines"])
+    assert "queued_goal:" in text
+    assert "原电影" in text
+    assert "supersedes_plan:" in text
+    assert text.index("queued_goal:") < text.index("supersedes_plan:")

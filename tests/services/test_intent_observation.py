@@ -3,7 +3,7 @@
 from unittest.mock import patch
 
 from app.domain.intent_observation import IntentObservationResult
-from app.runtime.state import create_initial_state
+from app.runtime.state import create_initial_state, merge_state
 from app.services.intent_observation import (
     build_structural_observation,
     observe_intent,
@@ -115,6 +115,38 @@ def test_intent_observation_result_roundtrip():
     restored = IntentObservationResult.from_dict(original.to_dict())
     assert restored.intent_kind == "engineering"
     assert restored.confidence == 0.88
+
+
+def test_policy_invokes_model_on_foreground_preempt_replan():
+    state = merge_state(
+        create_initial_state(task_id="io-preempt"),
+        input_payload={
+            "goal": "不能出现架空人物",
+            "foreground_preempt_consumed": True,
+            "steer_replan_mode": "rewrite",
+            "require_planning_after_steer": True,
+        },
+        mission={"kind": "writing"},
+    )
+    seed = seed_pre_planning_route_audit(state)
+    decision = decide_intent_observation_policy(state, explicit_mode=None, route_audit_seed=seed)
+    assert decision.invoke_model is True
+    assert decision.reason == "foreground_preempt_replan"
+
+
+def test_structural_observation_marks_steer_replan_after_preempt():
+    state = merge_state(
+        create_initial_state(task_id="io-preempt-struct"),
+        input_payload={
+            "foreground_preempt_consumed": True,
+            "steer_replan_mode": "repair",
+        },
+        mission={"kind": "writing"},
+    )
+    seed = seed_pre_planning_route_audit(state)
+    result = build_structural_observation(state, route_audit_seed=seed)
+    assert result.turn_kind_candidate == "steer_replan"
+    assert result.needs_planning is True
 
 
 def test_structural_golden_baseline_runs():

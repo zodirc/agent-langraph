@@ -21,6 +21,7 @@ def steer_confirmation_required(
     payload: dict[str, Any],
     *,
     mission_before: Optional[dict[str, Any]] = None,
+    state: Optional[dict[str, Any]] = None,
 ) -> bool:
     """True when steer planning produced a material change worth user OK before act."""
     return intent_gate_required(
@@ -28,6 +29,7 @@ def steer_confirmation_required(
             planning_result=planning_result,
             payload=payload,
             mission_before=mission_before,
+            state=state,
         )
     )
 

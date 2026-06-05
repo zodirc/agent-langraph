@@ -33,6 +33,25 @@ def _intervention(ctx: GateContext) -> dict[str, Any]:
     return intervention
 
 
+def _supersede_replan_skips_intent_gate(
+    payload: dict[str, Any], state: Optional[dict[str, Any]] = None
+) -> bool:
+    """Foreground supersede: user's new message is the confirmation (Cursor-like steer)."""
+    if payload.get("foreground_replan_dispatch"):
+        return True
+    if state:
+        from app.services.mission_supersede import FOREGROUND_KIND_SUPERSEDE, foreground_operation
+
+        op = foreground_operation(dict(state.get("interrupt_context") or {}))
+        if op.get("kind") == FOREGROUND_KIND_SUPERSEDE:
+            return True
+    if payload.get("latest_steer_message") and (
+        payload.get("require_planning_after_steer") or payload.get("steer_requires_planning")
+    ):
+        return True
+    return False
+
+
 def intent_gate_required(ctx: GateContext) -> bool:
     """True when steer planning produced a material change worth user OK before act."""
     cfg = load_confirmation_gates_config()
@@ -41,6 +60,8 @@ def intent_gate_required(ctx: GateContext) -> bool:
 
     payload = ctx.payload
     if payload.get("steer_intent_confirmed"):
+        return False
+    if _supersede_replan_skips_intent_gate(payload, ctx.state):
         return False
     if not payload.get("steer_applied_at"):
         return False

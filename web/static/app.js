@@ -210,27 +210,81 @@ function escapeHtml(value) {
 }
 
 function pickFlowHistory(persistedHistory, liveHistory) {
-  if (!liveHistory.length) return persistedHistory;
-  if (!persistedHistory.length) return liveHistory;
-  if (persistedHistory.length > liveHistory.length) return persistedHistory;
-  if (liveHistory.length > persistedHistory.length) return liveHistory;
-  const pLast = String(persistedHistory[persistedHistory.length - 1]?.at || "");
-  const lLast = String(liveHistory[liveHistory.length - 1]?.at || "");
-  if (pLast && lLast) return pLast >= lLast ? persistedHistory : liveHistory;
-  return persistedHistory;
+  return mergeFlowHistories(persistedHistory, liveHistory);
+}
+
+function mergeFlowHistories(...lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const h of list) {
+      if (!h || typeof h !== "object") continue;
+      const node = String(h.node || "").trim();
+      if (!node) continue;
+      const key = `${node}|${String(h.status || "")}|${String(h.at || "")}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(h);
+    }
+  }
+  out.sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")));
+  return out.slice(-120);
+}
+
+const FLOW_HISTORY_STORAGE_PREFIX = "agent_flow_history:";
+
+function persistFlowHistoryToStorage(taskId) {
+  const tid = String(taskId || "").trim();
+  if (!tid) return;
+  const rows = flowLiveHistoryByTask.get(tid) || [];
+  try {
+    sessionStorage.setItem(
+      FLOW_HISTORY_STORAGE_PREFIX + tid,
+      JSON.stringify(rows.slice(-120))
+    );
+  } catch {
+    /* ignore quota */
+  }
+}
+
+function loadFlowHistoryFromStorage(taskId) {
+  const tid = String(taskId || "").trim();
+  if (!tid) return [];
+  try {
+    const raw = sessionStorage.getItem(FLOW_HISTORY_STORAGE_PREFIX + tid);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function renderFlowTimeline(data, taskId, { preferStore = false } = {}) {
   if (!flowMetaEl || !flowTaskEl || !flowTimelineEl) return;
   const status = data?.status || "-";
   const node = data?.current_node || "-";
-  flowMetaEl.textContent = `状态: ${status} | 当前节点: ${node}`;
+  const fg = data?.foreground_operation;
+  const rev = data?.intent_revision;
+  const steer = data?.latest_steer_message;
+  const contract = data?.turn_contract_primary_op;
+  let meta = `状态: ${status} | 当前节点: ${node}`;
+  if (data?.executor_active) meta += " | 后台执行中（流已断开）";
+  if (fg?.status) meta += ` | 前台: ${fg.kind || "?"}/${fg.status}`;
+  if (rev) meta += ` | rev ${rev}`;
+  if (contract) meta += ` | contract ${contract}`;
+  if (steer) meta += ` | steer: ${steer.slice(0, 48)}${steer.length > 48 ? "…" : ""}`;
+  flowMetaEl.textContent = meta;
   flowTaskEl.textContent = `task: ${(taskId || "-").toString().slice(0, 12)}${taskId ? "…" : ""}`;
   const persistedHistory = Array.isArray(data?.node_history) ? data.node_history : [];
   const liveHistory = flowLiveHistoryByTask.get(taskId) || [];
+  const storedHistory = loadFlowHistoryFromStorage(taskId);
   const history = preferStore
-    ? persistedHistory
-    : pickFlowHistory(persistedHistory, liveHistory);
+    ? mergeFlowHistories(persistedHistory, storedHistory)
+    : mergeFlowHistories(persistedHistory, liveHistory, storedHistory);
+  flowLiveHistoryByTask.set(taskId, history);
+  persistFlowHistoryToStorage(taskId);
   renderFlowGraph(history);
   if (!history.length) {
     flowTimelineEl.innerHTML = '<p class="flow-empty">暂无节点数据。运行任务后将自动显示。</p>';
@@ -270,9 +324,14 @@ function renderFlowTimeline(data, taskId, { preferStore = false } = {}) {
       syncFlowPopup();
     });
   }
-  if (taskId && isTerminalTaskStatus(status) && activeTaskId === taskId) {
+  if (
+    taskId &&
+    isTerminalTaskStatus(status) &&
+    activeTaskId === taskId &&
+    !data?.executor_active
+  ) {
     activeTaskId = null;
-    stopFlowAutoRefresh();
+    if (!backendExecutorActive) stopFlowAutoRefresh();
   }
 }
 
@@ -495,9 +554,141 @@ function ensureFlowAutoRefresh() {
   if (flowAutoRefreshTimer) return;
   flowAutoRefreshTimer = setInterval(() => {
     if (document.hidden) return;
-    if (!running && !activeTaskId && !sessionHasInFlightMission) return;
+    if (!running && !activeTaskId && !sessionHasInFlightMission && !backendExecutorActive) return;
     refreshFlowPanel();
   }, 4500);
+}
+
+function stopDetachedBackendWatch() {
+  if (detachedBackendWatchTimer) {
+    clearInterval(detachedBackendWatchTimer);
+    detachedBackendWatchTimer = null;
+  }
+  backendExecutorActive = false;
+  detachedPollLastNode = "";
+  detachedPollLastStatus = "";
+}
+
+function recordPolledFlowNode(taskId, data) {
+  if (!taskId || !data) return;
+  const node = String(data.current_node || "").trim();
+  const status = String(data.status || "").trim();
+  if (!node) return;
+  if (node === detachedPollLastNode && status === detachedPollLastStatus) return;
+  detachedPollLastNode = node;
+  detachedPollLastStatus = status;
+  const rows = flowLiveHistoryByTask.get(taskId) || [];
+  rows.push({
+    node,
+    status: status || "RUNNING",
+    at: new Date().toISOString(),
+    source: "status_poll",
+  });
+  flowLiveHistoryByTask.set(taskId, rows.slice(-120));
+  persistFlowHistoryToStorage(taskId);
+}
+
+async function syncBackendExecutionFromStatus(taskId) {
+  const tid = taskId || activeTaskId || getSessionId();
+  if (!tid) return null;
+  const data = await fetchTaskStatus(tid);
+  if (!data) return null;
+  const executorActive = Boolean(data.executor_active);
+  backendExecutorActive = executorActive;
+  const st = String(data.status || "");
+  sessionMissionExecutorActive = st === "MISSION_RUNNING" && executorActive;
+  sessionHasInFlightMission =
+    executorActive || st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
+  if (!running && executorActive) {
+    recordPolledFlowNode(tid, data);
+  }
+  await refreshFlowPanel(tid);
+  updateStopButtonState();
+  if (executorActive) {
+    ensureFlowAutoRefresh();
+  }
+  return data;
+}
+
+function announceDetachedBackend(taskId) {
+  const tid = String(taskId || "");
+  if (!tid || detachedBackendAnnouncedForTask === tid) return;
+  detachedBackendAnnouncedForTask = tid;
+  appendLine("流式连接已断开；后台仍在执行，右侧流程面板将自动更新。", "system");
+}
+
+function startDetachedBackendWatch(taskId, { announce = false } = {}) {
+  const tid = taskId || activeTaskId || getSessionId();
+  if (!tid) return;
+  stopDetachedBackendWatch();
+  if (announce) announceDetachedBackend(tid);
+  void syncBackendExecutionFromStatus(tid);
+  detachedBackendWatchTimer = setInterval(async () => {
+    const data = await syncBackendExecutionFromStatus(tid);
+    if (!data) return;
+    if (!data.executor_active) {
+      stopDetachedBackendWatch();
+      const st = String(data.status || "");
+      const node = String(data.current_node || "?");
+      appendLine(`后台执行已结束（${st} · ${node}）`, "system");
+      sessionHasInFlightMission = st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
+      updateStopButtonState();
+    }
+  }, DETACHED_BACKEND_POLL_MS);
+}
+
+async function afterClientStreamEnded(taskId, { detached = false, reason = "" } = {}) {
+  const tid = taskId || activeTaskId || getSessionId();
+  if (!tid) return;
+  const data = await syncBackendExecutionFromStatus(tid);
+  if (data?.executor_active) {
+    const announce =
+      detached &&
+      reason !== "steer_replace" &&
+      reason !== "superseded" &&
+      reason !== "user_stop";
+    startDetachedBackendWatch(tid, { announce });
+  } else {
+    stopDetachedBackendWatch();
+    await flushPendingStreamInputQueue();
+  }
+}
+
+function isWritingMissionActive(statusData) {
+  if (sessionHasInFlightMission || backendExecutorActive || sessionMissionExecutorActive) {
+    return true;
+  }
+  if (!statusData) return false;
+  if (shouldSteerReplan(statusData)) return true;
+  const st = String(statusData.status || "");
+  if (st === "MISSION_RUNNING" || st === "MISSION_PAUSED") return true;
+  if (Boolean(statusData.executor_active)) {
+    const op = String(statusData.turn_contract_primary_op || "");
+    if (op && op !== "run_tools") return true;
+    if (sessionHasInFlightMission) return true;
+  }
+  return false;
+}
+
+function enqueuePendingStreamInput(text) {
+  const t = String(text || "").trim();
+  if (!t) return;
+  pendingStreamInputQueue.push(t);
+  appendLine(`> ${t}`, "user");
+  const n = pendingStreamInputQueue.length;
+  appendLine(
+    n === 1
+      ? "（已排队，将在本轮输出结束后发送）"
+      : `（已合并排队，共 ${n} 条，将在本轮输出结束后一并处理）`,
+    "system"
+  );
+}
+
+async function flushPendingStreamInputQueue() {
+  if (!pendingStreamInputQueue.length || running) return;
+  const merged = pendingStreamInputQueue.join("\n\n");
+  pendingStreamInputQueue = [];
+  await handleCommand(merged);
 }
 
 function stopFlowAutoRefresh() {
@@ -688,7 +879,7 @@ function closeStateDebugModal() {
 
 function updateStopButtonState() {
   if (!stopBtnEl) return;
-  stopBtnEl.disabled = !(running || sessionHasInFlightMission);
+  stopBtnEl.disabled = !(running || sessionHasInFlightMission || backendExecutorActive);
 }
 /** Mission control-loop nodes — hidden from chat; use progress/trace for long runs. */
 const MISSION_LOOP_NODES = new Set([
@@ -743,6 +934,15 @@ let pendingNewSession = false;
 let sessionHasInFlightMission = false;
 /** True when this process is executing the mission graph (SSE may be disconnected). */
 let sessionMissionExecutorActive = false;
+/** Backend graph still running after client SSE disconnected (interrupt-stream / stop). */
+let backendExecutorActive = false;
+let detachedBackendWatchTimer = null;
+let detachedPollLastNode = "";
+let detachedPollLastStatus = "";
+let detachedBackendAnnouncedForTask = null;
+const DETACHED_BACKEND_POLL_MS = 2500;
+/** QA stream: queue follow-up inputs until current SSE turn finishes. */
+let pendingStreamInputQueue = [];
 const ORCHESTRATION_COMPLETED_DISPLAY_MAX = 8;
 
 /** UUID v4; works on http://<LAN-IP> where crypto.randomUUID is unavailable. */
@@ -2126,11 +2326,27 @@ function appendLine(text, className = "system") {
       const statusData = await fetchTaskStatus(taskId);
       const st = String(statusData?.status || "");
       if (running && !isTerminalTaskStatus(st)) {
+        if (isWritingMissionActive(statusData) && shouldSteerUserMessage(statusData, raw)) {
+          await steerActiveMission(raw, {
+            preempt: true,
+            replaceGoal: true,
+            suppressUserEcho: true,
+          });
+          return;
+        }
         appendLine("当前任务仍在运行，请先停止或等待完成后再重发。", "error");
         return;
       }
       if (running && isTerminalTaskStatus(st)) {
         setRunning(false);
+      }
+      if (shouldSteerUserMessage(statusData, raw)) {
+        await steerActiveMission(raw, {
+          preempt: true,
+          replaceGoal: true,
+          suppressUserEcho: true,
+        });
+        return;
       }
       if (isTerminalTaskStatus(st)) {
         await runTaskStream(raw, "LOW", "/tasks/stream", null, { suppressUserEcho: true });
@@ -2283,6 +2499,13 @@ function abortActiveSseStream(reason = "user_stop") {
   }
   activeSseAbortController = null;
   return true;
+}
+
+function sseStreamEndReason(signal) {
+  if (!signal?.aborted) return "";
+  const raw = signal.reason;
+  if (typeof raw === "string" && raw.trim()) return raw.trim();
+  return "aborted";
 }
 
 function markActiveWritingStreamStopped() {
@@ -2683,6 +2906,9 @@ function appendTraceLine(text, payload = {}) {
 function setRunning(value) {
   running = value;
   if (value) {
+    pendingStreamInputQueue = [];
+    stopDetachedBackendWatch();
+    detachedBackendAnnouncedForTask = null;
     resetTraceBlock();
     resetAnswerStream();
     resetThinkingStream();
@@ -2692,7 +2918,7 @@ function setRunning(value) {
     ensureFlowAutoRefresh();
   } else {
     stopRunTimer();
-    if (!activeTaskId) stopFlowAutoRefresh();
+    if (!activeTaskId && !backendExecutorActive) stopFlowAutoRefresh();
   }
   updateStopButtonState();
 }
@@ -2858,11 +3084,60 @@ async function handleMissionStatusInquiry(message, opts = {}) {
   return true;
 }
 
+function isSupersedeReplanPending(statusData) {
+  const st = String(statusData?.status || "");
+  const fg = statusData?.foreground_operation;
+  const fgStatus = String(fg?.status || "");
+  if (fg?.kind === "supersede_with_input" && (fgStatus === "replan_queued" || fgStatus === "replan_dispatching")) {
+    return true;
+  }
+  if (st === "MISSION_PAUSED" && statusData?.pause_reason === "superseded_by_new_input") {
+    return true;
+  }
+  return Boolean(statusData?.latest_steer_message) && st === "MISSION_PAUSED";
+}
+
+function isContinueWritingGoal(text) {
+  const t = String(text || "").trim();
+  if (!t) return false;
+  if (/继续|接着写|继续写|继续写作|写下去|下一章/.test(t)) return true;
+  return /^(please\s+continue|continue\s+writing|append\s+(the\s+)?next)/i.test(t);
+}
+
+/** Mission correction should use /steer/stream — not /tasks/stream resume append. */
+function shouldSteerReplan(statusData) {
+  if (!statusData) return false;
+  const st = String(statusData?.status || "");
+  if (isSupersedeReplanPending(statusData)) return true;
+  if (st === "MISSION_RUNNING" && (statusData?.executor_active || sessionHasInFlightMission)) {
+    return true;
+  }
+  const steer = String(statusData?.latest_steer_message || "").trim();
+  if (steer && ["MISSION_PAUSED", "REASONED", "REJECTED", "FAILED"].includes(st)) {
+    return true;
+  }
+  if (
+    st === "MISSION_PAUSED" &&
+    (sessionHasInFlightMission || Boolean(statusData?.turn_contract_primary_op))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function shouldSteerUserMessage(statusData, message) {
+  if (!shouldSteerReplan(statusData)) return false;
+  const text = String(message || "").trim();
+  if (text && isContinueWritingGoal(text)) return false;
+  return true;
+}
+
+/** Steer during mission: one SSE into replan; replanObserve keeps flow/progress visible. */
 async function steerActiveMission(message, opts = {}) {
   const taskId = activeTaskId || getSessionId();
   const statusData = await fetchTaskStatus(taskId);
   const st = String(statusData?.status || "");
-  if (isTerminalTaskStatus(st)) {
+  if (isTerminalTaskStatus(st) && !shouldSteerReplan(statusData)) {
     appendLine("任务已结束，正在开启新轮次…", "system");
     await runTaskStream(message, "LOW", "/tasks/stream", null, {
       suppressUserEcho: Boolean(opts.suppressUserEcho),
@@ -2871,29 +3146,74 @@ async function steerActiveMission(message, opts = {}) {
   }
   const payload = {
     message,
-    preempt: Boolean(opts.preempt),
-    priority: Number.isFinite(opts.priority) ? opts.priority : 0,
+    preempt: opts.preempt !== false,
+    priority: Number.isFinite(opts.priority) ? opts.priority : 80,
     replace_goal: Boolean(opts.replaceGoal),
   };
   if (opts.intervention && typeof opts.intervention === "object") {
     payload.intervention = opts.intervention;
   }
-  const res = await apiFetch(`/tasks/${taskId}/steer`, {
-    method: "POST",
-    headers: getAuthHeaders(),
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    appendLine(await res.text(), "error");
+  try {
+    await apiFetch(`/tasks/${taskId}/interrupt-stream`, {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "steer_replace", requested_by: "web" }),
+    });
+  } catch {
+    /* best-effort */
+  }
+  if (running || activeSseAbortController) {
+    abortActiveSseStream("steer_replace");
+    // Writing steer: immediate replan (no QA queue).
+    markActiveWritingStreamStopped();
+  }
+  setRunning(true);
+  shownConfirmationKeys.clear();
+  writingStreamCharsThisTurn = 0;
+  sessionHasInFlightMission = true;
+  updateStopButtonState();
+  if (!opts.suppressUserEcho) {
+    appendLine(`> ${message}`, "user");
+  }
+  appendLine("纠偏已受理，任务重新规划中（右侧流程面板与顶部运行状态可查看进度）", "system");
+  lastPhaseMessage = "重新规划中";
+  void refreshFlowPanel(taskId);
+  const taskIdRef = { id: taskId };
+  const sseAbort = new AbortController();
+  bindActiveSseAbort(sseAbort);
+  try {
+    const res = await apiFetch(`/tasks/${taskId}/steer/stream`, {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(payload),
+      signal: sseAbort.signal,
+    });
+    if (!res.ok || !res.body) {
+      if (res.status !== 401) {
+        appendLine(`steer stream failed: ${res.status} ${await res.text()}`, "error");
+      }
+      return false;
+    }
+    activeTaskId = taskId;
+    await consumeSseStream(res, taskIdRef, { signal: sseAbort.signal, replanObserve: true });
+    return true;
+  } catch (err) {
+    if (!isSseAbortError(err)) {
+      appendLine(`steer stream error: ${err}`, "error");
+    }
     return false;
+  } finally {
+    if (activeSseAbortController === sseAbort) {
+      activeSseAbortController = null;
+    }
+    setRunning(false);
+    const endedTaskId = taskIdRef?.id || taskId || activeTaskId;
+    const wasDetached = Boolean(sseAbort?.signal?.aborted);
+    await afterClientStreamEnded(endedTaskId, {
+      detached: wasDetached,
+      reason: sseStreamEndReason(sseAbort.signal),
+    });
   }
-  const data = await res.json();
-  const display = data.client_display || {};
-  appendSystemLines(display.system_lines);
-  if (!display.system_lines?.length) {
-    appendLine(`steer → ${data.message || data.status}`, "system");
-  }
-  return true;
 }
 
 async function stopActiveMission() {
@@ -2937,8 +3257,7 @@ async function stopActiveMission() {
       "system"
     );
   }
-  sessionHasInFlightMission = false;
-  updateStopButtonState();
+  await afterClientStreamEnded(taskId, { detached: hadClientStream });
   return true;
 }
 
@@ -3191,8 +3510,8 @@ async function resumeMissionOnce(taskId, { confirm = false } = {}) {
   return res.json();
 }
 
-/** Resume mission with SSE (progress, writing_delta, gates) — preferred for Web CLI. */
-async function runResumeStream(taskId, { confirm = false, fromPendingQueue = false } = {}) {
+/** Supersede mission with SSE (foreground_superseded, replan_started, graph events). */
+async function runSupersedeStream(taskId, { message = "", fromPendingQueue = false, echoCommand = true } = {}) {
   if (running && !fromPendingQueue) {
     appendLine("已有任务在运行，请稍候", "error");
     return null;
@@ -3200,7 +3519,66 @@ async function runResumeStream(taskId, { confirm = false, fromPendingQueue = fal
   setRunning(true);
   shownConfirmationKeys.clear();
   writingStreamCharsThisTurn = 0;
-  appendLine(`> /resume${confirm ? " confirm" : ""}`, "user");
+  if (echoCommand) {
+    appendLine("> /supersede", "user");
+  }
+  const taskIdRef = { id: taskId };
+  const sseAbort = new AbortController();
+  bindActiveSseAbort(sseAbort);
+  try {
+    const body = {};
+    if (String(message || "").trim()) {
+      body.message = String(message).trim();
+    }
+    const res = await apiFetch(`/tasks/${taskId}/supersede/stream`, {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(body),
+      signal: sseAbort.signal,
+    });
+    if (!res.ok || !res.body) {
+      if (res.status !== 401) {
+        appendLine(`supersede stream failed: ${res.status} ${await res.text()}`, "error");
+      }
+      return null;
+    }
+    activeTaskId = taskId;
+    await consumeSseStream(res, taskIdRef, { signal: sseAbort.signal });
+    return { task_id: taskIdRef.id || taskId };
+  } catch (err) {
+    if (!isSseAbortError(err)) {
+      appendLine(`supersede stream error: ${err}`, "error");
+    }
+    return null;
+  } finally {
+    if (activeSseAbortController === sseAbort) {
+      activeSseAbortController = null;
+    }
+    setRunning(false);
+    const endedTaskId = taskIdRef?.id || taskId || activeTaskId;
+    const wasDetached = Boolean(sseAbort?.signal?.aborted);
+    await afterClientStreamEnded(endedTaskId, {
+      detached: wasDetached,
+      reason: sseStreamEndReason(sseAbort.signal),
+    });
+  }
+}
+
+/** Resume mission with SSE (progress, writing_delta, gates) — preferred for Web CLI. */
+async function runResumeStream(
+  taskId,
+  { confirm = false, fromPendingQueue = false, suppressUserEcho = false } = {},
+) {
+  if (running && !fromPendingQueue) {
+    appendLine("已有任务在运行，请稍候", "error");
+    return null;
+  }
+  setRunning(true);
+  shownConfirmationKeys.clear();
+  writingStreamCharsThisTurn = 0;
+  if (!suppressUserEcho) {
+    appendLine(`> /resume${confirm ? " confirm" : ""}`, "user");
+  }
   const taskIdRef = { id: taskId };
   const sseAbort = new AbortController();
   bindActiveSseAbort(sseAbort);
@@ -3230,7 +3608,12 @@ async function runResumeStream(taskId, { confirm = false, fromPendingQueue = fal
       activeSseAbortController = null;
     }
     setRunning(false);
-    await refreshFlowPanel(taskIdRef?.id || taskId || activeTaskId);
+    const endedTaskId = taskIdRef?.id || taskId || activeTaskId;
+    const wasDetached = Boolean(sseAbort?.signal?.aborted);
+    await afterClientStreamEnded(endedTaskId, {
+      detached: wasDetached,
+      reason: sseStreamEndReason(sseAbort.signal),
+    });
   }
 }
 
@@ -3264,7 +3647,9 @@ function formatOrchestration(summary, detail) {
  *
  * Dispatch one SSE event; binds taskIdRef.id on first task_id payload.
  */
-function handleStreamEvent(eventType, payload, taskIdRef) {
+function handleStreamEvent(eventType, payload, taskIdRef, streamOpts = {}) {
+  const replanObserve = Boolean(streamOpts.replanObserve);
+  const silentSteer = Boolean(streamOpts.silentSteerUi) && !replanObserve;
   if (payload.task_id) {
     taskIdRef.id = payload.task_id;
     activeTaskId = payload.task_id;
@@ -3279,16 +3664,18 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
       localStorage.setItem(SESSION_KEY, payload.session_id);
       updateSessionBadge(payload.session_id);
     }
-    if (payload.continued) {
-      appendLine(
-        `session ${(payload.session_id || payload.task_id || "").slice(0, 8)}… turn ${payload.session_turn || "?"}`,
-        "system"
-      );
-    } else {
-      appendLine(
-        `session ${(payload.session_id || payload.task_id || "").slice(0, 8)}… started (task = session)`,
-        "system"
-      );
+    if (!silentSteer) {
+      if (payload.continued) {
+        appendLine(
+          `session ${(payload.session_id || payload.task_id || "").slice(0, 8)}… turn ${payload.session_turn || "?"}`,
+          "system"
+        );
+      } else {
+        appendLine(
+          `session ${(payload.session_id || payload.task_id || "").slice(0, 8)}… started (task = session)`,
+          "system"
+        );
+      }
     }
     refreshHistorySidebar();
   } else if (eventType === "subtasks") {
@@ -3304,9 +3691,40 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
       phase: payload.phase || "connecting",
       elapsed_sec: 0,
     });
+  } else if (eventType === "foreground_superseded") {
+    if (!silentSteer) {
+      const rev = payload.intent_revision != null ? ` (revision ${payload.intent_revision})` : "";
+      const steer = String(payload.latest_steer_message || payload.goal || "").trim();
+      appendLine(`前台任务已由新输入接管${rev}`, "system");
+      if (steer) appendLine(`replan_intent: ${steer.slice(0, 200)}`, "system");
+    }
+    if (replanObserve) {
+      sessionHasInFlightMission = true;
+      updateStopButtonState();
+      lastPhaseMessage = "重新规划中";
+    }
+    refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
+  } else if (eventType === "replan_started") {
+    if (!silentSteer) {
+      appendLine("正在根据纠偏内容重新规划…", "system");
+      const steer = String(payload.latest_steer_message || payload.goal || "").trim();
+      if (steer) appendLine(`replan_intent: ${steer.slice(0, 200)}`, "system");
+    }
+    if (replanObserve) {
+      sessionHasInFlightMission = true;
+      updateStopButtonState();
+      lastPhaseMessage = "重新规划中";
+    }
+    refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
   } else if (eventType === "progress") {
+    if (payload.phase === "mission_handoff") {
+      sessionHasInFlightMission = true;
+      updateStopButtonState();
+    }
+    if (silentSteer) return;
     updateProgressLine(payload);
   } else if (eventType === "trace") {
+    if (silentSteer) return;
     const body = (payload.text || "").trim();
     if (!body) return;
     if (body.includes("\n")) {
@@ -3317,6 +3735,7 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
       appendTraceLine(body, payload);
     }
   } else if (eventType === "plan") {
+    if (silentSteer) return;
     appendTraceLine("【SSE 计划快照】", { node: "planning", phase: "plan", level: "detail" });
     for (const [i, step] of (payload.plan || []).entries()) {
       appendTraceLine(`  ${i + 1}. ${step}`, { node: "planning", phase: "plan", level: "detail" });
@@ -3341,6 +3760,7 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
   } else if (eventType === "thinking_delta") {
     appendThinkingDelta(payload.text || "");
   } else if (eventType === "writing_delta") {
+    if (silentSteer || replanObserve) return;
     if (activeSseAbortController?.signal?.aborted) {
       return;
     }
@@ -3361,7 +3781,14 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
   } else if (eventType === "answer_preview") {
     setAnswerStreamText(payload.text || "");
   } else if (eventType === "node") {
-    formatNodeEvent(payload);
+    if (!silentSteer) {
+      const nodeName = String(payload.node || payload.current_node || "");
+      if (replanObserve && PIPELINE_QUIET_NODES.has(nodeName)) {
+        appendLine(`[${nodeName}] → ${payload.status || ""}`, "node");
+      } else {
+        formatNodeEvent(payload);
+      }
+    }
     flowSelectedNode = String(payload.node || payload.current_node || flowSelectedNode || "");
     const nodeTaskId = taskIdRef.id || payload.task_id || activeTaskId;
     if (nodeTaskId) {
@@ -3372,6 +3799,7 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
         at: new Date().toISOString(),
       });
       flowLiveHistoryByTask.set(nodeTaskId, rows.slice(-120));
+      persistFlowHistoryToStorage(nodeTaskId);
     }
     refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
   } else if (eventType === "review_required") {
@@ -3379,7 +3807,16 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
     appendLine(`approve: /approve ${payload.task_id}`, "system");
     appendLine(`reject:  /reject ${payload.task_id}`, "system");
   } else if (eventType === "mission_paused") {
-    appendSystemLines(payload.system_lines);
+    if (replanObserve) {
+      refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
+      return;
+    }
+    const steerGatePending = Boolean(
+      payload.steer_outcome_pending_confirm || payload.steer_intent_pending_confirm
+    );
+    if (!(silentSteer && steerGatePending)) {
+      appendSystemLines(payload.system_lines);
+    }
     if (
       payload.autonomous_ui?.enabled &&
       !payload.steer_outcome_pending_confirm &&
@@ -3390,8 +3827,28 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
   } else if (eventType === "error") {
     appendLine(payload.detail, "error");
   } else if (eventType === "done") {
+    stopDetachedBackendWatch();
     const gatePending = gatePendingOnPayload(payload);
-    renderSteerGateFromPayload(payload);
+    if (replanObserve) {
+      if (!gatePending) {
+        const st = String(payload.status || "");
+        appendLine(`重规划完成: ${st}`, "system");
+        sessionHasInFlightMission = st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
+        updateStopButtonState();
+      }
+      refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
+      refreshHistorySidebar();
+      if (!gatePending) {
+        void flushPendingStreamInputQueue();
+      }
+      return;
+    }
+    if (!silentSteer) {
+      renderSteerGateFromPayload(payload);
+    } else if (gatePending) {
+      refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
+      return;
+    }
     if (payload.final_answer && !gatePending) {
       const finalText = String(payload.final_answer);
       if (answerStreamEl && finalText.length >= answerStreamText.length) {
@@ -3404,9 +3861,13 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
         }
       }
     } else if (!gatePending && !answerStreamEl) {
-      appendLine(`done: ${payload.status}`, "system");
+      if (!silentSteer) {
+        appendLine(`done: ${payload.status}`, "system");
+      }
     } else if (gatePending) {
-      appendLine(`done: ${payload.status} — 待批准（见上方确认面板，/confirm 继续）`, "system");
+      if (!silentSteer) {
+        appendLine(`done: ${payload.status} — 待批准（见上方确认面板，/confirm 继续）`, "system");
+      }
       if (answerStreamEl && answerStreamText.trim()) {
         appendLine(
           "  （上方「回答（流式）」为预览，正式结果以确认面板为准；批准后继续执行）",
@@ -3416,6 +3877,9 @@ function handleStreamEvent(eventType, payload, taskIdRef) {
     }
     refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
     refreshHistorySidebar();
+    if (!gatePending) {
+      void flushPendingStreamInputQueue();
+    }
   }
 }
 
@@ -3543,7 +4007,8 @@ function moveSlashMenuSelection(delta, value) {
  *
  * Read ReadableStream and parse SSE event/data lines.
  */
-async function consumeSseStream(res, taskIdRef, { signal } = {}) {
+async function consumeSseStream(res, taskIdRef, streamOpts = {}) {
+  const { signal } = streamOpts;
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -3574,7 +4039,7 @@ async function consumeSseStream(res, taskIdRef, { signal } = {}) {
       }
       if (!dataLine) continue;
       try {
-        handleStreamEvent(eventType, JSON.parse(dataLine), taskIdRef);
+        handleStreamEvent(eventType, JSON.parse(dataLine), taskIdRef, streamOpts);
       } catch {
         /* skip malformed chunk */
       }
@@ -3994,7 +4459,12 @@ async function runTaskStream(
       activeSseAbortController = null;
     }
     setRunning(false);
-    await refreshFlowPanel(taskIdRef?.id || activeTaskId);
+    const endedTaskId = taskIdRef?.id || activeTaskId;
+    const wasDetached = Boolean(sseAbort?.signal?.aborted);
+    await afterClientStreamEnded(endedTaskId, {
+      detached: wasDetached,
+      reason: sseStreamEndReason(sseAbort.signal),
+    });
   }
 }
 
@@ -4157,7 +4627,7 @@ async function handleCommand(raw) {
     sessionMissionExecutorActive = st === "MISSION_RUNNING" && executorActive;
     sessionHasInFlightMission = st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
     updateStopButtonState();
-    if (st === "MISSION_RUNNING" && executorActive) {
+    if (shouldSteerUserMessage(statusData, text)) {
       appendLine(`> ${text}`, "user");
       if (isMissionStatusQuery(text)) {
         await handleMissionStatusInquiry(text, { suppressUserEcho: true });
@@ -4168,6 +4638,14 @@ async function handleCommand(raw) {
           replaceGoal: true,
         });
       }
+      return;
+    }
+    if (
+      isContinueWritingGoal(text) &&
+      (st === "MISSION_PAUSED" || st === "MISSION_RUNNING" || sessionHasInFlightMission)
+    ) {
+      appendLine(`> ${text}`, "user");
+      await runResumeStream(taskId, { confirm: false, suppressUserEcho: true });
       return;
     }
   }
@@ -4296,16 +4774,22 @@ formEl.addEventListener("submit", async (event) => {
       await handleCommand(value);
       return;
     }
-    appendLine(`> ${value}`, "user");
-    if (isMissionStatusQuery(value)) {
-      await handleMissionStatusInquiry(value, { suppressUserEcho: true });
-    } else {
-      await steerActiveMission(value, {
-        preempt: true,
-        priority: 80,
-        replaceGoal: true,
-      });
+    if (isWritingMissionActive(statusData)) {
+      if (isMissionStatusQuery(value)) {
+        appendLine(`> ${value}`, "user");
+        await handleMissionStatusInquiry(value, { suppressUserEcho: true });
+      } else if (isContinueWritingGoal(value)) {
+        enqueuePendingStreamInput(value);
+      } else {
+        await steerActiveMission(value, {
+          preempt: true,
+          priority: 80,
+          replaceGoal: true,
+        });
+      }
+      return;
     }
+    enqueuePendingStreamInput(value);
     return;
   }
   await handleCommand(value);
@@ -4547,17 +5031,82 @@ if (themeSelectEl) {
   });
 }
 
-async function warnIfSessionMissionInFlight() {
+async function restoreSessionConversation(taskId) {
+  try {
+    const res = await apiFetch(`/tasks/${taskId}/conversation`, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const history = Array.isArray(data.conversation_history) ? data.conversation_history : [];
+    if (!history.length) return;
+    appendLine(
+      `── 会话已恢复（turn ${data.session_turn || "?"}）──`,
+      "system"
+    );
+    for (const msg of history.slice(-8)) {
+      const role = String(msg.role || "");
+      const content = String(msg.content || "").trim();
+      if (!content) continue;
+      if (role === "user") {
+        appendLine(`> ${content}`, "user");
+      } else if (role === "assistant") {
+        const preview =
+          content.length > 600 ? `${content.slice(0, 600)}…` : content;
+        appendLine(preview, "result");
+      }
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
+async function restoreSessionOnLoad() {
   const taskId = getSessionId();
+  activeTaskId = taskId;
+  const storedFlow = loadFlowHistoryFromStorage(taskId);
+  if (storedFlow.length) {
+    flowLiveHistoryByTask.set(taskId, storedFlow);
+  }
   const data = await fetchTaskStatus(taskId);
-  if (!data) return;
+  if (!data) {
+    await refreshFlowPanel(taskId);
+    return;
+  }
+  const mergedFlow = mergeFlowHistories(data.node_history, storedFlow);
+  if (mergedFlow.length) {
+    flowLiveHistoryByTask.set(taskId, mergedFlow);
+    persistFlowHistoryToStorage(taskId);
+  }
   const st = String(data.status || "");
   const executorActive = Boolean(data.executor_active);
   const pauseReason = String(data.pause_reason || "");
   sessionMissionExecutorActive = st === "MISSION_RUNNING" && executorActive;
-  sessionHasInFlightMission = st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
-  if (st === "MISSION_RUNNING" && executorActive) {
-    ensureFlowAutoRefresh();
+  sessionHasInFlightMission =
+    executorActive || st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
+  await refreshFlowPanel(taskId);
+  const hasMission =
+    executorActive ||
+    st === "MISSION_RUNNING" ||
+    st === "MISSION_PAUSED" ||
+    mergedFlow.length > 0 ||
+    (data.node_history && data.node_history.length > 0);
+  if (hasMission) {
+    await restoreSessionConversation(taskId);
+    if (data.latest_steer_message) {
+      appendLine(
+        `最近纠偏: ${String(data.latest_steer_message).slice(0, 200)}`,
+        "system"
+      );
+    }
+    appendLine(
+      `当前任务: ${st} · 节点 ${data.current_node || "?"}${executorActive ? " · 后台执行中" : ""}`,
+      "system"
+    );
+  }
+  if (executorActive) {
+    appendLine("检测到后台仍在执行，流程面板将自动更新。", "system");
+    startDetachedBackendWatch(taskId, { announce: false });
   } else if (st === "MISSION_PAUSED") {
     if (pauseReason === "worker_lost") {
       appendLine(
@@ -4565,13 +5114,16 @@ async function warnIfSessionMissionInFlight() {
           " 直接输入为插入/纠偏（已写入状态）；不会自动续跑，请 /resume 或「继续写作」。",
         "system"
       );
-    } else {
+    } else if (hasMission) {
       appendLine(
         `Note: session ${taskId.slice(0, 8)}… is MISSION_PAUSED (node ${data.current_node}). ` +
           "直接输入「继续写作」等即可，由规划/会话策略理解意图；待确认时用 /confirm，不必先 /resume。",
         "system"
       );
     }
+  }
+  if (executorActive || sessionHasInFlightMission) {
+    ensureFlowAutoRefresh();
   }
   updateStopButtonState();
 }
@@ -4593,9 +5145,8 @@ appendLine(
 );
 refreshCommandSuggestions("");
 updateStopButtonState();
-warnIfSessionMissionInFlight();
+restoreSessionOnLoad();
 fetchHealth();
-refreshFlowPanel();
 refreshHistorySidebar();
 refreshSessionFilesPane();
 startSessionFilesPolling();

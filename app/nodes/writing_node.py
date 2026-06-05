@@ -267,7 +267,7 @@ def writing_node(state: AgentState) -> AgentState:
             state = merge_state(commit_state, tool_results=results)
             payload = dict(state.get("input_payload") or {})
             payload["last_written_outline_excerpt"] = content[:5000]
-            if intent.get("source") == "revision_intent":
+            if intent.get("source") == "writing_command":
                 ms.revision = int(ms.revision or 0) + 1
 
             # Outline rewrite — structured diff + multi-level alignment (replan pipeline).
@@ -548,7 +548,12 @@ def writing_node(state: AgentState) -> AgentState:
         )
 
         audit = payload.get("route_audit") or {}
-        revision_intent = bool(payload.get("revision_intent"))
+        command = payload.get("writing_command") or {}
+        material_command = isinstance(command, dict) and command.get("action") in (
+            "edit_plot",
+            "reset_body",
+            "write_outline",
+        )
         if writing_tool_results_ok(results):
             payload = clear_reasoning_regen_after_persist(payload)
             audit = payload.get("route_audit") or {}
@@ -556,7 +561,7 @@ def writing_node(state: AgentState) -> AgentState:
             payload,
             audit if isinstance(audit, dict) else {},
             tool_results=results,
-            revision_intent=revision_intent,
+            material_command=material_command,
         )
         payload["skip_reasoning_after_tools"] = not force_reasoning
 
@@ -617,7 +622,9 @@ def writing_node(state: AgentState) -> AgentState:
         get_state_store().save(updated)
         return updated
     except Exception as exc:
-        if isinstance(exc, (SteerPreempted, PauseRequested, CancelRequested)):
+        from app.services.foreground_execution import EpochStale
+
+        if isinstance(exc, (SteerPreempted, EpochStale, PauseRequested, CancelRequested)):
             from app.services.mission_execution import (
                 PAUSE_USER_REQUESTED_CANCEL,
                 PAUSE_USER_REQUESTED_PAUSE,
@@ -625,7 +632,7 @@ def writing_node(state: AgentState) -> AgentState:
 
             payload = dict(state.get("input_payload") or {})
             payload["writing_stopped_for_steer"] = True
-            paused = isinstance(exc, (SteerPreempted, PauseRequested))
+            paused = isinstance(exc, (SteerPreempted, EpochStale, PauseRequested))
             status = (
                 TaskStatus.MISSION_PAUSED.value
                 if paused

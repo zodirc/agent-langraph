@@ -619,11 +619,20 @@ def _stream_artifact_live(
                         check_for_control_signal,
                     )
 
+                    step_epoch = None
+                    if stream_session is not None:
+                        active = (stream_session.state.get("interrupt_context") or {}).get(
+                            "active_step"
+                        )
+                        if isinstance(active, dict):
+                            step_epoch = active.get("foreground_epoch")
                     check_for_control_signal(
                         task_id,
                         phase="writing_stream_chunk",
+                        step_epoch=int(step_epoch) if step_epoch is not None else None,
                         raise_on_pause=True,
                         raise_on_cancel=True,
+                        raise_on_epoch_stale=True,
                     )
                 except (PauseRequested, CancelRequested):
                     report_status_trace("writing", "检测到任务控制停止，终止本次流式生成")
@@ -681,8 +690,9 @@ def _stream_artifact_live(
                     stream_session.on_content(live_content)
     except Exception as exc:
         from app.services.execution_control import CancelRequested, PauseRequested
+        from app.services.foreground_execution import EpochStale
 
-        if isinstance(exc, (PauseRequested, CancelRequested)):
+        if isinstance(exc, (EpochStale, PauseRequested, CancelRequested)):
             report_status_trace("writing", "检测到任务控制停止，终止本次流式生成")
             aborted = True
         elif is_stream_transport_error(exc):

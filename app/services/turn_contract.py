@@ -92,27 +92,19 @@ def augment_intervention_from_planning(
     if isinstance(raw_contract, dict) and raw_contract.get("primary_op"):
         return payload
 
-    tools = {str(t).strip() for t in (result.get("selected_tools") or []) if str(t).strip()}
-    wi = result.get("writing_intent") if isinstance(result.get("writing_intent"), dict) else {}
-    action = str(wi.get("action") or result.get("writing_action") or "").strip()
+    from app.services.writing.intent_parser import parse_intent_from_planning
 
-    if (
-        "read_text_artifact" in tools
-        and "edit_text_artifact" in tools
-        and (not wi.get("enabled") or action == "edit_plot")
-    ):
-        outline_name = str(
-            getattr(settings, "MANUSCRIPT_DEFAULT_OUTLINE", "outline.txt")
-        )
-        force = steer_planning_turn or bool(payload.get("require_planning_after_steer"))
+    intent = parse_intent_from_planning(result, payload)
+    if intent and intent.action in ("edit_plot", "review_outline", "reset_body", "rewrite_outline"):
+        if steer_planning_turn and intent.action == "edit_plot" and not intent.force:
+            intent.force = True
         return apply_intervention_to_payload(
             payload,
             {
-                "action": "edit_plot",
-                "force": force,
-                "reason": str(result.get("steer_intent_summary") or ""),
-                "edit_spec": {"filename": outline_name},
-                "tools": ["read_text_artifact", "edit_text_artifact"],
+                "action": intent.action,
+                "force": intent.force,
+                "reason": intent.reason,
+                "intent_anchor": intent.anchor.to_dict(),
             },
         )
     return payload
@@ -150,16 +142,20 @@ def _contract_from_intervention(
     *,
     steer_planning_turn: bool,
 ) -> dict[str, Any]:
+    from app.services.writing.command_builder import build_writing_command
+    from app.services.writing.intent_parser import parse_intent_from_intervention
+
     action = str(intervention.get("action") or "")
-    spec = dict(intervention.get("edit_spec") or payload.get("edit_plot_spec") or {})
-    tools = list(intervention.get("tools") or payload.get("selected_tools") or [])
-    tools = [str(t) for t in tools if str(t) not in WRITING_TOOL_NAMES]
+    intent = parse_intent_from_intervention(intervention)
+    tools = [str(t) for t in (payload.get("selected_tools") or []) if str(t) not in WRITING_TOOL_NAMES]
 
     if action == "edit_plot":
-        filename = str(
-            spec.get("filename")
-            or getattr(settings, "MANUSCRIPT_DEFAULT_OUTLINE", "outline.txt")
+        command = build_writing_command(
+            {"input_payload": payload, "mission": payload.get("mission") or {}},
+            intent=intent,
         )
+        filename = command.target_filename
+        has_anchor = bool(command.edit_spec.get("old_text"))
         ops: list[dict[str, Any]] = [
             {
                 "op": "read",
@@ -170,7 +166,7 @@ def _contract_from_intervention(
                 "op": "edit",
                 "tool": "edit_text_artifact",
                 "target": filename,
-                "anchor": "from_read" if not spec.get("old_text") else "exact",
+                "anchor": "exact" if has_anchor else "from_read",
             },
         ]
         return {
@@ -248,17 +244,12 @@ def _contract_from_planning_signals(
     tools = [str(t) for t in (result.get("selected_tools") or []) if str(t) not in WRITING_TOOL_NAMES]
     action = str(wi.get("action") or "append_body")
 
-    if (
-        "read_text_artifact" in tools
-        and "edit_text_artifact" in tools
-        and (not wi.get("enabled") or action == "edit_plot")
-    ):
+    if not wi.get("enabled") and action == "edit_plot":
         return _contract_from_intervention(
             {
                 "action": "edit_plot",
                 "force": steer_planning_turn,
-                "edit_spec": {},
-                "tools": tools,
+                "intent_anchor": {},
             },
             payload,
             steer_planning_turn=steer_planning_turn,
@@ -314,25 +305,16 @@ def materialize_writing_intent_from_contract(
         intent["contract_source"] = True
         return intent
 
-    if primary == "edit_plot":
-        spec = dict((state.get("input_payload") or {}).get("edit_plot_spec") or {})
-        return {
-            "enabled": False,
-            "action": "edit_plot",
-            "source": "turn_contract",
-            "mission_step": step,
-            "edit_spec": spec,
-            "contract_source": True,
-        }
+    from app.services.writing.command_builder import COMMAND_ACTIONS
+    from app.services.writing.command_builder import build_writing_command
+    from app.services.writing.command_intent import command_to_writing_intent
 
-    if primary == "review_outline":
-        return {
-            "enabled": False,
-            "action": "review_outline",
-            "source": "turn_contract",
-            "mission_step": step,
-            "contract_source": True,
-        }
+    if primary in COMMAND_ACTIONS:
+        command = build_writing_command(state, action=primary)
+        intent = command_to_writing_intent(command, mission_step=step)
+        intent["contract_source"] = True
+        intent["source"] = "turn_contract"
+        return intent
 
     if primary == "batch_unit_quality":
         return {
@@ -343,23 +325,18 @@ def materialize_writing_intent_from_contract(
             "contract_source": True,
         }
 
-    if primary in ("write_outline", "reset_body", "append_body", "write_body"):
+    if primary in ("append_body",):
         from app.domain.mission import StepPolicy
 
         policy = StepPolicy.from_dict(mission.get("step_policy") or {})
-        enabled = primary != "review_outline"
-        intent: dict[str, Any] = {
-            "enabled": enabled,
+        return {
+            "enabled": True,
             "action": primary,
             "source": "turn_contract",
             "mission_step": step,
             "contract_source": True,
+            "target_chars": policy.chars_per_step,
         }
-        if primary == "write_outline":
-            intent["target_chars"] = policy.outline_max_chars
-        elif primary in ("append_body", "write_body", "reset_body"):
-            intent["target_chars"] = policy.chars_per_step
-        return intent
 
     return {
         "enabled": False,
@@ -374,8 +351,14 @@ def apply_turn_contract_to_payload(
     payload: dict[str, Any],
     contract: dict[str, Any],
 ) -> dict[str, Any]:
-    """Persist contract and align tool routing fields on payload."""
+    """Persist contract; tool routing for command-driven ops is deferred to executor."""
     out = {**payload, "turn_contract": contract}
+    primary = str(contract.get("primary_op") or "")
+    from app.services.writing.command_builder import COMMAND_ACTIONS
+
+    if primary in COMMAND_ACTIONS and out.get("writing_command"):
+        return out
+
     tools = contract_tool_names(out)
     if tools:
         out["selected_tools"] = tools
@@ -418,10 +401,15 @@ def finalize_turn_execution_plan(
             or contract_blocks_writing(payload)
             or primary in ("batch_unit_quality", "pause", "edit_plot", "review_outline")
         )
+        from app.services.writing.command_builder import COMMAND_ACTIONS
+
         if use_contract_intent:
-            payload["writing_intent"] = materialize_writing_intent_from_contract(
-                contract, state, mission=mission
-            )
+            if primary in COMMAND_ACTIONS and (payload.get("writing_command") or payload.get("writing_intent_record")):
+                payload.pop("writing_intent", None)
+            else:
+                payload["writing_intent"] = materialize_writing_intent_from_contract(
+                    contract, state, mission=mission
+                )
         else:
             from app.services.mission_schema import resolve_writing_intent_for_step
 
@@ -551,6 +539,155 @@ def record_contract_fulfilled(state: AgentState) -> None:
     get_metrics_service().inc_contract_event("fulfilled")
 
 
+def outline_artifact_status(state: dict[str, Any]) -> dict[str, Any]:
+    """Resolve outline artifact on disk/state (existence, not merely byte threshold)."""
+    task_id = str(state.get("task_id") or "")
+    stored = state.get("manuscript") if isinstance(state.get("manuscript"), dict) else {}
+    from app.services.manuscript_service import resolve_manuscript
+
+    ms = resolve_manuscript(task_id, stored or None) if task_id else None
+    if ms is None:
+        from app.services.manuscript_service import Manuscript
+
+        ms = Manuscript(task_id=task_id or "unknown")
+    path = str(ms.outline_path or stored.get("outline_path") or "").strip()
+    nbytes = max(int(ms.outline_bytes or 0), int(stored.get("outline_bytes") or 0))
+    on_disk = bool(ms.outline_path)
+    exists = bool(path) and (on_disk or nbytes > 0)
+    return {
+        "outline_path": path or None,
+        "outline_bytes": nbytes,
+        "outline_exists": exists,
+    }
+
+
+def steer_replan_outline_plan(state: dict[str, Any], *, steer: str) -> dict[str, Any]:
+    """
+    Steer replan outline routing (step 3):
+    outline file exists → edit_plot; otherwise → full write_outline with steer constraints.
+    """
+    status = outline_artifact_status(state)
+    steer = str(steer or "").strip()
+    if status["outline_exists"]:
+        return {
+            "plan": [
+                "read outline for anchors",
+                "edit plot per user steer",
+                "align written body if needed",
+            ],
+            "writing_intent": {"enabled": False, "action": "edit_plot"},
+            "mission_intervention": {
+                "action": "edit_plot",
+                "force": True,
+                "reason": steer[:240],
+                "intent_anchor": {
+                    "steer_correction": steer[-2000:],
+                    "target_hint": "outline",
+                },
+            },
+            "work_plan_patch": {
+                "cancel_kinds": ["write_outline", "append_body"],
+                "prepend": [{"kind": "edit_plot", "title": "edit plot per steer"}],
+            },
+            "skip_retrieval": True,
+            "risk_level": "LOW",
+            "parser_fallback": True,
+            "fallback_reason": "steer_replan_edit_plot",
+            "steer_outline_route": "modify",
+        }
+
+    return {
+        "plan": [
+            "write outline per steer constraints",
+            "append body via mission loop",
+        ],
+        "writing_intent": {
+            "enabled": True,
+            "action": "write_outline",
+            "reason": steer[:240],
+        },
+        "mission_intervention": {
+            "action": "rewrite_outline",
+            "force": True,
+            "reason": steer[:240],
+        },
+        "work_plan_patch": {
+            "cancel_kinds": ["append_body", "edit_plot"],
+            "prepend": [{"kind": "write_outline", "title": "write outline per steer"}],
+        },
+        "skip_retrieval": False,
+        "risk_level": "LOW",
+        "parser_fallback": True,
+        "fallback_reason": "steer_replan_write_outline",
+        "steer_outline_route": "rewrite",
+    }
+
+
+def apply_steer_replan_outline_route(
+    state: dict[str, Any],
+    planning_result: dict[str, Any],
+) -> dict[str, Any]:
+    """After planning LLM: enforce exists→modify / missing→rewrite."""
+    payload = dict(state.get("input_payload") or {})
+    from app.services.mission_steer import planning_steer_replan_active
+
+    if not planning_steer_replan_active(payload, state):
+        return planning_result
+
+    steer = str(payload.get("latest_steer_message") or payload.get("goal") or "").strip()
+    if not steer:
+        return planning_result
+
+    mission = state.get("mission") or payload.get("mission")
+    if not isinstance(mission, dict) or str(mission.get("kind") or "").lower() != "writing":
+        return planning_result
+
+    routed = steer_replan_outline_plan(state, steer=steer)
+    out = dict(planning_result)
+    for key in (
+        "plan",
+        "writing_intent",
+        "mission_intervention",
+        "work_plan_patch",
+        "skip_retrieval",
+        "fallback_reason",
+        "steer_outline_route",
+        "parser_fallback",
+    ):
+        if key in routed:
+            out[key] = routed[key]
+    out["risk_level"] = str(out.get("risk_level") or routed.get("risk_level") or "LOW")
+    return out
+
+
+def steer_replan_planning_fallback_from_state(
+    state: dict[str, Any] | None,
+) -> Optional[dict[str, Any]]:
+    """
+    Steer replan on writing missions: route outline by artifact existence.
+
+    Intent comes from latest_steer_message; action is deterministic (modify vs rewrite).
+    """
+    if not isinstance(state, dict):
+        return None
+
+    payload = dict(state.get("input_payload") or {})
+    from app.services.mission_steer import planning_steer_replan_active
+
+    if not planning_steer_replan_active(payload, state):
+        return None
+
+    steer = str(payload.get("latest_steer_message") or "").strip()
+    if not steer:
+        return None
+
+    mission = state.get("mission") or payload.get("mission")
+    if not isinstance(mission, dict) or str(mission.get("kind") or "").lower() != "writing":
+        return None
+
+    return steer_replan_outline_plan(state, steer=steer)
+
+
 def planning_fallback_from_state(state: dict[str, Any] | None) -> Optional[dict[str, Any]]:
     """
     Deterministic planning payload when the model returns empty or non-JSON output.
@@ -596,9 +733,26 @@ def planning_fallback_from_state(state: dict[str, Any] | None) -> Optional[dict[
     if batch_fb:
         return batch_fb
 
+    def _failed_edit_plot() -> bool:
+        return any(
+            str(row.get("kind") or "") == "edit_plot"
+            and str(row.get("status") or "") == "failed"
+            for row in items
+            if isinstance(row, dict)
+        )
+
     edit_plot_pending = _pending_kind("edit_plot") or (
         intervention and str(intervention.get("action")) == "edit_plot"
     )
+    retry_blocked = bool((payload.get("command_retry_blocked") or {}).get("blocked"))
+    if edit_plot_pending and (_failed_edit_plot() or retry_blocked):
+        edit_plot_pending = False
+
+    from app.services.mission_steer import steer_requires_planning
+
+    if steer_requires_planning(payload):
+        return None
+
     if edit_plot_pending or (
         outline_bytes > 0
         and (payload.get("require_planning_after_steer") or payload.get("steer_applied_at"))
@@ -610,14 +764,12 @@ def planning_fallback_from_state(state: dict[str, Any] | None) -> Optional[dict[
                 "edit plot per user steer",
                 "align written body if needed",
             ],
-            "selected_tools": ["read_text_artifact", "edit_text_artifact"],
             "writing_intent": {"enabled": False, "action": "edit_plot"},
             "mission_intervention": {
                 "action": "edit_plot",
                 "force": True,
-                "edit_spec": {"filename": outline_path},
-                "tools": ["read_text_artifact", "edit_text_artifact"],
                 "reason": goal[:240],
+                "intent_anchor": {"target_hint": "outline"},
             },
             "skip_retrieval": True,
             "risk_level": "LOW",

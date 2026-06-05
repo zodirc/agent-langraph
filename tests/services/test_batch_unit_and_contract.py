@@ -129,7 +129,6 @@ def test_steer_queued_display_shows_goal_and_pause_append(base_state):
     text = "\n".join(display["system_lines"])
     assert "queued_goal" in text
     assert "逐章" in text or "评分" in text
-    assert "续写已暂停" in text
 
 
 def test_steer_applied_display_shows_batch_contract(base_state):

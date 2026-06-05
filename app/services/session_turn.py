@@ -50,6 +50,8 @@ def _reset_execution_fields(state: AgentState, payload: dict[str, Any]) -> Agent
     from app.services.reasoning_shortcut import clear_turn_carryover
 
     payload = clear_turn_carryover({**payload, "conversation_history": history})
+    preserve_mission = bool(state.get("mission")) and not payload.get("mission_suspended")
+    mission_step = int(state.get("mission_step") or 0) if preserve_mission else 0
     return merge_state(
         state,
         input_payload=payload,
@@ -73,7 +75,7 @@ def _reset_execution_fields(state: AgentState, payload: dict[str, Any]) -> Agent
         structured_output=None,
         errors=[],
         retry_count=0,
-        mission_step=0,
+        mission_step=mission_step,
         observation=None,
         step_decision=None,
         mission_control=None,
@@ -142,8 +144,9 @@ def prepare_session_turn(
             if load_session_turn_policy_config().audit_decisions:
                 merged["turn_policy_decision"] = decision.to_dict()
 
-            if decision.intent == "resume_mission":
+            if decision.intent in ("resume_mission", "supersede_active_mission"):
                 merged = restore_archived_mission(existing, merged)
+            if decision.intent == "resume_mission":
                 from app.services.mission_execution import (
                     is_mechanical_resume_decision,
                     issue_execution_grant_to_payload,
@@ -176,7 +179,17 @@ def prepare_session_turn(
                     goal_requests_outline_read,
                 )
 
-                if not goal_is_mission_status_query(goal):
+                from app.services.manuscript_service import is_continue_writing_goal
+                from app.services.mission_execution import is_mechanical_resume_decision
+
+                skip_steer_apply = goal_is_mission_status_query(goal) or (
+                    is_continue_writing_goal(goal)
+                    or (
+                        decision.intent == "resume_mission"
+                        and is_mechanical_resume_decision(decision)
+                    )
+                )
+                if not skip_steer_apply:
                     steer_state = merge_state(
                         existing,
                         input_payload=merged,
@@ -192,6 +205,16 @@ def prepare_session_turn(
                         skip_history_append=True,
                         persist=False,
                     )
+                    if decision.intent == "supersede_active_mission":
+                        from app.services.mission_supersede import (
+                            finalize_steer_for_supersede_replan,
+                        )
+
+                        steer_state = finalize_steer_for_supersede_replan(
+                            steer_state,
+                            source="session_turn",
+                            steer_text=goal,
+                        )
                     merged = dict(steer_state.get("input_payload") or merged)
                     history = list(
                         steer_state.get("conversation_history")

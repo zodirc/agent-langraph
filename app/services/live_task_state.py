@@ -18,6 +18,7 @@ class LiveTaskEntry:
     running: bool = True
     run_id: str | None = None
     control_state: str = CONTROL_IDLE
+    foreground_epoch: int = 0
     active_step_id: str | None = None
     active_generation_id: str | None = None
 
@@ -48,6 +49,7 @@ def register_live(
             running=True,
             run_id=run_id,
             control_state=control_state,
+            foreground_epoch=int(ctx.get("foreground_epoch") or 0),
             active_step_id=str(active.get("step_id") or "") or None,
             active_generation_id=str(active.get("generation_id") or "") or None,
         )
@@ -70,6 +72,7 @@ def touch_live(state: AgentState) -> None:
             str(active.get("generation_id") or "") or entry.active_generation_id
         )
         entry.control_state = str(ctx.get("control_state") or entry.control_state)
+        entry.foreground_epoch = int(ctx.get("foreground_epoch") or entry.foreground_epoch)
 
 
 def touch_live_control(
@@ -118,6 +121,7 @@ def get_live(task_id: str) -> Optional[LiveTaskEntry]:
             running=entry.running,
             run_id=entry.run_id,
             control_state=entry.control_state,
+            foreground_epoch=entry.foreground_epoch,
             active_step_id=entry.active_step_id,
             active_generation_id=entry.active_generation_id,
         )

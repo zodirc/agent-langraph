@@ -356,26 +356,60 @@ def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[
     pending_contract = _turn_contract_display(payload)
 
     if queued:
+        preempt_active = False
+        replanning = False
+        ctx = state.get("interrupt_context") or {}
+        if isinstance(ctx, dict):
+            control = str(ctx.get("control_state") or "")
+            preempt_active = control == "INTERRUPT_REQUESTED"
+            replanning = control == "REPLANNING"
         lines = [
-            "steer_queued: will apply after the current mission step completes",
+            "steer_queued: replanning — old plan discarded, awaiting new planning"
+            if replanning
+            else (
+                "steer_queued: foreground preempt active — current generation will stop"
+                if preempt_active
+                else "steer_queued: will apply after the current mission step completes"
+            ),
             f"queue_depth={depth}",
-            "不会自动续跑；当前步结束后消费队列。",
+            "不会自动续跑；已废弃旧 step 提交权，将按最新约束重新规划（非 append）。"
+            if (preempt_active or replanning)
+            else "不会自动续跑；当前步结束后消费队列。",
         ]
-        if contract_line:
-            lines.append(f"queued_intent: {contract_line}")
+        if preview:
+            lines.append(f"queued_goal: {preview}")
         elif str((intervention or {}).get("action") or "") == "batch_unit_quality":
             lines.append("queued_intent: 逐章质量审阅（消费后将取消 pending 续写项）")
         elif str((pending_contract or {}).get("primary_op") or "") == "batch_unit_quality":
             lines.append("queued_intent: 逐章质量审阅（消费后将取消 pending 续写项）")
-        else:
-            if preview:
-                lines.append(f"queued_goal: {preview}")
-            if status_inquiry:
-                lines.append(build_mission_status_answer(state))
-            else:
-                lines.append("续写已暂停直至队列消费；消费后将重新规划（非自动 append 下一章）。")
+        if contract_line and (preempt_active or replanning) and preview:
+            lines.append(f"supersedes_plan: {contract_line}")
+        elif contract_line and not preview:
+            lines.append(f"queued_intent: {contract_line}")
+        if status_inquiry:
+            lines.append(build_mission_status_answer(state))
+        elif not preview and not contract_line:
+            lines.append("续写已暂停直至队列消费；消费后将重新规划（非自动 append 下一章）。")
     else:
         lines = ["steer_applied: 插入/纠偏已写入任务状态"]
+        replan_pending = bool(payload.get("require_planning_after_steer")) and not payload.get(
+            "steer_planning_done"
+        )
+        ctx = state.get("interrupt_context") or {}
+        replanning = isinstance(ctx, dict) and str(ctx.get("control_state") or "") == "REPLANNING"
+        if replan_pending or pause_reason == "foreground_replan" or replanning:
+            lines.append(
+                "steer_replan_pending: 纠偏已生效，旧计划已作废；将重新规划（非 append 续写）。"
+            )
+            steer_preview = str(payload.get("latest_steer_message") or preview or "").strip()
+            if steer_preview:
+                lines.append(f"steer_goal: {steer_preview[:200]}")
+            rev = payload.get("intent_revision")
+            if rev:
+                lines.append(f"intent_revision: {rev}")
+            fg = (ctx.get("foreground_operation") or {}) if isinstance(ctx, dict) else {}
+            if fg.get("status"):
+                lines.append(f"foreground_op: {fg.get('kind')} / {fg.get('status')}")
         if contract_line:
             lines.append(contract_line)
         if pause_reason == "worker_lost":
@@ -383,7 +417,10 @@ def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[
                 "执行器已中断：不会自动写作；续跑请 /resume 或发送「继续写作」。"
             )
         elif str(state.get("status") or "") == "MISSION_PAUSED":
-            lines.append("任务已暂停：续跑请 /resume 或发送「继续写作」。")
+            if replan_pending or replanning:
+                lines.append("纠偏已接管前台：将启动重新规划（/supersede，非 /resume）。")
+            else:
+                lines.append("任务已暂停：续跑请 /resume 或发送「继续写作」。")
         if status_inquiry:
             lines.append(build_mission_status_answer(state))
         if intervention and intervention.get("reason"):
@@ -391,11 +428,21 @@ def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[
         elif intervention and intervention.get("action"):
             lines.append(f"mission_intervention.action={intervention['action']}")
 
+    from app.services.mission_supersede import is_supersede_replan_pending
+
+    supersede_stream_recommended = (
+        not queued
+        and is_supersede_replan_pending(payload, state)
+        and str(state.get("status") or "") == "MISSION_PAUSED"
+    )
+
     return {
         "kind": "steer_queued" if queued else "steer_applied",
         "system_lines": lines,
+        "supersede_stream_recommended": supersede_stream_recommended,
         "display": {
             "queued": queued,
+            "supersede_stream_recommended": supersede_stream_recommended,
             "queue_depth": depth,
             "status": state.get("status"),
             "intervention": intervention,

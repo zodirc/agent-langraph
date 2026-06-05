@@ -16,8 +16,10 @@ def test_apply_intervention_edit_plot_with_null_tool_params():
         {
             "action": "edit_plot",
             "force": True,
-            "edit_spec": {"filename": "outline.txt"},
+            "intent_anchor": {"target_hint": "outline"},
         },
     )
-    assert isinstance(payload.get("tool_params"), dict)
-    assert "read_text_artifact" in payload["tool_params"]
+    command = payload.get("writing_command") or {}
+    assert command.get("action") == "edit_plot"
+    assert command.get("target_filename") == "outline.txt"
+    assert "read_text_artifact" not in (payload.get("selected_tools") or [])

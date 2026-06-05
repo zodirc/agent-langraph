@@ -15,6 +15,7 @@ class TaskControl:
     stream_interrupted: bool = False
     pause_requested: bool = False
     cancel_requested: bool = False
+    foreground_epoch: int = 0
     requested_at: str | None = None
     requested_by: str | None = None
     reason: str | None = None
@@ -42,12 +43,26 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def register_task_control(task_id: str, run_id: str) -> TaskControl:
+def register_task_control(
+    task_id: str,
+    run_id: str,
+    *,
+    foreground_epoch: int = 0,
+) -> TaskControl:
     """Register a fresh control handle when a graph run starts."""
-    control = TaskControl(task_id=str(task_id), run_id=str(run_id))
+    control = TaskControl(
+        task_id=str(task_id),
+        run_id=str(run_id),
+        foreground_epoch=max(0, int(foreground_epoch or 0)),
+    )
     with _lock:
         _control_by_task[str(task_id)] = control
     return control
+
+
+def sync_task_control_epoch(task_id: str, epoch: int) -> Optional[TaskControl]:
+    """Bump in-process control epoch so late streams cannot commit."""
+    return _mutate(str(task_id), foreground_epoch=max(0, int(epoch or 0)))
 
 
 def _mutate(task_id: str, **updates: object) -> Optional[TaskControl]:
@@ -67,6 +82,7 @@ def _mutate(task_id: str, **updates: object) -> Optional[TaskControl]:
             stream_interrupted=control.stream_interrupted,
             pause_requested=control.pause_requested,
             cancel_requested=control.cancel_requested,
+            foreground_epoch=control.foreground_epoch,
             requested_at=control.requested_at,
             requested_by=control.requested_by,
             reason=control.reason,
@@ -177,6 +193,7 @@ def snapshot_task_control(task_id: str) -> Optional[TaskControl]:
             stream_interrupted=control.stream_interrupted,
             pause_requested=control.pause_requested,
             cancel_requested=control.cancel_requested,
+            foreground_epoch=control.foreground_epoch,
             requested_at=control.requested_at,
             requested_by=control.requested_by,
             reason=control.reason,

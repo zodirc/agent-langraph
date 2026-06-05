@@ -51,9 +51,9 @@ def should_force_slow_reasoning_after_write(
     audit: dict[str, Any],
     *,
     tool_results: list[Any] | None,
-    revision_intent: bool = False,
+    material_command: bool = False,
 ) -> bool:
-    if revision_intent:
+    if material_command:
         return True
     if writing_tool_results_ok(tool_results):
         return False

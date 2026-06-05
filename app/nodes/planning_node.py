@@ -66,12 +66,20 @@ def _outline_status_for_planning(state: AgentState, payload: dict[str, Any]) -> 
     outline_bytes = max(int(ms.outline_bytes or 0), int(stored.get("outline_bytes") or 0))
     min_outline = int(getattr(settings, "MANUSCRIPT_MIN_OUTLINE_CHARS", 80))
     body_bytes = max(int(ms.body_bytes or 0), int(stored.get("body_bytes") or 0))
+    from app.services.turn_contract import outline_artifact_status
+
+    artifact = outline_artifact_status(
+        {"task_id": state["task_id"], "manuscript": ms.to_dict()}
+    )
+    outline_path = artifact.get("outline_path") or ms.outline_path or stored.get("outline_path")
+    outline_exists = bool(artifact.get("outline_exists"))
     return {
-        "outline_path": ms.outline_path or stored.get("outline_path"),
+        "outline_path": outline_path,
         "outline_bytes": outline_bytes,
         "outline_complete": outline_bytes >= min_outline,
+        "outline_exists": outline_exists,
         "body_bytes": body_bytes,
-        "steer_should_patch_not_rewrite": outline_bytes >= min_outline,
+        "steer_should_patch_not_rewrite": outline_exists,
     }
 
 
@@ -139,6 +147,40 @@ def planning_node(state: AgentState) -> AgentState:
 
         state = run_pre_planning_pipeline(state)
         payload = dict(state.get("input_payload") or {})
+        from app.services.mission_handoff import (
+            detect_handoff_planning_loop,
+            record_planning_handoff_attempt,
+        )
+        from app.services.mission_steer import (
+            planning_steer_replan_active,
+            steer_requires_planning,
+        )
+
+        payload = record_planning_handoff_attempt(payload, state)
+        state = merge_state(state, input_payload=payload)
+        payload = dict(state.get("input_payload") or {})
+
+        if state.get("mission") and detect_handoff_planning_loop(payload, state):
+            from app.services.mission_schema import apply_mission_step_to_payload
+            from app.services.mission_steer import complete_steer_planning
+
+            if not payload.get("steer_planning_done"):
+                payload = complete_steer_planning(payload)
+            payload = apply_mission_step_to_payload(
+                merge_state(state, input_payload=payload, manuscript=ms.to_dict())
+            )
+            payload["skip_planning_llm"] = True
+            state = merge_state(
+                state,
+                input_payload=payload,
+                audit_log=append_audit(
+                    state,
+                    "planning",
+                    "handoff_loop_detected",
+                    {"contract": (payload.get("turn_contract") or {}).get("primary_op")},
+                ),
+            )
+            payload = dict(state.get("input_payload") or {})
 
         if should_skip_planning_llm(state):
             intent = {
@@ -185,15 +227,15 @@ def planning_node(state: AgentState) -> AgentState:
             get_state_store().save(updated)
             return updated
 
-        from app.services.mission_steer import complete_steer_planning, steer_requires_planning
+        from app.services.mission_steer import complete_steer_planning
 
-        steer_planning_turn = steer_requires_planning(payload)
+        steer_planning_turn = planning_steer_replan_active(payload, state)
         mission_before_steer = dict(state.get("mission") or payload.get("mission") or {})
 
         if (
             payload.get("skip_planning_llm")
             and state.get("mission")
-            and not steer_requires_planning(payload)
+            and not planning_steer_replan_active(payload, state)
         ):
             from app.services.mission_schema import resolve_writing_intent_for_step
 
@@ -253,9 +295,27 @@ def planning_node(state: AgentState) -> AgentState:
 
         replan_feedback = payload.get("route_audit_replan_feedback")
         plan_validation_feedback = payload.get("plan_validation_feedback")
+        steer_planning_active = steer_planning_turn
+        steer_text = str(payload.get("latest_steer_message") or "").strip()
         goal_for_planning = str(
-            payload.get("goal") or payload.get("query") or payload.get("question") or ""
+            payload.get("goal")
+            or payload.get("query")
+            or payload.get("question")
+            or ""
         )
+        if steer_text and steer_planning_active:
+            goal_for_planning = (
+                "[STEER_REPLAN: 用户中途纠偏，以此为准重新规划；"
+                "不要机械续写 append_body；按纠偏内容选 edit_plot / mission_intervention]\n"
+                f"{steer_text}"
+            )
+        elif steer_text:
+            goal_for_planning = steer_text
+        constraints = list(payload.get("writing_constraints") or [])
+        if steer_planning_active and constraints:
+            joined = "\n".join(str(c) for c in constraints if str(c).strip())
+            if joined and joined not in goal_for_planning:
+                goal_for_planning = f"{goal_for_planning}\n\n[writing_constraints]\n{joined}"
         mission_block_early = payload.get("mission") or state.get("mission") or {}
         from app.domain.packs.registry import resolve_mission_pack
 
@@ -282,7 +342,7 @@ def planning_node(state: AgentState) -> AgentState:
         )
         planning_payload = {
             "task_type": state.get("task_type"),
-            "goal": payload.get("goal") or payload.get("query") or payload.get("question"),
+            "goal": goal_for_planning,
             "context": payload.get("context", {}),
             "conversation_history": [],
             "session_turn": state.get("session_turn"),
@@ -297,7 +357,17 @@ def planning_node(state: AgentState) -> AgentState:
             "existing_mission": payload.get("mission") or state.get("mission"),
             "route_audit_replan_feedback": replan_feedback,
             "plan_validation_feedback": plan_validation_feedback,
+            "writing_constraints": constraints,
+            "latest_steer_message": payload.get("latest_steer_message"),
+            "steer_replan": steer_planning_active,
+            "intent_revision": payload.get("intent_revision"),
         }
+        if steer_planning_active and steer_text:
+            planning_payload["steer_replan_instruction"] = (
+                "steer_replan=true: latest_steer_message overrides resume/append. "
+                "Do not keep append_body if steer contradicts it. "
+                "Emit turn_contract primary_op edit_plot or mission_intervention as appropriate."
+            )
         from app.services.prompt_context_gateway import (
             context_governance_enabled,
             prepare_governed_user_json,
@@ -312,14 +382,21 @@ def planning_node(state: AgentState) -> AgentState:
                 conversation_history_from_state(state)
             )
             user_content = json.dumps(planning_payload, ensure_ascii=False)
-        from app.services.turn_contract import planning_fallback_from_state
+        from app.services.turn_contract import (
+            planning_fallback_from_state,
+            steer_replan_planning_fallback_from_state,
+        )
         from app.services.turn_contract_lifecycle import contract_replan_required
 
+        plan_state = merge_state(state, input_payload=payload, manuscript=ms.to_dict())
         result: dict[str, Any] | None = None
-        if contract_replan_required(payload):
-            fb = planning_fallback_from_state(
-                merge_state(state, input_payload=payload, manuscript=ms.to_dict())
-            )
+        if contract_replan_required(payload) and not steer_planning_active:
+            fb = planning_fallback_from_state(plan_state)
+            if fb:
+                result = dict(fb)
+
+        if result is None and steer_planning_active:
+            fb = steer_replan_planning_fallback_from_state(plan_state)
             if fb:
                 result = dict(fb)
 
@@ -371,6 +448,11 @@ def planning_node(state: AgentState) -> AgentState:
             result, merge_state(state, input_payload=payload, manuscript=ms.to_dict())
         )
 
+        if steer_planning_active and isinstance(result, dict):
+            from app.services.turn_contract import apply_steer_replan_outline_route
+
+            result = apply_steer_replan_outline_route(plan_state, result)
+
         from app.services.mission_intervention import apply_planning_intervention
 
         payload = apply_planning_intervention(
@@ -378,6 +460,10 @@ def planning_node(state: AgentState) -> AgentState:
         )
         if steer_planning_turn:
             payload = complete_steer_planning(payload)
+            from app.services.mission_supersede import settle_foreground_operation
+
+            state = settle_foreground_operation(merge_state(state, input_payload=payload))
+            payload = dict(state.get("input_payload") or payload)
             from app.services.mission_intervention import intervention_from_payload
             from app.services.mission.steer_replan import apply_work_plan_patch
             from app.services.mission_orchestrator import ensure_work_plan, orchestration_enabled
@@ -403,6 +489,7 @@ def planning_node(state: AgentState) -> AgentState:
                 result,
                 payload,
                 mission_before=mission_before_steer,
+                state=merge_state(state, input_payload=payload),
             ):
                 summary = build_steer_intent_summary(
                     result,
@@ -488,6 +575,7 @@ def planning_node(state: AgentState) -> AgentState:
                 result,
                 payload,
                 mission_before=mission_before_patch,
+                state=merge_state(state, input_payload=payload),
             ):
                 payload = apply_steer_confirmation_pending(
                     payload,
@@ -698,8 +786,19 @@ def planning_node(state: AgentState) -> AgentState:
                     ),
                 )
             )
-        if should_run_mission_runtime(updated, payload) and not state.get("mission"):
-            updated = init_mission_state(updated, payload)
+        if should_run_mission_runtime(updated, payload):
+            from app.services.mission_handoff import complete_mission_handoff
+
+            if state.get("mission"):
+                updated = complete_mission_handoff(
+                    updated, payload, source="planning_node"
+                )
+            else:
+                updated = init_mission_state(updated, payload)
+                payload_after = dict(updated.get("input_payload") or {})
+                payload_after["mission_handoff_completed"] = True
+                payload_after["mission_handoff_source"] = "planning_node_init"
+                updated = merge_state(updated, input_payload=payload_after)
             updated = merge_state(
                 updated,
                 status=TaskStatus.MISSION_RUNNING.value,

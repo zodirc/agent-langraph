@@ -401,7 +401,16 @@ def report_planning_input(state: dict[str, Any]) -> None:
     if not trace_verbose():
         return
     payload = state.get("input_payload") or {}
-    goal = str(payload.get("goal") or payload.get("query") or "")[:500]
+    from app.services.mission_steer import planning_steer_replan_active
+
+    goal = str(payload.get("goal") or payload.get("query") or "")
+    if planning_steer_replan_active(payload, state):
+        steer = str(payload.get("latest_steer_message") or "").strip()
+        if steer:
+            goal = (
+                "[STEER_REPLAN: 用户中途纠偏，以此为准重新规划]\n" + steer
+            )
+    goal = goal[:500]
     lines = [
         "【规划输入】",
         f"目标: {goal or '(空)'}",
@@ -576,7 +585,7 @@ def report_mission_snapshot_trace(state: dict[str, Any]) -> None:
         "chapter_index": intent.get("chapter_index"),
         "last_chapter_index": manuscript.get("last_chapter_index"),
         "revision": manuscript.get("revision"),
-        "revision_intent": (state.get("input_payload") or {}).get("revision_intent"),
+        "writing_command": (state.get("input_payload") or {}).get("writing_command"),
         "action": intent.get("action"),
     }
     report_block(

@@ -112,6 +112,50 @@ def test_compress_history_truncates(test_settings, monkeypatch):
     assert any(m.get("role") == "system" for m in out) or len(out) < 3
 
 
+def test_continue_resume_skips_steer_apply(test_settings, isolated_stores, monkeypatch):
+    import app.services.session_turn as st_mod
+
+    monkeypatch.setattr(st_mod, "settings", test_settings)
+    store = StateStore(test_settings.SQLITE_PATH)
+
+    state1, _ = prepare_session_turn(
+        session_id="sess-continue",
+        user_id="u1",
+        task_type="qa",
+        payload={
+            "goal": "写一篇谍战小说",
+            "execution_mode": "mission",
+            "mission": {"kind": "writing", "objective": "暗战"},
+        },
+    )
+    from app.runtime.state import merge_state
+
+    state1 = merge_state(
+        state1,
+        mission={"kind": "writing", "objective": "暗战"},
+        execution_mode="mission",
+        status=TaskStatus.MISSION_PAUSED.value,
+        input_payload={
+            **state1.get("input_payload", {}),
+            "turn_contract": {"primary_op": "write_outline"},
+            "goal": "写一篇谍战小说",
+        },
+    )
+    store.save(state1)
+
+    state2, created2 = prepare_session_turn(
+        session_id="sess-continue",
+        user_id="u1",
+        task_type="qa",
+        payload={"goal": "继续", "mission_auto": True},
+    )
+    assert created2 is False
+    ip = state2.get("input_payload") or {}
+    assert ip.get("latest_steer_message") in (None, "")
+    assert not ip.get("require_planning_after_steer")
+    assert ip.get("execution_grant") or ip.get("mission_suspended") is not True
+
+
 def test_finalize_turn_history_appends_assistant():
     state = {
         "task_id": "t1",
