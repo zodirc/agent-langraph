@@ -61,10 +61,6 @@ def oma_state(base_state, isolated_stores, test_settings, monkeypatch):
 
     monkeypatch.setattr(art.settings, "ARTIFACTS_PATH", test_settings.ARTIFACTS_PATH)
     monkeypatch.setattr(
-        "app.config.settings.settings.MISSION_WRITING_LLM_DECIDE",
-        False,
-    )
-    monkeypatch.setattr(
         "app.config.settings.settings.MISSION_OMA_DEFAULT_FOR_WRITING",
         True,
     )

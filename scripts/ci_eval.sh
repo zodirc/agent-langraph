@@ -72,11 +72,9 @@ case "$SUITE" in
       "$@"
     ;;
   intent_observation)
-    echo "==> eval suite: intent_observation + legacy mission"
+    echo "==> eval suite: intent_observation"
     exec "$PY" -m pytest \
       tests/services/test_intent_observation.py \
-      tests/services/test_legacy_mission_paths.py \
-      tests/services/test_legacy_manifest_ci.py \
       tests/eval/test_intent_observation_golden.py \
       tests/services/test_pre_planning.py \
       -q \
@@ -107,8 +105,6 @@ case "$SUITE" in
     echo "==> eval suite: intent_observation"
     "$PY" -m pytest \
       tests/services/test_intent_observation.py \
-      tests/services/test_legacy_mission_paths.py \
-      tests/services/test_legacy_manifest_ci.py \
       tests/eval/test_intent_observation_golden.py \
       -q \
       "$@"

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from app.config.prompts import MISSION_DECIDE_SYSTEM, MISSION_WRITING_DECIDE_SYSTEM
+from app.config.prompts import MISSION_DECIDE_SYSTEM
 from app.config.settings import settings
 from app.domain.mission import StepDecision
 from app.domain.packs.registry import get_domain_pack
@@ -145,12 +145,6 @@ def mission_decide_node(state: AgentState) -> AgentState:
     decision: StepDecision
     source = "rules"
 
-    from app.services.writing_phases import (
-        build_writing_decide_payload,
-        should_use_writing_llm_decide,
-        suggest_writing_phase_fallback,
-    )
-
     from app.services.mission_oma.orchestrator import (
         mechanical_step_decision,
         should_use_mission_oma,
@@ -158,12 +152,7 @@ def mission_decide_node(state: AgentState) -> AgentState:
     )
 
     use_oma = should_use_mission_oma(state)
-    use_writing_llm = should_use_writing_llm_decide(mission) and not use_oma
-    use_llm = (bool(getattr(settings, "MISSION_LLM_DECIDE", False)) or use_writing_llm) and not use_oma
-    if use_writing_llm:
-        from app.services.legacy_mission_paths import record_legacy_mission_path
-
-        record_legacy_mission_path("writing_llm_decide")
+    use_llm = bool(getattr(settings, "MISSION_LLM_DECIDE", False)) and not use_oma
 
     if use_oma:
         if eval_result.done and eval_result.action == "finish":
@@ -197,25 +186,12 @@ def mission_decide_node(state: AgentState) -> AgentState:
         get_state_store().save(updated)
         return updated
     elif use_llm:
-        decide_payload = (
-            build_writing_decide_payload(
-                state,
-                mission=mission,
-                progress=progress,
-                observation=observation,
-                eval_result=eval_result,
-            )
-            if use_writing_llm
-            else None
-        )
         llm_decision = _llm_step_decision(
             state,
             mission=mission,
             progress=progress,
             observation=observation,
             eval_result=eval_result,
-            system_prompt=MISSION_WRITING_DECIDE_SYSTEM if use_writing_llm else None,
-            user_payload=decide_payload,
         )
         if llm_decision is not None:
             if eval_result.done and eval_result.action == "finish":
@@ -228,28 +204,20 @@ def mission_decide_node(state: AgentState) -> AgentState:
                 decision = llm_decision
                 source = "llm"
         else:
-            decision = (
-                suggest_writing_phase_fallback(state)
-                if use_writing_llm
-                else _rule_step_decision(
-                    state,
-                    mission=mission,
-                    progress=progress,
-                    observation=observation,
-                    eval_result=eval_result,
-                )
-            )
-    else:
-        decision = (
-            suggest_writing_phase_fallback(state)
-            if use_writing_llm
-            else _rule_step_decision(
+            decision = _rule_step_decision(
                 state,
                 mission=mission,
                 progress=progress,
                 observation=observation,
                 eval_result=eval_result,
             )
+    else:
+        decision = _rule_step_decision(
+            state,
+            mission=mission,
+            progress=progress,
+            observation=observation,
+            eval_result=eval_result,
         )
 
     updated = merge_state(

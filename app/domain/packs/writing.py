@@ -177,12 +177,6 @@ class WritingPack(DomainPack):
         )
 
         if orchestration_enabled(mission):
-            from app.services.writing_phases import should_use_writing_llm_decide
-
-            if should_use_writing_llm_decide(mission):
-                from app.services.writing_phases import suggest_writing_phase_fallback
-
-                return suggest_writing_phase_fallback(state).to_dict()
             if work_plan_completed(state):
                 return {"action": "finish", "rationale": "orchestrated work plan done"}
             item = get_current_work_item(state)

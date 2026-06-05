@@ -33,9 +33,7 @@ def should_use_mission_oma(state: AgentState) -> bool:
     ).lower()
     if mode == "mission_oma":
         return True
-    if getattr(settings, "MISSION_OMA_DEFAULT_FOR_WRITING", True):
-        return not bool(getattr(settings, "MISSION_WRITING_LLM_DECIDE", True))
-    return False
+    return bool(getattr(settings, "MISSION_OMA_DEFAULT_FOR_WRITING", True))
 
 
 def build_turn_envelope(

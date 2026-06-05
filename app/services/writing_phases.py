@@ -1,8 +1,7 @@
-"""Writing mission phases — model-chosen micro-cycle (write
+"""Writing mission phases — micro-cycle (write / review / polish / …).
 
-review / polish / …).
-The mission_decide LLM picks `params.writing_phase` each step; mission_act maps it to
-writing_intent. Phases are optional and on-demand, not a fixed pipeline."""
+OMAW mechanical dispatch selects phases via work items; mission_act maps
+`params.writing_phase` to writing_intent. Phases are optional and on-demand."""
 
 from __future__ import annotations
 
@@ -26,7 +25,6 @@ from app.services.manuscript_context import (
     read_outline_text,
 )
 from app.services.manuscript_service import Manuscript, resolve_manuscript
-from app.services.mission_orchestrator import orchestration_enabled
 from app.services import writing_memory as wm
 
 PHASE_ACTIONS = frozenset(
@@ -121,29 +119,6 @@ def save_chapter_reviews(task_id: str, data: dict[str, Any]) -> None:
     wm.save_chapter_reviews(task_id, data)
 
 
-def should_use_writing_llm_decide(mission: dict[str, Any]) -> bool:
-    """Deprecated legacy path — blocked unless allow_legacy_writing_path=true."""
-    if str(mission.get("kind", "")).lower() != "writing":
-        return False
-    if not orchestration_enabled(mission):
-        return False
-    if getattr(settings, "MISSION_OMA_DEFAULT_FOR_WRITING", True):
-        enabled = bool(getattr(settings, "MISSION_WRITING_LLM_DECIDE", False))
-    elif getattr(settings, "MISSION_WRITING_LLM_DECIDE", True):
-        enabled = True
-    else:
-        enabled = bool(getattr(settings, "MISSION_LLM_DECIDE", False))
-    if not enabled:
-        return False
-    from app.services.legacy_mission_paths import (
-        legacy_writing_path_allowed,
-        record_legacy_mission_path,
-    )
-
-    record_legacy_mission_path("writing_llm_decide")
-    return legacy_writing_path_allowed()
-
-
 def resolve_chapter_index(state: AgentState, params: dict[str, Any]) -> int:
     raw = params.get("chapter_index")
     if raw is not None:
@@ -164,59 +139,6 @@ def resolve_chapter_index(state: AgentState, params: dict[str, Any]) -> int:
     from app.services.manuscript_context import parse_last_chapter_index
 
     return max(1, parse_last_chapter_index(body))
-
-
-def build_writing_decide_payload(
-    state: AgentState,
-    *,
-    mission: dict[str, Any],
-    progress: dict[str, Any],
-    observation: dict[str, Any],
-    eval_result: Any,
-) -> dict[str, Any]:
-    task_id = state["task_id"]
-    ms = resolve_manuscript(task_id, state.get("manuscript"))
-    structure = {}
-    try:
-        from app.services.manuscript_context import analyze_manuscript_structure
-
-        structure = analyze_manuscript_structure(
-            task_id,
-            body_path=ms.body_path or "novel.txt",
-            outline_path=ms.outline_path,
-            state=state,
-        )
-    except Exception:
-        structure = {}
-
-    ws = writing_state(progress)
-    bible = load_story_bible(task_id)
-    reviews = load_chapter_reviews(task_id)
-
-    return {
-        "mission": mission,
-        "progress": progress,
-        "observation": observation,
-        "mission_control_hint": eval_result.to_dict(),
-        "mission_step": state.get("mission_step"),
-        "manuscript": ms.to_dict() if hasattr(ms, "to_dict") else state.get("manuscript"),
-        "writing_state": ws,
-        "story_bible_excerpt": {
-            "chapter_keys": list((bible.get("chapters") or {}).keys())[-8:],
-            "open_threads": (bible.get("open_threads") or [])[:8],
-        },
-        "last_review_keys": list((reviews.get("reviews") or {}).keys())[-5:],
-        "structure": structure,
-        "available_phases": [
-            "write_outline",
-            "append_body",
-            "consistency_check",
-            "review_chapter",
-            "polish_chapter",
-            "chapter_summary",
-            "arc_checkpoint",
-        ],
-    }
 
 
 def normalize_writing_phase(raw: str) -> str:

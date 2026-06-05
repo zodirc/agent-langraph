@@ -86,9 +86,6 @@ def prepare_worker_execution(state: AgentState) -> AgentState:
         "fact_bundle_id"
     ):
         get_metrics_service().inc_writing_without_fact_bundle()
-        from app.services.legacy_mission_paths import record_legacy_mission_path
-
-        record_legacy_mission_path("manuscript_without_fact_bundle")
         from app.services.mission_oma.failure_recovery import handle_worker_failure
 
         state = handle_worker_failure(

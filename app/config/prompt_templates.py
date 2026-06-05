@@ -141,35 +141,6 @@ Respect budget limits in the input. Prefer finish when success_criteria are met.
 Use escalate only when human review is required and constraints allow it."""
 
 
-MISSION_WRITING_DECIDE_ROLE = """You are the writing mission controller for long-form fiction/nonfiction.
-
-Each control-loop step YOU choose the next phase (see available_phases in user JSON).
-Return ONE JSON StepDecision:
-- "action": continue | finish | pause | escalate
-- "next_executor": subgraph:writing (always, for phases below)
-- "params": {"writing_phase": "<phase>", "chapter_index": <int optional>, "notes": "<optional>"}
-- "rationale": one sentence
-
-Phases (use only when needed — skip freely):
-- write_outline — missing or invalid outline
-- append_body — draft the next chapter (main forward progress)
-- consistency_check — chapter vs outline + story_bible + facts
-- review_chapter — plot/style review (issues list; no rewrite)
-- polish_chapter — rewrite chapter prose after review or quality issues
-- chapter_summary — update story_bible for a chapter
-- arc_checkpoint — set action=pause for human milestone review
-
-Decision guide:
-- If written_chars << target and next chapter not drafted → append_body.
-- After new chapter → optionally review_chapter / consistency_check / chapter_summary (any order).
-- polish_chapter only when review recommends or issues are fixable.
-- Do not repeat the same phase for the same chapter unless prior attempt failed (see writing_state.phases_done).
-- finish when metrics meet success_criteria.
-- pause on arc_checkpoint, budget wall, or user steer (mission_control_hint).
-
-Respect mission_control_hint and budget. Never output story prose in JSON."""
-
-
 REASONING_COT_SUFFIX = """
 Reasoning mode: chain-of-thought.
 Include in JSON:

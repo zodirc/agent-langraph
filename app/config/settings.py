@@ -509,9 +509,6 @@ class Settings:
         self.MISSION_WRITING_MAX_STEPS = int(mission_cfg.get("writing_max_steps", 500))
         self.MISSION_OUTLINE_MAX_CHARS = int(mission_cfg.get("outline_max_chars", 12000))
         self.MISSION_LLM_DECIDE = _coerce_bool(mission_cfg.get("llm_decide", False))
-        self.MISSION_WRITING_LLM_DECIDE = _coerce_bool(
-            mission_cfg.get("writing_llm_decide", False)
-        )
         self.MISSION_WRITING_REVIEW_EVERY_CHAPTERS = int(
             mission_cfg.get("writing_review_every_chapters", 0)
         )
@@ -549,9 +546,6 @@ class Settings:
         )
         self.MISSION_REQUIRE_REVIEW_VERDICT = _coerce_bool(
             mission_cfg.get("require_review_verdict", True)
-        )
-        self.MISSION_ALLOW_LEGACY_WRITING_PATH = _coerce_bool(
-            mission_cfg.get("allow_legacy_writing_path", False)
         )
         worker_react = mission_cfg.get("worker_react") or {}
         if not isinstance(worker_react, dict):

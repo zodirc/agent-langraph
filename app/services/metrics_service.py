@@ -314,12 +314,6 @@ class MetricsService:
                     ["reason"],
                     **prom_kwargs,
                 )
-                self._prometheus["legacy_mission_path_total"] = Counter(
-                    "agent_legacy_mission_path_total",
-                    "Legacy mission writing path hits",
-                    ["path_id"],
-                    **prom_kwargs,
-                )
                 self._prometheus["writing_without_fact_bundle_total"] = Counter(
                     "agent_writing_without_fact_bundle_total",
                     "Writing worker runs without FactBundle",
@@ -985,14 +979,6 @@ class MetricsService:
         if self._prometheus and "intent_observation_fallback_total" in self._prometheus:
             self._prometheus["intent_observation_fallback_total"].labels(
                 reason=reason[:40]
-            ).inc()
-
-    def inc_legacy_mission_path(self, path_id: str) -> None:
-        key = f"legacy_mission:{path_id[:40]}"
-        self._counters[key] = self._counters.get(key, 0) + 1
-        if self._prometheus and "legacy_mission_path_total" in self._prometheus:
-            self._prometheus["legacy_mission_path_total"].labels(
-                path_id=path_id[:40]
             ).inc()
 
     def inc_writing_without_fact_bundle(self) -> None:

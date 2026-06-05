@@ -248,8 +248,6 @@ mission:
   max_failures: 3
   writing_max_steps: 500      # legacy alias; writing uses estimate or planner budget
   execution_mode: mission_oma
-  writing_llm_decide: false   # deprecated — OMAW mechanical dispatch only (ADR-001)
-  allow_legacy_writing_path: false
   require_fact_bundle: true
   require_review_verdict: true
   review_max_parallel: 3

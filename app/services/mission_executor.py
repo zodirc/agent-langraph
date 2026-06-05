@@ -248,7 +248,7 @@ def _mission_act_for_writing(
 
 
 def _dispatch_oma_act(state: AgentState, step_decision: dict) -> AgentState | None:
-    """OMAW paths — returns None when caller should use legacy pipeline."""
+    """OMAW dispatch for mission_act — returns None when OMAW is not active."""
     if not _oma_act_available(state):
         return None
 
@@ -296,9 +296,7 @@ def run_pipeline_request(state: AgentState) -> AgentState:
 
     mission = state.get("mission") or {}
     if str(mission.get("kind", "")).lower() == "writing":
-        from app.services.legacy_mission_paths import record_legacy_mission_path
-
-        record_legacy_mission_path("pipeline_reasoning_writing_fallback")
+        return run_subgraph_writing(state)
 
     from app.runtime.state import TaskStatus
     from app.services.mission_execution import build_mission_checkpoint_summary
