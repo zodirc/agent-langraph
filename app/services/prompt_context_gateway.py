@@ -142,40 +142,45 @@ def collect_context_items(
 
     items.append(working_memory_from_state(state).to_context_item())
 
-    digest = build_session_outcomes_digest(state)
-    if digest:
-        items.append(
-            ContextItem(
-                id=new_context_id("out"),
-                kind="working_memory",
-                source="session",
-                role="system",
-                content=digest,
-                priority="low",
-                compressible=True,
-                droppable=True,
-                bucket="working_memory",
+    if purpose == "intent_observation":
+        digest = build_session_outcomes_digest(state)
+        if digest:
+            items.append(
+                ContextItem(
+                    id=new_context_id("out"),
+                    kind="working_memory",
+                    source="session",
+                    role="system",
+                    content=digest,
+                    priority="low",
+                    compressible=True,
+                    droppable=True,
+                    bucket="working_memory",
+                )
             )
-        )
+
+    from app.services.context_fingerprint import registry_fingerprints, strict_dedupe_key
+
+    registry_fps = registry_fingerprints(state)
 
     for hit in (state.get("memory_hits") or [])[:8]:
         if not isinstance(hit, dict):
             continue
         text = str(hit.get("summary") or hit.get("content") or hit)[:2000]
-        items.append(
-            ContextItem(
-                id=new_context_id("mem"),
-                kind="episodic_memory",
-                source="memory",
-                role="system",
-                content=text,
-                priority="medium",
-                compressible=True,
-                droppable=True,
-                bucket="retrieved_memory",
-                meta={"memory_id": hit.get("id"), "score": hit.get("score")},
-            )
+        candidate = ContextItem(
+            id=new_context_id("mem"),
+            kind="episodic_memory",
+            source="memory",
+            role="system",
+            content=text,
+            priority="medium",
+            compressible=True,
+            droppable=True,
+            bucket="retrieved_memory",
+            meta={"memory_id": hit.get("id"), "score": hit.get("score")},
         )
+        if strict_dedupe_key(candidate) not in registry_fps:
+            items.append(candidate)
 
     for doc in (state.get("retrieved_knowledge") or [])[:12]:
         if not isinstance(doc, dict):
@@ -183,27 +188,27 @@ def collect_context_items(
         text = str(doc.get("content") or doc.get("text") or "")[:3000]
         if not text:
             continue
-        items.append(
-            ContextItem(
-                id=new_context_id("doc"),
-                kind="knowledge",
-                source="retrieval",
-                role="system",
-                content=text,
-                priority=(
-                    "medium"
-                    if purpose in ("reasoning", "writing", "reviewing")
-                    else "low"
-                ),
-                compressible=True,
-                droppable=purpose in ("planning", "routing"),
-                bucket="retrieved_knowledge",
-                meta={
-                    "doc_id": doc.get("doc_id") or doc.get("id"),
-                    "source": doc.get("source"),
-                },
-            )
+        candidate = ContextItem(
+            id=new_context_id("doc"),
+            kind="knowledge",
+            source="retrieval",
+            role="system",
+            content=text,
+            priority=(
+                "medium"
+                if purpose in ("reasoning", "writing", "reviewing")
+                else "low"
+            ),
+            compressible=True,
+            droppable=purpose in ("planning", "routing"),
+            bucket="retrieved_knowledge",
+            meta={
+                "doc_id": doc.get("doc_id") or doc.get("id"),
+                "source": doc.get("source"),
+            },
         )
+        if strict_dedupe_key(candidate) not in registry_fps:
+            items.append(candidate)
 
     for tool in (state.get("tool_results") or [])[:10]:
         if not isinstance(tool, dict):
@@ -212,33 +217,34 @@ def collect_context_items(
         status = tool.get("status", "?")
         result = tool.get("result")
         snippet = str(result)[:1200] if result is not None else ""
-        items.append(
-            ContextItem(
-                id=new_context_id("tool"),
-                kind="tool_output",
-                source="tool",
-                role="tool",
-                content=f"[{name}] {status}: {snippet}",
-                priority=(
-                    "high"
-                    if purpose in ("reasoning", "writing", "reviewing")
-                    else "low"
-                ),
-                compressible=True,
-                droppable=purpose in ("planning", "routing"),
-                bucket="tool_observations",
-                meta={"tool": name, "status": status},
-            )
+        candidate = ContextItem(
+            id=new_context_id("tool"),
+            kind="tool_output",
+            source="tool",
+            role="tool",
+            content=f"[{name}] {status}: {snippet}",
+            priority=(
+                "high"
+                if purpose in ("reasoning", "writing", "reviewing")
+                else "low"
+            ),
+            compressible=True,
+            droppable=purpose in ("planning", "routing"),
+            bucket="tool_observations",
+            meta={"tool": name, "status": status},
         )
+        if strict_dedupe_key(candidate) not in registry_fps:
+            items.append(candidate)
 
     from app.services.context_registry import registry_items_for_collection
 
     registry = registry_items_for_collection(state)
-    seen_ids = {i.id for i in items}
+    seen_keys = {strict_dedupe_key(i) for i in items}
     for reg_item in registry:
-        if reg_item.id not in seen_ids:
+        key = strict_dedupe_key(reg_item)
+        if key not in seen_keys:
             items.append(reg_item)
-            seen_ids.add(reg_item.id)
+            seen_keys.add(key)
 
     items.extend(collect_writing_context_items(state, purpose=purpose))
     items.extend(collect_code_agent_context_items(state))

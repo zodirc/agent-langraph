@@ -105,14 +105,23 @@ def working_memory_from_state(state: dict[str, Any] | None) -> WorkingMemory:
     if payload.get("risk_level"):
         constraints.append(f"risk_level={payload['risk_level']}")
 
+    executed = [str(a) for a in turn_facts.get("executed_actions") or []][:16]
+    pending = [
+        str(p)
+        for p in (turn_facts.get("pending_todos") or turn_facts.get("open_todos") or [])
+        if str(p) not in executed
+    ][:12]
+    if not pending and plan_steps:
+        pending = [p for p in plan_steps if p not in executed][:8]
+
     wm = WorkingMemory(
         goal=goal,
         hard_constraints=constraints,
         current_plan=plan_steps,
-        executed_actions=[str(a) for a in turn_facts.get("executed_actions") or []][:16],
+        executed_actions=executed,
         tool_outcomes=_tool_outcomes_from_turn_facts(turn_facts),
-        pending_todos=plan_steps,
-        open_risks=[],
+        pending_todos=pending,
+        open_risks=[str(r) for r in turn_facts.get("open_risks") or []][:8],
         mission_snapshot={
             "kind": mission.get("kind"),
             "status": mission.get("status"),

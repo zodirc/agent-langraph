@@ -144,6 +144,13 @@ const COMMAND_SUGGESTIONS = [
   { cmd: "/logout", hint: "退出登录" },
 ];
 let slashMenuActiveIndex = -1;
+const COMMAND_INPUT_HISTORY_KEY = "command_input_history_v1";
+const COMMAND_INPUT_HISTORY_MAX = 200;
+/** @type {string[]} */
+let commandInputHistory = [];
+let commandInputHistoryIndex = -1;
+let commandInputHistoryDraft = "";
+let commandInputHistoryApplying = false;
 const FLOW_PREFERRED_ORDER = [
   "planning",
   "retrieval",
@@ -4168,6 +4175,94 @@ async function handleCommand(raw) {
   sessionHasInFlightMission = false;
 }
 
+function loadCommandInputHistory() {
+  try {
+    const raw = sessionStorage.getItem(COMMAND_INPUT_HISTORY_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+    commandInputHistory = parsed
+      .filter((s) => typeof s === "string" && s.trim())
+      .slice(-COMMAND_INPUT_HISTORY_MAX);
+  } catch (_) {
+    /* ignore corrupt storage */
+  }
+}
+
+function persistCommandInputHistory() {
+  try {
+    sessionStorage.setItem(COMMAND_INPUT_HISTORY_KEY, JSON.stringify(commandInputHistory));
+  } catch (_) {
+    /* ignore quota errors */
+  }
+}
+
+function resetCommandInputHistoryNav() {
+  commandInputHistoryIndex = -1;
+  commandInputHistoryDraft = "";
+}
+
+function pushCommandInputHistory(text) {
+  const entry = String(text || "").trim();
+  if (!entry) return;
+  if (commandInputHistory.length && commandInputHistory[commandInputHistory.length - 1] === entry) {
+    resetCommandInputHistoryNav();
+    return;
+  }
+  commandInputHistory.push(entry);
+  if (commandInputHistory.length > COMMAND_INPUT_HISTORY_MAX) {
+    commandInputHistory = commandInputHistory.slice(-COMMAND_INPUT_HISTORY_MAX);
+  }
+  persistCommandInputHistory();
+  resetCommandInputHistoryNav();
+}
+
+function shouldNavigateCommandInputHistory(key) {
+  if (!inputEl) return false;
+  const val = inputEl.value;
+  const pos = inputEl.selectionStart;
+  const posEnd = inputEl.selectionEnd;
+  if (pos !== posEnd) return false;
+  if (!val.includes("\n")) return true;
+  if (key === "ArrowUp") return val.lastIndexOf("\n", pos - 1) === -1;
+  if (key === "ArrowDown") return val.indexOf("\n", pos) === -1;
+  return false;
+}
+
+function setCommandInputFromHistory(value) {
+  if (!inputEl) return;
+  commandInputHistoryApplying = true;
+  inputEl.value = value;
+  inputEl.setSelectionRange(value.length, value.length);
+  autoResizeCommandInput();
+  refreshCommandSuggestions(value);
+  commandInputHistoryApplying = false;
+}
+
+function navigateCommandInputHistory(delta) {
+  if (!inputEl || !commandInputHistory.length) return;
+  if (delta < 0) {
+    if (commandInputHistoryIndex === -1) {
+      commandInputHistoryDraft = inputEl.value;
+      commandInputHistoryIndex = commandInputHistory.length - 1;
+    } else if (commandInputHistoryIndex > 0) {
+      commandInputHistoryIndex -= 1;
+    } else {
+      return;
+    }
+    setCommandInputFromHistory(commandInputHistory[commandInputHistoryIndex]);
+    return;
+  }
+  if (commandInputHistoryIndex === -1) return;
+  if (commandInputHistoryIndex < commandInputHistory.length - 1) {
+    commandInputHistoryIndex += 1;
+    setCommandInputFromHistory(commandInputHistory[commandInputHistoryIndex]);
+    return;
+  }
+  commandInputHistoryIndex = -1;
+  setCommandInputFromHistory(commandInputHistoryDraft);
+}
+
 function resetCommandInputHeight() {
   if (!inputEl || inputEl.tagName !== "TEXTAREA") return;
   inputEl.style.height = "auto";
@@ -4183,6 +4278,7 @@ function autoResizeCommandInput() {
 formEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const value = inputEl.value.trim();
+  if (value) pushCommandInputHistory(value);
   inputEl.value = "";
   resetCommandInputHeight();
   if (!value) return;
@@ -4217,6 +4313,9 @@ formEl.addEventListener("submit", async (event) => {
 
 if (inputEl) {
   inputEl.addEventListener("input", () => {
+    if (!commandInputHistoryApplying && commandInputHistoryIndex !== -1) {
+      resetCommandInputHistoryNav();
+    }
     autoResizeCommandInput();
     refreshCommandSuggestions(inputEl.value);
   });
@@ -4228,6 +4327,15 @@ if (inputEl) {
     if (menuOpen && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
       e.preventDefault();
       moveSlashMenuSelection(e.key === "ArrowDown" ? 1 : -1, inputEl.value);
+      return;
+    }
+    if (
+      !menuOpen &&
+      (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+      shouldNavigateCommandInputHistory(e.key)
+    ) {
+      e.preventDefault();
+      navigateCommandInputHistory(e.key === "ArrowUp" ? -1 : 1);
       return;
     }
     if (menuOpen && e.key === "Tab") {
@@ -4474,6 +4582,7 @@ window.AgentChatRuntime = {
   appendSystemLine: (text) => appendLine(text, "system"),
 };
 
+loadCommandInputHistory();
 updateSessionBadge(getSessionId());
 syncInteractionModeUi(getInteractionMode());
 applyTheme(localStorage.getItem(THEME_KEY) || "dark");

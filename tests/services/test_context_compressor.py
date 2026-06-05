@@ -74,4 +74,5 @@ def test_summary_to_system_message():
     summary = SemanticContextSummary(goal="demo", executed_facts=["echo: ok"])
     msg = summary.to_system_message()
     assert msg["role"] == "system"
-    assert "demo" in msg["content"]
+    assert "echo: ok" in msg["content"]
+    assert "distant history" in msg["content"]

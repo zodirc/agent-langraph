@@ -398,14 +398,87 @@ def _run_compile_verify_loop(
     return structured
 
 
+def _memory_hit_text(hit: dict[str, Any]) -> str:
+    return str(hit.get("summary") or hit.get("content") or hit).strip()
+
+
+def _current_user_turn_text(state: dict[str, Any]) -> str:
+    payload = state.get("input_payload") or {}
+    if isinstance(payload, dict):
+        for key in ("goal", "query", "question"):
+            if payload.get(key):
+                return str(payload[key]).strip()
+    history = state.get("conversation_history") or []
+    if isinstance(history, list):
+        for msg in reversed(history):
+            if isinstance(msg, dict) and msg.get("role") == "user" and msg.get("content"):
+                return str(msg["content"]).strip()
+    return ""
+
+
+def _known_fact_texts(state: dict[str, Any]) -> list[str]:
+    from app.services.context_compressor import build_semantic_context_summary
+    from app.services.conversation_context import conversation_history_from_state
+    from app.services.working_memory import working_memory_from_state
+
+    texts: list[str] = []
+    wm = working_memory_from_state(state)
+    if wm_text := wm.to_text():
+        texts.append(wm_text)
+    history = conversation_history_from_state(state)
+    if summary := build_semantic_context_summary(history, state=state):
+        texts.append(summary.to_system_message().get("content", ""))
+    turn = _current_user_turn_text(state)
+    if turn:
+        texts.append(turn)
+    return [t for t in texts if t]
+
+
 def filter_memory_hits(
     state: dict[str, Any] | None,
     hits: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Suppress noisy session memories for short low-risk code QA turns."""
+    """Suppress noisy memories and dedupe against known session facts."""
+    from app.services.context_fingerprint import is_near_duplicate
     from app.services.memory_query import should_suppress_session_memory
 
     if should_suppress_session_memory(state or {}):
         get_metrics_service().inc_contract_event("memory_hits_suppressed")
         return []
-    return hits
+    if not hits:
+        return []
+
+    known = _known_fact_texts(state or {})
+    ranked = sorted(
+        [h for h in hits if isinstance(h, dict)],
+        key=lambda h: float(h.get("score") or 0),
+        reverse=True,
+    )
+
+    kept: list[dict[str, Any]] = []
+    kept_texts: list[str] = []
+    seen_ids: set[str] = set()
+
+    for hit in ranked:
+        memory_id = str(hit.get("id") or hit.get("memory_id") or "")
+        if memory_id and memory_id in seen_ids:
+            continue
+
+        text = _memory_hit_text(hit)
+        if not text:
+            continue
+        if any(is_near_duplicate(text, known_text) for known_text in known):
+            continue
+        if any(is_near_duplicate(text, prev) for prev in kept_texts):
+            continue
+
+        if memory_id:
+            seen_ids.add(memory_id)
+        kept.append(hit)
+        kept_texts.append(text)
+        if len(kept) >= 6:
+            break
+
+    if len(kept) < len(hits):
+        get_metrics_service().inc_contract_event("memory_hits_deduped")
+    return kept

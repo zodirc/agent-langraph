@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any
 
 from app.config.settings import settings
 from app.services.context_estimator import estimate_item_tokens, estimate_text_tokens, sum_item_tokens
+from app.services.context_fingerprint import dedupe_context_items
 from app.services.context_items import ContextBucketName, ContextItem
 from app.services.context_policy import PromptContextPolicy
 from app.services.context_trace import ContextAssemblyTrace
@@ -34,15 +36,7 @@ def _sort_items(items: list[ContextItem]) -> list[ContextItem]:
 
 
 def dedupe_items(items: list[ContextItem]) -> list[ContextItem]:
-    seen: set[str] = set()
-    out: list[ContextItem] = []
-    for item in items:
-        key = f"{item.kind}:{item.content[:240]}"
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(item)
-    return out
+    return dedupe_context_items(items)
 
 
 def _compress_transcript_items(
@@ -90,14 +84,8 @@ def _compress_transcript_items(
     return out
 
 
-def _truncate_item_content(item: ContextItem, max_tokens: int) -> ContextItem:
-    if item.estimated_tokens <= max_tokens:
-        return item
-    char_budget = max(80, max_tokens * 4)
-    clipped = (item.content or "")[:char_budget]
-    if len(item.content or "") > len(clipped):
-        clipped += "…"
-    new_item = ContextItem(
+def _clip_content(item: ContextItem, clipped: str, *, method: str) -> ContextItem:
+    return ContextItem(
         id=item.id,
         kind=item.kind,
         source=item.source,
@@ -109,9 +97,115 @@ def _truncate_item_content(item: ContextItem, max_tokens: int) -> ContextItem:
         compressible=item.compressible,
         droppable=item.droppable,
         bucket=item.bucket,
-        meta={**item.meta, "truncated": True},
+        meta={**item.meta, "truncated": True, "compress_method": method},
     )
-    return new_item
+
+
+def _compress_memory_item(item: ContextItem, max_tokens: int) -> ContextItem:
+    text = item.content or ""
+    for marker in ("Result:", "Decision:", "Outcome:", "Episode:"):
+        idx = text.find(marker)
+        if idx >= 0:
+            snippet = text[idx : idx + max(80, max_tokens * 4)]
+            if len(snippet) < len(text):
+                return _clip_content(item, snippet.rstrip() + "…", method="memory_structured")
+    return _clip_content(item, text[: max(80, max_tokens * 4)].rstrip() + "…", method="memory_tail")
+
+
+def _compress_knowledge_item(item: ContextItem, max_tokens: int) -> ContextItem:
+    text = item.content or ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return _clip_content(item, text[: max(80, max_tokens * 4)], method="knowledge_tail")
+    kept: list[str] = []
+    budget = max(80, max_tokens * 4)
+    for line in lines:
+        if line.lower().startswith(("conclusion", "summary", "result", "finding")):
+            kept.insert(0, line)
+        elif len("\n".join(kept)) + len(line) + 1 <= budget:
+            kept.append(line)
+        if len("\n".join(kept)) >= budget:
+            break
+    if not kept:
+        kept = lines[:3]
+    clipped = "\n".join(kept[:6])
+    if len(clipped) > budget:
+        clipped = clipped[:budget] + "…"
+    return _clip_content(item, clipped, method="knowledge_structured")
+
+
+def _compress_tool_item(item: ContextItem, max_tokens: int) -> ContextItem:
+    text = item.content or ""
+    match = re.match(r"^\s*\[([^\]]+)\]\s*([^:]+):\s*(.*)$", text, re.DOTALL)
+    if match:
+        name, status, body = match.groups()
+        body_budget = max(40, max_tokens * 3)
+        body = (body or "").strip()
+        if len(body) > body_budget:
+            body = body[:body_budget] + "…"
+        clipped = f"[{name}] {status.strip()}: {body}"
+        return _clip_content(item, clipped, method="tool_structured")
+    return _clip_content(item, text[: max(80, max_tokens * 4)].rstrip() + "…", method="tool_tail")
+
+
+def _compress_diagnostic_item(item: ContextItem, max_tokens: int) -> ContextItem:
+    text = item.content or ""
+    hints: list[str] = []
+    for line in text.splitlines():
+        lower = line.lower()
+        if any(k in lower for k in ("error", "failed", "exception", "line", "file", "cause", "root")):
+            hints.append(line.strip())
+    clipped = "\n".join(hints[:4]) if hints else text[: max(80, max_tokens * 4)]
+    if len(clipped) > max(80, max_tokens * 4):
+        clipped = clipped[: max(80, max_tokens * 4)] + "…"
+    return _clip_content(item, clipped, method="diagnostic_structured")
+
+
+def _truncate_item_content(item: ContextItem, max_tokens: int) -> ContextItem:
+    if item.estimated_tokens <= max_tokens:
+        return item
+    bucket = item.resolve_bucket()
+    if bucket == "retrieved_memory" or item.kind == "episodic_memory":
+        return _compress_memory_item(item, max_tokens)
+    if bucket == "retrieved_knowledge" or item.kind == "knowledge":
+        return _compress_knowledge_item(item, max_tokens)
+    if bucket == "tool_observations" or item.kind == "tool_output":
+        return _compress_tool_item(item, max_tokens)
+    if bucket == "diagnostics" or item.kind in ("diagnostic", "test_failure", "terminal_output"):
+        return _compress_diagnostic_item(item, max_tokens)
+    char_budget = max(80, max_tokens * 4)
+    clipped = (item.content or "")[:char_budget]
+    if len(item.content or "") > len(clipped):
+        clipped += "…"
+    return _clip_content(item, clipped, method="token_truncate")
+
+
+def _apply_min_bucket_representation(
+    bucket_items: list[ContextItem],
+    *,
+    bucket: ContextBucketName,
+    policy: PromptContextPolicy,
+) -> list[ContextItem]:
+    """Keep a minimal required representation instead of the full bucket."""
+    min_tokens = policy.min_bucket_tokens.get(bucket)
+    min_items = policy.minimum_required_items.get(bucket, 1)
+    if not min_tokens or not bucket_items:
+        return bucket_items
+    sorted_items = _sort_items(bucket_items)
+    keep = sorted_items[: max(1, min_items)]
+    out: list[ContextItem] = []
+    per_item = max(32, min_tokens // max(1, len(keep)))
+    for item in keep:
+        if policy.allow_summary_substitute.get(bucket) and item.kind in (
+            "working_memory",
+            "semantic_summary",
+        ):
+            lines = [ln for ln in (item.content or "").splitlines() if ln.strip()][:4]
+            summary = "\n".join(lines)
+            out.append(_clip_content(item, summary, method="min_bucket_summary"))
+        else:
+            out.append(_truncate_item_content(item, per_item))
+    return out
 
 
 def reduce_context_items(
@@ -147,6 +241,27 @@ def reduce_context_items(
                 for old in bucket_items:
                     compressed.append(old)
                 bucket_items = merged
+                bucket_tokens = sum_item_tokens(bucket_items)
+
+        if (
+            bucket_tokens > cap
+            and bucket in policy.required_buckets
+            and bucket in policy.min_bucket_tokens
+        ):
+            minimized = _apply_min_bucket_representation(
+                bucket_items, bucket=bucket, policy=policy
+            )
+            if minimized and sum_item_tokens(minimized) < bucket_tokens:
+                for old in bucket_items:
+                    if old not in minimized:
+                        compressed.append(old)
+                        assembly_trace.record_compressed(
+                            old,
+                            reason=f"min_bucket:{bucket}",
+                            tokens_after=0,
+                            method="min_bucket_summary",
+                        )
+                bucket_items = minimized
                 bucket_tokens = sum_item_tokens(bucket_items)
 
         while bucket_tokens > cap and bucket_items:

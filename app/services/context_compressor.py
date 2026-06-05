@@ -35,18 +35,17 @@ class SemanticContextSummary:
     raw_recent: list[dict[str, Any]] = field(default_factory=list)
 
     def to_system_message(self) -> dict[str, Any]:
-        parts = [
-            "[Semantic context summary]",
-            f"Goal: {self.goal}" if self.goal else "",
-        ]
-        if self.hard_constraints:
-            parts.append("Constraints: " + "; ".join(self.hard_constraints[:12]))
+        return self.to_distant_history_message()
+
+    def to_distant_history_message(self) -> dict[str, Any]:
+        """Abstract background from earlier turns; current goal/plan live in working memory."""
+        parts = ["[Semantic context summary — distant history]"]
         if self.executed_facts:
-            parts.append("Facts: " + "; ".join(self.executed_facts[:16]))
-        if self.pending_todos:
-            parts.append("Todos: " + "; ".join(self.pending_todos[:12]))
+            parts.append("Background facts: " + "; ".join(self.executed_facts[:16]))
         if self.open_risks:
-            parts.append("Risks: " + "; ".join(self.open_risks[:8]))
+            parts.append("Background risks: " + "; ".join(self.open_risks[:8]))
+        if len(parts) == 1 and self.goal:
+            parts.append(f"Prior topic: {self.goal[:240]}")
         content = "\n".join(p for p in parts if p).strip()
         if len(content) > settings.CONTEXT_COMPRESS_SUMMARY_MAX_CHARS:
             content = content[: settings.CONTEXT_COMPRESS_SUMMARY_MAX_CHARS] + "…"

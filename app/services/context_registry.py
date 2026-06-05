@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.runtime.state import AgentState, merge_state
+from app.services.context_fingerprint import strict_dedupe_key
 from app.services.context_items import ContextItem, new_context_id
 
 REGISTRY_KEY = "context_item_registry"
@@ -94,13 +95,13 @@ def merge_registry_items(
     state: AgentState | dict[str, Any],
     new_items: list[ContextItem],
 ) -> AgentState:
-    """Append normalized items; dedupe by kind+content prefix."""
+    """Append normalized items; dedupe by source-aware fingerprint."""
     if not new_items:
         return state  # type: ignore[return-value]
     existing = _registry_from_state(state)
-    seen = {f"{e.get('kind')}:{str(e.get('content', ''))[:200]}" for e in existing}
+    seen = {strict_dedupe_key(e) for e in existing if isinstance(e, dict)}
     for item in new_items:
-        key = f"{item.kind}:{item.content[:200]}"
+        key = strict_dedupe_key(item)
         if key in seen:
             continue
         seen.add(key)

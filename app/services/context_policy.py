@@ -20,6 +20,9 @@ class PromptContextPolicy:
     preserve_fidelity_buckets: frozenset[ContextBucketName] = field(
         default_factory=lambda: frozenset({"current_turn", "system_policy"})
     )
+    min_bucket_tokens: dict[ContextBucketName, int] = field(default_factory=dict)
+    minimum_required_items: dict[ContextBucketName, int] = field(default_factory=dict)
+    allow_summary_substitute: dict[ContextBucketName, bool] = field(default_factory=dict)
 
 
 def _base_budgets() -> dict[ContextBucketName, int]:
@@ -83,6 +86,13 @@ _POLICIES: dict[ContextPurpose, PromptContextPolicy] = {
             "working_memory",
         ),
         default_token_budget=24000,
+        min_bucket_tokens={
+            "semantic_summary": 400,
+            "working_memory": 600,
+            "recent_transcript": 800,
+        },
+        minimum_required_items={"semantic_summary": 1, "working_memory": 1, "recent_transcript": 1},
+        allow_summary_substitute={"semantic_summary": True, "working_memory": True},
     ),
     "reasoning": PromptContextPolicy(
         purpose="reasoning",
@@ -121,6 +131,9 @@ _POLICIES: dict[ContextPurpose, PromptContextPolicy] = {
             "semantic_summary",
         ),
         default_token_budget=32000,
+        min_bucket_tokens={"semantic_summary": 400, "working_memory": 600, "recent_transcript": 800},
+        minimum_required_items={"semantic_summary": 1, "working_memory": 1, "recent_transcript": 1},
+        allow_summary_substitute={"semantic_summary": True, "working_memory": True},
     ),
     "writing": PromptContextPolicy(
         purpose="writing",
