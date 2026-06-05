@@ -330,6 +330,81 @@ class Settings:
         self.RAG_EVAL_MIN_RECALL = float(rag.get("eval_min_recall", 0.8))
         self.RAG_EVAL_MIN_MRR = float(rag.get("eval_min_mrr", 0.5))
         self.RAG_EVAL_MIN_FAITHFULNESS = float(rag.get("eval_min_faithfulness", 0.75))
+        self.RAG_RELEVANCE_GATE_ENABLED = _coerce_bool(rag.get("relevance_gate_enabled", True))
+        self.RAG_RERANK_MIN_SCORE = float(rag.get("rerank_min_score", 0.0))
+        self.RAG_MIN_RELEVANT_HITS = int(rag.get("min_relevant_hits", 1))
+        self.RAG_RELEVANCE_RELATIVE_RATIO = float(rag.get("relevance_relative_ratio", 0.45))
+        self.RAG_ADJACENCY_MAX_RANK = int(rag.get("adjacency_max_rank", 2))
+        self.RAG_SNIPPET_ENABLED = _coerce_bool(rag.get("snippet_enabled", True))
+        self.RAG_SNIPPET_MAX_SENTENCES = int(rag.get("snippet_max_sentences", 5))
+
+        retrieval = raw.get("retrieval", {})
+        if not isinstance(retrieval, dict):
+            retrieval = {}
+        self.RETRIEVAL_POLICY_VERSION = str(retrieval.get("policy_version", "v2"))
+        self.RETRIEVAL_ENABLE_EVIDENCE_PIPELINE = _coerce_bool(
+            retrieval.get("enable_evidence_pipeline", True)
+        )
+        self.RETRIEVAL_ENABLE_ADMISSION_GATE = _coerce_bool(
+            retrieval.get("enable_admission_gate", True)
+        )
+        self.RETRIEVAL_ENABLE_SNIPPET_FIRST = _coerce_bool(
+            retrieval.get("enable_snippet_first", True)
+        )
+        self.RETRIEVAL_ADMISSION_GATE_MODE = str(
+            retrieval.get("admission_gate_mode", "soft")
+        ).lower()
+        self.RETRIEVAL_LOG_FAILURE_TAXONOMY = _coerce_bool(
+            retrieval.get("log_failure_taxonomy", True)
+        )
+        self.RETRIEVAL_QUERY_REWRITE_ENABLED = _coerce_bool(
+            retrieval.get("query_rewrite_enabled", True)
+        )
+        self.RETRIEVAL_QUERY_REWRITE_MAX_RETRIES = int(
+            retrieval.get("query_rewrite_max_retries", 1)
+        )
+        self.RETRIEVAL_SHADOW_ADMISSION_GATE = _coerce_bool(
+            retrieval.get("shadow_admission_gate", True)
+        )
+        self.RETRIEVAL_UNIFIED_HIERARCHY = _coerce_bool(
+            retrieval.get("unified_hierarchy", True)
+        )
+        self.RETRIEVAL_LEXICAL_RRF_WEIGHT = float(retrieval.get("lexical_rrf_weight", 1.8))
+        self.RETRIEVAL_EVIDENCE_TOKEN_BUDGET = int(retrieval.get("evidence_token_budget", 4000))
+        self.RETRIEVAL_EMBEDDING_DEDUP_ENABLED = _coerce_bool(
+            retrieval.get("embedding_dedup_enabled", False)
+        )
+        self.RETRIEVAL_SNIPPET_DUAL_TRACK = _coerce_bool(
+            retrieval.get("snippet_dual_track", False)
+        )
+        self.RETRIEVAL_CROSS_ENCODER_MIN_QUERY_LEN = int(
+            retrieval.get("cross_encoder_min_query_len", 12)
+        )
+        self.RETRIEVAL_CROSS_ENCODER_MAX_DOCS = int(
+            retrieval.get("cross_encoder_max_docs", 32)
+        )
+        self.RETRIEVAL_RERANK_TIMEOUT_SEC = float(retrieval.get("rerank_timeout_sec", 8.0))
+        self.RETRIEVAL_CITATION_CHECK_STRICTNESS = str(
+            retrieval.get("citation_check_strictness", "basic")
+        ).lower()
+        self.RETRIEVAL_SNIPPET_MAX_CHARS = int(retrieval.get("snippet_max_chars", 2000))
+        self.RETRIEVAL_MAX_CHUNKS_PER_SOURCE = int(
+            retrieval.get("max_chunks_per_source", rag.get("max_chunks_per_doc", 2))
+        )
+        self.RETRIEVAL_MIN_SOURCE_DIVERSITY = int(retrieval.get("min_source_diversity", 2))
+        self.RETRIEVAL_NEIGHBORHOOD_EXPAND_RADIUS = int(
+            retrieval.get("neighborhood_expand_radius", rag.get("chunk_adjacency_radius", 1))
+        )
+        purpose_thresholds = retrieval.get("purpose_thresholds", {})
+        self.RETRIEVAL_PURPOSE_THRESHOLDS = (
+            purpose_thresholds if isinstance(purpose_thresholds, dict) else {}
+        )
+        purpose_top_k = retrieval.get("purpose_top_k", {})
+        self.RETRIEVAL_PURPOSE_TOP_K = purpose_top_k if isinstance(purpose_top_k, dict) else {}
+        source_authority = retrieval.get("source_authority_prior", {})
+        self.RETRIEVAL_SOURCE_AUTHORITY_PRIOR = (
+            source_authority if isinstance(source_authority, dict) else {}
+        )
 
         embedding = raw.get("embedding", {})
         if not isinstance(embedding, dict):

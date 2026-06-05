@@ -164,6 +164,8 @@ def collect_context_items(
     registry_fps = registry_fingerprints(state)
 
     for hit in (state.get("memory_hits") or [])[:8]:
+        if getattr(settings, "RETRIEVAL_UNIFIED_HIERARCHY", True):
+            continue
         if not isinstance(hit, dict):
             continue
         text = str(hit.get("summary") or hit.get("content") or hit)[:2000]
@@ -182,33 +184,129 @@ def collect_context_items(
         if strict_dedupe_key(candidate) not in registry_fps:
             items.append(candidate)
 
-    for doc in (state.get("retrieved_knowledge") or [])[:12]:
-        if not isinstance(doc, dict):
-            continue
-        text = str(doc.get("content") or doc.get("text") or "")[:3000]
-        if not text:
-            continue
-        candidate = ContextItem(
-            id=new_context_id("doc"),
-            kind="knowledge",
-            source="retrieval",
-            role="system",
-            content=text,
-            priority=(
-                "medium"
-                if purpose in ("reasoning", "writing", "reviewing")
-                else "low"
-            ),
-            compressible=True,
-            droppable=purpose in ("planning", "routing"),
-            bucket="retrieved_knowledge",
-            meta={
-                "doc_id": doc.get("doc_id") or doc.get("id"),
-                "source": doc.get("source"),
-            },
-        )
-        if strict_dedupe_key(candidate) not in registry_fps:
-            items.append(candidate)
+    from app.services.relevance_gate import (
+        extract_evidence_snippet,
+        purpose_max_knowledge,
+        should_inject_knowledge,
+    )
+
+    query = goal or str(
+        (state.get("input_payload") or {}).get("query")
+        or (state.get("input_payload") or {}).get("question")
+        or ""
+    ).strip()
+    query_obj = state.get("query_object") if isinstance(state.get("query_object"), dict) else {}
+    if query_obj.get("standalone_query"):
+        query = str(query_obj["standalone_query"])
+
+    max_knowledge = purpose_max_knowledge(purpose)
+    injected_knowledge = 0
+
+    if max_knowledge > 0:
+        from app.services.evidence_hierarchy import collect_unified_evidence
+
+        hierarchy_types = {"user_input", "tool_result", "memory", "user_upload"}
+        if getattr(settings, "RETRIEVAL_UNIFIED_HIERARCHY", True):
+            for pkt in collect_unified_evidence(state):
+                if pkt.source_type not in hierarchy_types:
+                    continue
+                snippet = str(pkt.snippet_text or "").strip()
+                if not snippet:
+                    continue
+                candidate = ContextItem(
+                    id=new_context_id("evp"),
+                    kind="knowledge" if pkt.source_type != "memory" else "episodic_memory",
+                    source="retrieval" if pkt.source_type != "memory" else "memory",
+                    role="system",
+                    content=snippet[:3000],
+                    priority="high" if pkt.source_type in ("user_input", "tool_result") else "medium",
+                    compressible=True,
+                    droppable=pkt.source_type == "memory",
+                    bucket="retrieved_knowledge" if pkt.source_type != "memory" else "retrieved_memory",
+                    meta={
+                        "doc_id": pkt.chunk_id,
+                        "evidence_packet_id": pkt.packet_id,
+                        "support_type": pkt.support_type,
+                        "authority_level": pkt.authority_level,
+                        "source_type": pkt.source_type,
+                    },
+                )
+                if strict_dedupe_key(candidate) not in registry_fps:
+                    items.append(candidate)
+
+        pipeline_packets = state.get("evidence_packets") or []
+        used_packets = False
+        if pipeline_packets and getattr(settings, "RETRIEVAL_ENABLE_SNIPPET_FIRST", True):
+            used_packets = True
+            for pkt in pipeline_packets[:max_knowledge]:
+                if not isinstance(pkt, dict):
+                    continue
+                snippet = str(pkt.get("snippet_text") or "").strip()
+                if not snippet:
+                    continue
+                title = str(pkt.get("source_title") or "")
+                text = f"[{title}] {snippet}".strip() if title else snippet
+                candidate = ContextItem(
+                    id=new_context_id("evp"),
+                    kind="knowledge",
+                    source="retrieval",
+                    role="system",
+                    content=text[:3000],
+                    priority="medium",
+                    compressible=True,
+                    droppable=False,
+                    bucket="retrieved_knowledge",
+                    meta={
+                        "doc_id": pkt.get("chunk_id"),
+                        "evidence_packet_id": pkt.get("packet_id"),
+                        "support_type": pkt.get("support_type"),
+                        "authority_level": pkt.get("authority_level"),
+                        "has_conflict": pkt.get("has_conflict"),
+                    },
+                )
+                if strict_dedupe_key(candidate) not in registry_fps:
+                    items.append(candidate)
+                    injected_knowledge += 1
+
+        if used_packets:
+            doc_iter: list = []
+        else:
+            doc_iter = (state.get("retrieved_knowledge") or [])[:12]
+
+        for doc in doc_iter:
+            if injected_knowledge >= max_knowledge:
+                break
+            if not isinstance(doc, dict):
+                continue
+            inject, priority, droppable = should_inject_knowledge(doc, purpose=purpose)
+            if not inject:
+                continue
+            raw_text = str(doc.get("content") or doc.get("text") or "")
+            if not raw_text:
+                continue
+            title = str(doc.get("title") or "")
+            text = extract_evidence_snippet(raw_text, query, title=title)[:3000]
+            candidate = ContextItem(
+                id=new_context_id("doc"),
+                kind="knowledge",
+                source="retrieval",
+                role="system",
+                content=text,
+                priority=priority,  # type: ignore[arg-type]
+                compressible=True,
+                droppable=droppable,
+                bucket="retrieved_knowledge",
+                meta={
+                    "doc_id": doc.get("doc_id") or doc.get("id"),
+                    "source": doc.get("source"),
+                    "relevance_score": doc.get("relevance_score"),
+                    "relevance_passed": doc.get("relevance_passed"),
+                    "retrieval_stage": doc.get("retrieval_stage"),
+                },
+            )
+            if strict_dedupe_key(candidate) not in registry_fps:
+                items.append(candidate)
+                injected_knowledge += 1
 
     for tool in (state.get("tool_results") or [])[:10]:
         if not isinstance(tool, dict):

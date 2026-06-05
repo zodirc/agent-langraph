@@ -48,13 +48,48 @@ def output_guard_node(state: AgentState) -> AgentState:
         )
 
     faithfulness: dict[str, object] = {"skipped": True}
-    if settings.RAG_FAITHFULNESS_CHECK_ENABLED:
-        from app.services.rag_eval import check_faithfulness
+    grounding_result: dict[str, object] | None = None
+    citation_strictness = str(
+        getattr(settings, "RETRIEVAL_CITATION_CHECK_STRICTNESS", "basic")
+    ).lower()
+    if citation_strictness != "off" or settings.RAG_FAITHFULNESS_CHECK_ENABLED:
+        from app.services.evidence_pipeline import get_answer_mode, get_evidence_packets
+        from app.services.grounding_check import check_grounding, grounding_to_faithfulness
 
-        faithfulness = check_faithfulness(
+        grounding = check_grounding(
             text,
-            state.get("retrieved_knowledge") or [],
+            hits=state.get("retrieved_knowledge") or [],
+            packets=get_evidence_packets(state),
+            answer_mode=get_answer_mode(state),
         )
+        grounding_result = grounding.model_dump()
+        from app.services.evidence_hierarchy import collect_unified_evidence
+        from app.services.failure_attribution import attribute_failures, dashboard_rows
+        from app.services.insufficient_evidence import (
+            apply_insufficient_to_guard,
+            build_insufficient_response,
+        )
+
+        from app.runtime.evidence_models import EvidenceConflict
+
+        insufficient = build_insufficient_response(
+            mode=get_answer_mode(state),
+            packets=get_evidence_packets(state) or collect_unified_evidence(state),
+            conflicts=[
+                EvidenceConflict.model_validate(c)
+                for c in (state.get("evidence_conflicts") or [])
+                if isinstance(c, dict)
+            ],
+            failure_tags=grounding.failure_tags + list((state.get("retrieval_trace") or {}).get("failure_tags") or []),
+        )
+        faithfulness = apply_insufficient_to_guard(grounding_to_faithfulness(grounding), insufficient)
+        grounding_result = faithfulness
+        attribution = attribute_failures(
+            retrieval_trace=state.get("retrieval_trace") if isinstance(state.get("retrieval_trace"), dict) else None,
+            grounding_result=grounding_result,
+        )
+        grounding_result["failure_attribution"] = attribution
+        grounding_result["attribution_rows"] = dashboard_rows(attribution)
         if not faithfulness.get("faithful"):
             result = GuardResult(
                 passed=False,
@@ -66,8 +101,9 @@ def output_guard_node(state: AgentState) -> AgentState:
                 sanitized_summary=result.sanitized_summary,
                 source=result.source,
             )
-
     guard_payload = {**result.to_dict(), "faithfulness": faithfulness}
+    if grounding_result is not None:
+        guard_payload["grounding_check"] = grounding_result
     guard_payload["skill_validation"] = skill_validation.to_dict()
     updated = merge_state(
         state,

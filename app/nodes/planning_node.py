@@ -611,6 +611,11 @@ def planning_node(state: AgentState) -> AgentState:
 
         payload = bump_intent_revision(payload)
 
+        from app.services.retrieval_routing import attach_retrieval_context
+
+        retrieval_ctx = attach_retrieval_context(
+            {**state, "input_payload": payload, "selected_tools": exec_tools, "skip_retrieval": skip_retrieval}
+        )
         updated = budget_ctx.apply_to_state(
             merge_state(
                 state,
@@ -620,6 +625,9 @@ def planning_node(state: AgentState) -> AgentState:
                 selected_tools=exec_tools,
                 manuscript=ms.to_dict(),
                 skip_retrieval=skip_retrieval,
+                retrieval_decision=retrieval_ctx.get("retrieval_decision"),
+                query_object=retrieval_ctx.get("query_object"),
+                task_drift=retrieval_ctx.get("task_drift"),
                 review_required=review_required,
                 status=TaskStatus.PLANNED.value,
                 current_node="planning",

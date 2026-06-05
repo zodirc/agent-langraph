@@ -45,7 +45,10 @@ RAG 是 Retrieval-Augmented Generation，中文通常叫“检索增强生成”
 - BM25 风格关键词检索
 - RRF 融合
 - 可选 rerank
+- **Evidence Operating System**（snippet-first 证据组装、准入 gate、grounding 校验）
 - 再配合 domain 过滤与 memory 检索
+
+> Evidence OS 详情见 [`docs-private/RAG.md`](../docs-private/RAG.md) §2.2 与 [`RETRIEVAL_OPTIMIZATION_EXECUTION_PLAN.md`](RETRIEVAL_OPTIMIZATION_EXECUTION_PLAN.md) §5.1。
 
 ---
 
@@ -1009,14 +1012,14 @@ rag:
 
 ## 19. 对当前项目的一句话总结
 
-当前项目的 RAG 是一套面向代理系统的实用型检索方案：
+当前项目的 RAG 是一套面向代理系统的实用型检索 + Evidence Operating System 方案：
 
 - 用本地 MiniLM 做 embedding 语义检索
 - 用 BM25 风格算法做关键词检索
 - 用 RRF 融合两路结果
 - 用 domain 过滤减少噪声
-- 后续非常适合继续演进到 chunk-first 检索
-- 最后把少量高价值知识喂给后续生成或推理节点
+- 用 Evidence OS 做 snippet-first 证据组装、准入 gate 与 grounding 校验
+- 最后把少量高价值、可审计的证据喂给后续生成或推理节点
 
 它解决的不是“模型聪不聪明”，而是：
 

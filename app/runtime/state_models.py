@@ -8,6 +8,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.mission import Mission, Progress, StepDecision
 
+# Re-export evidence OS models for state boundaries (§7.1).
+from app.runtime.evidence_models import (  # noqa: F401
+    CandidateEvidence,
+    EvidenceConflict,
+    EvidencePacket,
+    GroundingCheckResult,
+    QueryObject,
+    RetrievalDecision,
+    RetrievalTrace,
+)
+
 
 class MissionStateModel(BaseModel):
     model_config = ConfigDict(extra="allow")

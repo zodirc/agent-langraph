@@ -42,6 +42,8 @@
 
 换句话说，最近一轮实现不是“再加一个压缩器”，而是把历史、memory、retrieval、tool、file、diagnostic 等来源统一升级为 `ContextItem -> ContextEnvelope` 主路径，并把旧压缩逻辑收编为治理层子模块。
 
+**Evidence OS 与上下文注入（2026-06）**：当 `retrieval.unified_hierarchy=true` 时，`collect_context_items` 将 user_input / tool_result / memory 与 pipeline 产出的 `evidence_packets` 分层注入；KB 证据优先走 `evidence_packets`，无 pipeline 结果时回退 `retrieved_knowledge`。`intent_observation` purpose 的 `max_knowledge=0` 完全跳过知识库注入。详见 [`docs-private/RAG.md`](../docs-private/RAG.md) §2.1–§2.2。
+
 ## 配置
 
 ```yaml

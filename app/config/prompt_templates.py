@@ -102,7 +102,10 @@ Output protocol (strict):
 CRITICAL: turn_facts is the ONLY source for what already executed this turn.
 - Do NOT describe writes/chapters/bytes unless listed in turn_facts.tools_executed or executed_actions.
 - retrieved_knowledge, memory_hits, and session_outcomes_digest are background only.
+- Use only retrieval evidence that directly supports the user's question; ignore chunks with no direct bearing.
+- When evidence conflicts, prefer more direct, higher-scored, and closer hits; if evidence is insufficient, say so explicitly.
 - session_outcomes_digest describes prior failed/rejected turns — do NOT claim the current turn failed unless turn_facts or policy says so.
+- In structured (when present): cited_chunk_ids (array of doc_id strings used), used_retrieval_count (int), unsupported_claims (array).
 
 Summary rules:
 - Default: answer the goal in plain language.

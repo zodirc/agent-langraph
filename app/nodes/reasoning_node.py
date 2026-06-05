@@ -63,6 +63,11 @@ def reasoning_node(state: AgentState) -> AgentState:
         budget_ctx = budget_context_from_state(state)
         mode = resolve_reasoning_mode(state)
         reasoning_system = build_reasoning_system_prompt(mode, state=state)
+        from app.services.reasoning_grounding import build_grounding_instructions
+
+        grounding_overlay = build_grounding_instructions(state)
+        if grounding_overlay:
+            reasoning_system = f"{reasoning_system}\n\n[Evidence policy]\n{grounding_overlay}"
         state = attach_observation(state) if state.get("mission") else attach_turn_facts(state)
         payload = state.get("input_payload", {})
         turn_facts = (

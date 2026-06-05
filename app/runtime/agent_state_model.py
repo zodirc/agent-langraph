@@ -25,6 +25,13 @@ class AgentStateModel(BaseModel):
     plan: Optional[list[str]] = None
     selected_tools: Optional[list[str]] = None
     skip_retrieval: Optional[bool] = None
+    retrieval_decision: Optional[dict[str, Any]] = None
+    query_object: Optional[dict[str, Any]] = None
+    evidence_packets: Optional[list[dict[str, Any]]] = None
+    retrieval_trace: Optional[dict[str, Any]] = None
+    evidence_conflicts: Optional[list[dict[str, Any]]] = None
+    failure_attribution: Optional[dict[str, Any]] = None
+    task_drift: Optional[dict[str, Any]] = None
     conversation_history: Optional[list[dict[str, Any]]] = None
     session_turn: Optional[int] = None
     tool_results: Optional[list[dict[str, Any]]] = None

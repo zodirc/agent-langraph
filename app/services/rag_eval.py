@@ -16,7 +16,7 @@ from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-_CITATION_RE = re.compile(r"\[([a-zA-Z0-9\-]{4,})\]")
+_CITATION_RE = re.compile(r"\[([a-zA-Z0-9_\-]{4,})\]")
 _SENTENCE_RE = re.compile(r"[^.!?。！？\n]+[.!?。！？]?")
 
 

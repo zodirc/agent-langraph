@@ -95,13 +95,23 @@ def _cohere_rerank(query: str, docs: list[dict[str, Any]]) -> list[float]:
     return scores
 
 
-def _score_fn() -> Callable[[str, list[dict[str, Any]]], list[float]]:
+def _should_use_cross_encoder(query: str, docs: list[dict[str, Any]]) -> bool:
     backend = settings.RAG_RERANK_BACKEND.lower()
-    if backend == "cross_encoder":
+    if backend != "cross_encoder":
+        return backend == "cross_encoder"
+    min_len = int(getattr(settings, "RETRIEVAL_CROSS_ENCODER_MIN_QUERY_LEN", 12))
+    if len(query.split()) < min_len and not any(c.isupper() for c in query):
+        return False
+    return len(docs) <= int(getattr(settings, "RETRIEVAL_CROSS_ENCODER_MAX_DOCS", 32))
+
+
+def _score_fn(query: str, docs: list[dict[str, Any]]) -> Callable[[str, list[dict[str, Any]]], list[float]]:
+    backend = settings.RAG_RERANK_BACKEND.lower()
+    if backend == "cross_encoder" and _should_use_cross_encoder(query, docs):
         return _cross_encoder_score
     if backend == "cohere":
-        return lambda q, docs: _cohere_rerank(q, docs)
-    return lambda q, docs: [_lexical_score(q, d) for d in docs]
+        return lambda q, d: _cohere_rerank(q, d)
+    return lambda q, d: [_lexical_score(q, x) for x in d]
 
 
 def rerank(query: str, docs: list[dict[str, Any]], *, top_k: int | None = None) -> list[dict[str, Any]]:
@@ -112,24 +122,47 @@ def rerank(query: str, docs: list[dict[str, Any]], *, top_k: int | None = None) 
     if not settings.RAG_RERANK_ENABLED:
         return docs[:limit]
 
+    timeout_sec = float(getattr(settings, "RETRIEVAL_RERANK_TIMEOUT_SEC", 8.0))
     started = time.perf_counter()
+    pre_rank = {str(d.get("doc_id")): i for i, d in enumerate(docs)}
     try:
-        score_docs = _score_fn()
+        score_docs = _score_fn(query, docs)
         scores = score_docs(query, docs)
+        if time.perf_counter() - started > timeout_sec:
+            raise TimeoutError("rerank timeout")
         scored: list[tuple[float, dict[str, Any]]] = []
         for doc, score in zip(docs, scores):
             copy = dict(doc)
             copy["rerank_score"] = score
+            doc_id = str(copy.get("doc_id"))
+            if doc_id in pre_rank:
+                copy.setdefault("retrieval_debug", {})["pre_rerank_rank"] = pre_rank[doc_id]
             scored.append((score, copy))
         scored.sort(key=lambda pair: pair[0], reverse=True)
-        result = [doc for _, doc in scored[:limit]]
+        ranked = [doc for _, doc in scored]
+        for i, doc in enumerate(ranked):
+            doc.setdefault("retrieval_debug", {})["post_rerank_rank"] = i
         _observe_rerank_latency(time.perf_counter() - started, backend=settings.RAG_RERANK_BACKEND)
-        return result
+        return _apply_threshold_filter(query, ranked, limit)
     except Exception as exc:
         logger.warning("rerank backend %s failed: %s", settings.RAG_RERANK_BACKEND, exc)
-        scored = [( _lexical_score(query, d), {**d, "rerank_score": _lexical_score(query, d)}) for d in docs]
+        scored = [(_lexical_score(query, d), {**d, "rerank_score": _lexical_score(query, d)}) for d in docs]
         scored.sort(key=lambda pair: pair[0], reverse=True)
-        return [doc for _, doc in scored[:limit]]
+        ranked = [doc for _, doc in scored]
+        return _apply_threshold_filter(query, ranked, limit)
+
+
+def _apply_threshold_filter(
+    query: str, docs: list[dict[str, Any]], limit: int
+) -> list[dict[str, Any]]:
+    from app.services.relevance_gate import annotate_hit, apply_relevance_gate
+
+    if not getattr(settings, "RAG_RELEVANCE_GATE_ENABLED", True):
+        return [
+            annotate_hit(d, stage="rerank", query=query, threshold=0.0) for d in docs[:limit]
+        ]
+    gated = apply_relevance_gate(docs, query, stage="rerank")
+    return gated[:limit]
 
 
 def _observe_rerank_latency(seconds: float, *, backend: str) -> None:

@@ -806,6 +806,8 @@ class KnowledgeStore:
         top_k: Optional[int] = None,
         *,
         domains: Optional[set[str]] = None,
+        query_object: Any = None,
+        retrieval_decision: Any = None,
     ) -> list[dict[str, Any]]:
         """混合检索：向量 + 关键词 RRF，可选 rerank。
 
@@ -821,29 +823,69 @@ class KnowledgeStore:
         keyword_hits = self.keyword_search(query, top_k=fetch_k, domains=domains)
         if not vector_hits:
             merged = keyword_hits
+            stage = "keyword"
         elif not keyword_hits:
             merged = vector_hits
+            stage = "vector"
         else:
-            merged = _rrf_merge(vector_hits, keyword_hits, fetch_k)
+            from app.services.retrieval_search_policy import lexical_rrf_weight
+
+            lex_w = lexical_rrf_weight(query_object, retrieval_decision)
+            merged = _rrf_merge(vector_hits, keyword_hits, fetch_k, lexical_weight=lex_w)
+            stage = "rrf"
         merged = self._normalize_hits(merged)
+        from app.services.retrieval_search_policy import filter_stale_at_recall
+
+        merged, stale_dropped = filter_stale_at_recall(
+            merged, query_obj=query_object, decision=retrieval_decision
+        )
+        if stale_dropped:
+            for h in merged:
+                h.setdefault("retrieval_debug", {})["stale_prefilter_dropped"] = stale_dropped
+        from app.services.relevance_gate import annotate_hit
+
+        merged = [annotate_hit(h, stage=stage, query=query) for h in merged]
         if settings.RAG_RERANK_ENABLED:
             from app.services.reranker import rerank
 
             merged = rerank(query, merged, top_k=limit)
+        else:
+            from app.services.relevance_gate import apply_relevance_gate
+
+            if getattr(settings, "RAG_RELEVANCE_GATE_ENABLED", True):
+                merged = apply_relevance_gate(merged, query, stage=stage)
+            merged = merged[:limit]
         merged = _limit_per_doc(merged, max_per_doc=int(getattr(settings, "RAG_MAX_CHUNKS_PER_DOC", 2)))
-        merged = self._expand_adjacent_chunks(merged)
+        merged = self._expand_adjacent_chunks(merged, query=query)
         return merged[:limit]
 
-    def _expand_adjacent_chunks(self, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _expand_adjacent_chunks(
+        self,
+        hits: list[dict[str, Any]],
+        *,
+        query: str = "",
+    ) -> list[dict[str, Any]]:
         if not getattr(settings, "RAG_CHUNK_ADJACENCY_ENABLED", True):
             return hits
         radius = max(0, int(getattr(settings, "RAG_CHUNK_ADJACENCY_RADIUS", 1)))
         if radius <= 0:
             return hits
 
+        from app.services.relevance_gate import annotate_hit, relevance_score
+
+        max_rank = max(1, int(getattr(settings, "RAG_ADJACENCY_MAX_RANK", 2)))
+        threshold = float(getattr(settings, "RAG_RERANK_MIN_SCORE", 0.0))
+
         seen_ids = {str(h.get("doc_id") or "") for h in hits}
         expanded: list[dict[str, Any]] = list(hits)
-        for hit in hits:
+        for rank, hit in enumerate(hits):
+            if rank >= max_rank:
+                break
+            if not hit.get("relevance_passed", True):
+                continue
+            center_score = relevance_score(hit)
+            if threshold > 0 and center_score < threshold:
+                continue
             meta = hit.get("metadata") if isinstance(hit.get("metadata"), dict) else {}
             parent = str(meta.get("parent_doc_id") or "")
             if not parent or not meta.get("is_chunk"):
@@ -859,13 +901,18 @@ class KnowledgeStore:
                 if not nid or nid in seen_ids:
                     continue
                 seen_ids.add(nid)
-                neighbor_hit = {
-                    **neighbor,
-                    "score": float(hit.get("rerank_score") or hit.get("score") or hit.get("rrf_score") or 0.0)
-                    * 0.85,
-                    "metadata": neighbor.get("metadata") or {},
-                    "source": "adjacency",
-                }
+                neighbor_hit = annotate_hit(
+                    {
+                        **neighbor,
+                        "score": center_score * 0.85,
+                        "metadata": neighbor.get("metadata") or {},
+                        "source": "adjacency",
+                        "adjacency_only": True,
+                    },
+                    stage="adjacency",
+                    query=query,
+                    threshold=threshold,
+                )
                 expanded.append(neighbor_hit)
         return expanded
 
@@ -879,6 +926,8 @@ def _rrf_merge(
     b: list[dict[str, Any]],
     top_k: int,
     k: int = 60,
+    *,
+    lexical_weight: float = 1.0,
 ) -> list[dict[str, Any]]:
     scores: dict[str, float] = {}
     docs: dict[str, dict[str, Any]] = {}
@@ -888,7 +937,7 @@ def _rrf_merge(
         docs[doc_id] = item
     for rank, item in enumerate(b):
         doc_id = item["doc_id"]
-        scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank + 1)
+        scores[doc_id] = scores.get(doc_id, 0.0) + lexical_weight / (k + rank + 1)
         docs[doc_id] = item
     ordered = sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
     result = []

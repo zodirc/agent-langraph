@@ -820,6 +820,88 @@ class MetricsService:
                 return
         self._histograms["rag_faithfulness"].observe(score)
 
+    def observe_rag_retrieval_noise(self, stats: dict[str, float | int]) -> None:
+        """Record retrieval noise observability: filter pass rate, adjacency ratio, etc."""
+        if not self._prometheus:
+            return
+        gauges = (
+            ("retrieved_total", "agent_rag_retrieved_total"),
+            ("threshold_passed", "agent_rag_threshold_passed"),
+            ("injected_knowledge", "agent_rag_injected_knowledge"),
+            ("adjacency_count", "agent_rag_adjacency_count"),
+            ("adjacency_ratio", "agent_rag_adjacency_ratio"),
+            ("low_score_injected_rate", "agent_rag_low_score_injected_rate"),
+        )
+        for key, metric_name in gauges:
+            if key not in stats:
+                continue
+            if metric_name not in self._prometheus:
+                try:
+                    from prometheus_client import Gauge
+
+                    self._prometheus[metric_name] = Gauge(
+                        metric_name,
+                        f"RAG retrieval noise: {key}",
+                        **({"registry": self._registry} if self._registry is not None else {}),
+                    )
+                except ImportError:
+                    return
+            self._prometheus[metric_name].set(float(stats[key]))
+
+    def observe_retrieval_trace(self, trace: dict[str, object]) -> None:
+        """Record evidence pipeline per-turn trace metrics."""
+        if not self._prometheus:
+            return
+        purpose = str(trace.get("purpose") or "unknown")[:24]
+        counters = (
+            ("candidate_count", "agent_retrieval_candidates"),
+            ("admitted_count", "agent_retrieval_admitted"),
+            ("injected_count", "agent_retrieval_injected"),
+        )
+        for key, metric_name in counters:
+            if key not in trace:
+                continue
+            if metric_name not in self._prometheus:
+                try:
+                    from prometheus_client import Gauge
+
+                    self._prometheus[metric_name] = Gauge(
+                        metric_name,
+                        f"Retrieval trace: {key}",
+                        ["purpose"],
+                        **({"registry": self._registry} if self._registry is not None else {}),
+                    )
+                except ImportError:
+                    return
+            self._prometheus[metric_name].labels(purpose=purpose).set(float(trace[key]))  # type: ignore[arg-type]
+
+        for tag in trace.get("failure_tags") or []:
+            self.inc_retrieval_failure_tag(str(tag), purpose=purpose)
+
+    def inc_retrieval_failure_tag(self, tag: str, *, purpose: str = "unknown") -> None:
+        key = f"retrieval_failure_{tag}"
+        with self._lock:
+            self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "retrieval_failure_total" in self._prometheus:
+            self._prometheus["retrieval_failure_total"].labels(
+                tag=tag[:32], purpose=purpose[:24]
+            ).inc()
+        elif self._prometheus is not None:
+            try:
+                from prometheus_client import Counter
+
+                self._prometheus["retrieval_failure_total"] = Counter(
+                    "agent_retrieval_failure_total",
+                    "Retrieval failure taxonomy tags",
+                    ["tag", "purpose"],
+                    **({"registry": self._registry} if self._registry is not None else {}),
+                )
+                self._prometheus["retrieval_failure_total"].labels(
+                    tag=tag[:32], purpose=purpose[:24]
+                ).inc()
+            except ImportError:
+                pass
+
     def inc_embedding_incompatibility(self, stored_model: str, current_model: str) -> None:
         if not self._prometheus:
             return

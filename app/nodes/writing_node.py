@@ -115,8 +115,20 @@ def writing_node(state: AgentState) -> AgentState:
                 ),
             )
 
+        from app.services.retrieval_routing import attach_retrieval_context, purpose_for_llm_node
+
+        retrieval_ctx = attach_retrieval_context(state)
+        state = merge_state(
+            state,
+            retrieval_decision=retrieval_ctx.get("retrieval_decision"),
+            query_object=retrieval_ctx.get("query_object"),
+            task_drift=retrieval_ctx.get("task_drift"),
+        )
+        _writing_purpose = purpose_for_llm_node(state, "writing")
+
         payload = dict(state.get("input_payload") or {})
         intent = dict(payload.get("writing_intent") or {})
+        payload["retrieval_purpose"] = _writing_purpose
 
         from app.config.settings import settings
 

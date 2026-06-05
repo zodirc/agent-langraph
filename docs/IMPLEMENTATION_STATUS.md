@@ -1,6 +1,6 @@
 # 实现状态追踪（对齐代码库）
 
-> **最后更新**：2026-06-05（intent observation model + OMAW legacy path hard-off；见 [`INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md`](INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md)）  
+> **最后更新**：2026-06-05（Evidence Operating System v2 全链路 + intent observation；见 [`RETRIEVAL_OPTIMIZATION_EXECUTION_PLAN.md`](RETRIEVAL_OPTIMIZATION_EXECUTION_PLAN.md)、[`INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md`](INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md)）  
 > **对照文档**：[`CAPABILITY_MATRIX.md`](CAPABILITY_MATRIX.md)  
 > **图例**：✅ 已实现并有用例覆盖 · 🔶 部分实现 / 默认关 · ❌ 未实现
 
@@ -77,6 +77,23 @@
 | `ci_eval.sh` | unit/integration/rag/all | ✅ | |
 | Mission planning handoff | — | ✅ | `enable_planning_mission_handoff` + sync stream handoff |
 | 通过率门禁 85%/80% | — | 🔶 | baseline 回归有；聚合通过率仍可加强 |
+
+### 1.4 Evidence Operating System（Retrieval v2）
+
+| 项 | 状态 | 说明 |
+|----|------|------|
+| 八层 Evidence OS 架构 | ✅ | `evidence_pipeline.py` 包装 hybrid search；见执行方案 §5.1 |
+| Task Intent + Query Construction | ✅ | `retrieval_decision.py`、`query_builder.py` → `RetrievalDecision` / `QueryObject` |
+| Multi-Retrieval 增强 | ✅ | lexical RRF 加权、stale 预过滤、recency score（`retrieval_search_policy.py`） |
+| Admission Gate + Snippet-first | ✅ | `evidence_assembly.py`、`snippet_extractor.py`；soft gate + shadow hard gate |
+| 统一证据层级 | ✅ | `evidence_hierarchy.py`；user/tool/memory/kb 分层注入 gateway |
+| Grounding + Citation 校验 | ✅ | `grounding_check.py`、`insufficient_evidence.py`；`output_guard_node` 接入 |
+| 失败归因 + 可观测 | ✅ | `failure_attribution.py`、`retrieval_observability.py`；`retrieval_trace` 全链路 |
+| 节点接入 | ✅ | `retrieval_node` / `planning_node` / `writing_node` / `reasoning_node` / `output_guard_node` |
+| 配置 `retrieval.*` | ✅ | `config.yaml` → `enable_evidence_pipeline`、`unified_hierarchy`、`purpose_thresholds` 等 |
+| 单测 + E2E + Replay | ✅ | 135 项 pytest 全绿；`run_evidence_replay.py` 10 条用例 recall_proxy=1.0 |
+| 生产灰度 A/B | 🔶 | 默认 soft gate + shadow；Grafana 面板待建 |
+| runtime_router 直连接入 | 🔶 | 决策经 `retrieval_routing.py` 从 planning/writing 挂载 |
 
 ---
 
@@ -280,6 +297,7 @@ curl -H "X-Tenant-Id: acme" http://localhost:8000/metrics/tenant
 |--------|----------|------|------|---------|
 | 语义上下文压缩 | v0.11 | ✅ | 🔶 | ❌ ratio hard gate |
 | RAG 精排+citation+faithfulness | v0.11 | ✅ | ✅ | ✅ rag suite |
+| Evidence Operating System v2 | v0.13- | ✅ | ✅ 135 项 | 🔶 replay 有；Grafana 待建 |
 | Golden 20+ | v0.11 | ✅ 26 项 | ✅ | ✅ baseline 回归 |
 | 背压队列 | v0.11.1 | ✅ | ✅ | 🔶 压测报告未成文 |
 | Circuit breaker | v0.11.1 | ✅ | ✅ 单测 | 🔶 集成 E2E 可补 |

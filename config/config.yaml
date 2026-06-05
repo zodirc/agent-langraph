@@ -710,6 +710,61 @@ rag:
   eval_min_recall: 0.8
   eval_min_mrr: 0.5
   eval_min_faithfulness: 0.75
+  relevance_gate_enabled: true
+  rerank_min_score: 0.25
+  min_relevant_hits: 1
+  relevance_relative_ratio: 0.45
+  adjacency_max_rank: 2
+  snippet_enabled: true
+  snippet_max_sentences: 5
+
+# Evidence operating system — retrieval governance (see docs/RETRIEVAL_OPTIMIZATION_EXECUTION_PLAN.md)
+retrieval:
+  policy_version: v2
+  enable_evidence_pipeline: true
+  enable_admission_gate: true
+  enable_snippet_first: true
+  admission_gate_mode: soft          # soft: log + fallback; hard: strict filter
+  log_failure_taxonomy: true
+  query_rewrite_enabled: true
+  query_rewrite_max_retries: 1
+  shadow_admission_gate: true        # log hard-gate outcome while in soft mode
+  unified_hierarchy: true           # user/tool/memory/retrieval layered evidence
+  lexical_rrf_weight: 1.8
+  evidence_token_budget: 4000
+  embedding_dedup_enabled: false
+  snippet_dual_track: false
+  cross_encoder_min_query_len: 12
+  cross_encoder_max_docs: 32
+  rerank_timeout_sec: 8.0
+  citation_check_strictness: basic   # off | basic | strict
+  snippet_max_chars: 2000
+  max_chunks_per_source: 2
+  min_source_diversity: 2
+  neighborhood_expand_radius: 1
+  purpose_thresholds:
+    fact_qa: 0.45
+    comparative_summary: 0.25
+    procedural_howto: 0.35
+    code_fix: 0.40
+    planning_background: 0.30
+    general_grounded: 0.30
+  purpose_top_k:
+    fact_qa: 5
+    comparative_summary: 10
+    procedural_howto: 8
+    code_fix: 6
+    planning_background: 6
+    general_grounded: 8
+  source_authority_prior:
+    user_input: 1.0
+    tool_result: 0.95
+    user_upload: 0.90
+    official_docs: 0.85
+    knowledge: 0.70
+    memory: 0.55
+    adjacency: 0.40
+    discussion: 0.35
 
 embedding:
   dimension: 0          # 0 = probe at runtime
