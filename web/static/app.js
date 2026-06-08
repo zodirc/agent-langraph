@@ -1,7 +1,7 @@
 /**
  * Web CLI（/chat）：消费 graph_runner 的 SSE。
  *
- * 请求链：handleCommand → runTaskStream → fetch /tasks/stream → consumeSseStream → handleStreamEvent。
+ * 请求链：handleCommand → sendMessage → POST /tasks/{id}/message/stream → consumeSseStream → handleStreamEvent。
  * 事件：task_created、progress、trace、node、plan、writing_delta、answer_delta、done 等。
  * Steer：/append、/confirm、/resume、/stop；Skill 经 buildTaskRequestBody 与 URL 参数注入。
  *
@@ -595,10 +595,10 @@ async function syncBackendExecutionFromStatus(taskId) {
   if (!data) return null;
   const executorActive = Boolean(data.executor_active);
   backendExecutorActive = executorActive;
-  const st = String(data.status || "");
-  sessionMissionExecutorActive = st === "MISSION_RUNNING" && executorActive;
+  const fsm = getFsmState(data);
+  sessionMissionExecutorActive = fsm === "RUNNING" && executorActive;
   sessionHasInFlightMission =
-    executorActive || st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
+    executorActive || fsm === "RUNNING" || fsm === "REPLANNING" || fsm === "WAITING_USER";
   if (!running && executorActive) {
     recordPolledFlowNode(tid, data);
   }
@@ -630,8 +630,10 @@ function startDetachedBackendWatch(taskId, { announce = false } = {}) {
       stopDetachedBackendWatch();
       const st = String(data.status || "");
       const node = String(data.current_node || "?");
+      const fsm = getFsmState(data);
       appendLine(`后台执行已结束（${st} · ${node}）`, "system");
-      sessionHasInFlightMission = st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
+      sessionHasInFlightMission =
+        fsm === "RUNNING" || fsm === "REPLANNING" || fsm === "WAITING_USER";
       updateStopButtonState();
     }
   }, DETACHED_BACKEND_POLL_MS);
@@ -654,20 +656,21 @@ async function afterClientStreamEnded(taskId, { detached = false, reason = "" } 
   }
 }
 
+function getFsmState(statusData) {
+  return String(statusData?.fsm_state || "IDLE");
+}
+
+function isMissionFsmActive(statusData) {
+  const fsm = getFsmState(statusData);
+  return fsm === "RUNNING" || fsm === "REPLANNING" || fsm === "WAITING_USER";
+}
+
 function isWritingMissionActive(statusData) {
-  if (sessionHasInFlightMission || backendExecutorActive || sessionMissionExecutorActive) {
+  if (backendExecutorActive || sessionMissionExecutorActive) {
     return true;
   }
   if (!statusData) return false;
-  if (shouldSteerReplan(statusData)) return true;
-  const st = String(statusData.status || "");
-  if (st === "MISSION_RUNNING" || st === "MISSION_PAUSED") return true;
-  if (Boolean(statusData.executor_active)) {
-    const op = String(statusData.turn_contract_primary_op || "");
-    if (op && op !== "run_tools") return true;
-    if (sessionHasInFlightMission) return true;
-  }
-  return false;
+  return isMissionFsmActive(statusData) || Boolean(statusData.executor_active);
 }
 
 function enqueuePendingStreamInput(text) {
@@ -1189,7 +1192,7 @@ function formatStreamFetchError(err) {
     "浏览器在收到 HTTP 响应前断开（多为服务未启动、TLS/证书、或网络不可达）。",
     `排查：在部署机执行 make ps && make logs；curl -sk ${origin}/health 应返回 200。`,
     "若用局域网 IP 访问，请把该 IP 写入 .env 的 PUBLIC_DOMAIN 后 make up，并在浏览器接受自签证书。",
-    "写作/工程/自动模式均走 POST /tasks/stream；若仅写作失败，请打开 DevTools → Network 查看该请求。",
+    "写作/工程/自动模式均走 POST /tasks/{id}/message/stream；若仅写作失败，请打开 DevTools → Network 查看该请求。",
     "热更新后请等几秒再发首条消息，或 curl -sk …/health/live（比 /health 更快）。",
     "「新会话」本身不改网络，只是多等几秒或清屏后重试；旧 session_id 不会导致 /health 失败。",
   ];
@@ -2325,34 +2328,20 @@ function appendLine(text, className = "system") {
       const taskId = activeTaskId || getSessionId();
       const statusData = await fetchTaskStatus(taskId);
       const st = String(statusData?.status || "");
-      if (running && !isTerminalTaskStatus(st)) {
-        if (isWritingMissionActive(statusData) && shouldSteerUserMessage(statusData, raw)) {
-          await steerActiveMission(raw, {
-            preempt: true,
-            replaceGoal: true,
-            suppressUserEcho: true,
-          });
-          return;
-        }
+      const executorActive = Boolean(statusData?.executor_active);
+      const inFlight =
+        running || executorActive || backendExecutorActive || sessionHasInFlightMission;
+      if (inFlight && (executorActive || !isTerminalTaskStatus(st))) {
         appendLine("当前任务仍在运行，请先停止或等待完成后再重发。", "error");
         return;
       }
       if (running && isTerminalTaskStatus(st)) {
         setRunning(false);
       }
-      if (shouldSteerUserMessage(statusData, raw)) {
-        await steerActiveMission(raw, {
-          preempt: true,
-          replaceGoal: true,
-          suppressUserEcho: true,
-        });
-        return;
-      }
-      if (isTerminalTaskStatus(st)) {
-        await runTaskStream(raw, "LOW", "/tasks/stream", null, { suppressUserEcho: true });
-        return;
-      }
-      await handleCommand(raw);
+      await sendMessage(taskId, raw, {
+        suppressUserEcho: true,
+        meta: { resend: true },
+      });
     });
     actions.appendChild(resendBtn);
     wrap.appendChild(actions);
@@ -3064,134 +3053,76 @@ function isMissionStatusQuery(text) {
   );
 }
 
-/** Status/meta question during mission: pause + factual snapshot, do not replan append. */
+/** Status/meta question during mission: backend classifies via unified ingress. */
 async function handleMissionStatusInquiry(message, opts = {}) {
   const taskId = activeTaskId || getSessionId();
   if (!opts.suppressUserEcho) {
     appendLine(`> ${message}`, "user");
   }
-  const ok = await steerActiveMission(message, {
-    preempt: true,
-    priority: 100,
-    replaceGoal: false,
+  return sendMessage(taskId, message, {
     suppressUserEcho: true,
-    intervention: {
-      action: "pause",
-      force: true,
-      reason: "status inquiry",
-    },
+    intervention: { action: "pause", force: true, reason: "status inquiry" },
+    priority: 100,
   });
-  if (!ok) return false;
-  const statusData = await fetchTaskStatus(taskId);
-  const st = String(statusData?.status || "");
-  const executorActive = Boolean(statusData?.executor_active);
-  if (!executorActive || st === "MISSION_PAUSED" || st === "REASONED") {
-    await runTaskStream(message, "LOW", "/tasks/stream", null, {
-      suppressUserEcho: true,
-    });
-  }
-  return true;
 }
 
-function isSupersedeReplanPending(statusData) {
-  const st = String(statusData?.status || "");
-  const fg = statusData?.foreground_operation;
-  const fgStatus = String(fg?.status || "");
-  if (fg?.kind === "supersede_with_input" && (fgStatus === "replan_queued" || fgStatus === "replan_dispatching")) {
-    return true;
+/** Unified message send — backend classifies steer/resume/new turn (optimization.md Phase A). */
+async function sendMessage(taskId, text, opts = {}) {
+  const tid = taskId || activeTaskId || getSessionId();
+  if (!String(text || "").trim() && !opts.confirm && !opts.intervention) {
+    return false;
   }
-  if (st === "MISSION_PAUSED" && statusData?.pause_reason === "superseded_by_new_input") {
-    return true;
-  }
-  return Boolean(statusData?.latest_steer_message) && st === "MISSION_PAUSED";
-}
-
-function isContinueWritingGoal(text) {
-  const t = String(text || "").trim();
-  if (!t) return false;
-  if (/继续|接着写|继续写|继续写作|写下去|下一章/.test(t)) return true;
-  return /^(please\s+continue|continue\s+writing|append\s+(the\s+)?next)/i.test(t);
-}
-
-/** Mission correction should use /steer/stream — not /tasks/stream resume append. */
-function shouldSteerReplan(statusData) {
-  if (!statusData) return false;
-  const st = String(statusData?.status || "");
-  if (isSupersedeReplanPending(statusData)) return true;
-  if (st === "MISSION_RUNNING" && (statusData?.executor_active || sessionHasInFlightMission)) {
-    return true;
-  }
-  const steer = String(statusData?.latest_steer_message || "").trim();
-  if (steer && ["MISSION_PAUSED", "REASONED", "REJECTED", "FAILED"].includes(st)) {
-    return true;
-  }
-  if (
-    st === "MISSION_PAUSED" &&
-    (sessionHasInFlightMission || Boolean(statusData?.turn_contract_primary_op))
-  ) {
-    return true;
-  }
-  return false;
-}
-
-function shouldSteerUserMessage(statusData, message) {
-  if (!shouldSteerReplan(statusData)) return false;
-  const text = String(message || "").trim();
-  if (text && isContinueWritingGoal(text)) return false;
-  return true;
-}
-
-/** Steer during mission: one SSE into replan; replanObserve keeps flow/progress visible. */
-async function steerActiveMission(message, opts = {}) {
-  const taskId = activeTaskId || getSessionId();
-  const statusData = await fetchTaskStatus(taskId);
-  const st = String(statusData?.status || "");
-  if (isTerminalTaskStatus(st) && !shouldSteerReplan(statusData)) {
-    appendLine("任务已结束，正在开启新轮次…", "system");
-    await runTaskStream(message, "LOW", "/tasks/stream", null, {
-      suppressUserEcho: Boolean(opts.suppressUserEcho),
-    });
-    return true;
-  }
-  const payload = {
-    message,
-    preempt: opts.preempt !== false,
-    priority: Number.isFinite(opts.priority) ? opts.priority : 80,
-    replace_goal: Boolean(opts.replaceGoal),
-  };
-  if (opts.intervention && typeof opts.intervention === "object") {
-    payload.intervention = opts.intervention;
-  }
-  try {
-    await apiFetch(`/tasks/${taskId}/interrupt-stream`, {
-      method: "POST",
-      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ reason: "steer_replace", requested_by: "web" }),
-    });
-  } catch {
-    /* best-effort */
-  }
-  if (running || activeSseAbortController) {
-    abortActiveSseStream("steer_replace");
-    // Writing steer: immediate replan (no QA queue).
+  const replacingStream = Boolean(running || activeSseAbortController);
+  if (replacingStream) {
+    try {
+      await apiFetch(`/tasks/${tid}/interrupt-stream`, {
+        method: "POST",
+        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reason: opts.interruptReason || "user_message",
+          requested_by: "web",
+        }),
+      });
+    } catch {
+      /* best-effort */
+    }
+    abortActiveSseStream(opts.interruptReason || "user_message");
     markActiveWritingStreamStopped();
   }
   setRunning(true);
   shownConfirmationKeys.clear();
   writingStreamCharsThisTurn = 0;
-  sessionHasInFlightMission = true;
   updateStopButtonState();
-  if (!opts.suppressUserEcho) {
-    appendLine(`> ${message}`, "user");
+  if (!opts.suppressUserEcho && String(text || "").trim()) {
+    appendLine(`> ${text}`, "user");
   }
-  appendLine("纠偏已受理，任务重新规划中（右侧流程面板与顶部运行状态可查看进度）", "system");
-  lastPhaseMessage = "重新规划中";
-  void refreshFlowPanel(taskId);
-  const taskIdRef = { id: taskId };
+  const taskIdRef = { id: tid };
   const sseAbort = new AbortController();
   bindActiveSseAbort(sseAbort);
+  const clientMessageId =
+    opts.clientMessageId ||
+    (typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `msg-${Date.now()}`);
+  const payload = {
+    message: String(text || ""),
+    client_message_id: clientMessageId,
+    confirm: Boolean(opts.confirm),
+    priority: Number.isFinite(opts.priority) ? opts.priority : 0,
+    meta: {},
+  };
+  if (pendingNewSession) {
+    payload.meta.new_session = true;
+    pendingNewSession = false;
+  }
+  if (opts.meta && typeof opts.meta === "object") {
+    payload.meta = { ...payload.meta, ...opts.meta };
+  }
+  if (opts.intervention && typeof opts.intervention === "object") {
+    payload.intervention = opts.intervention;
+  }
   try {
-    const res = await apiFetch(`/tasks/${taskId}/steer/stream`, {
+    const res = await apiFetch(`/tasks/${tid}/message/stream`, {
       method: "POST",
       headers: getAuthHeaders(),
       body: JSON.stringify(payload),
@@ -3199,16 +3130,20 @@ async function steerActiveMission(message, opts = {}) {
     });
     if (!res.ok || !res.body) {
       if (res.status !== 401) {
-        appendLine(`steer stream failed: ${res.status} ${await res.text()}`, "error");
+        appendLine(`message stream failed: ${res.status} ${await res.text()}`, "error");
       }
       return false;
     }
-    activeTaskId = taskId;
-    await consumeSseStream(res, taskIdRef, { signal: sseAbort.signal, replanObserve: true });
+    activeTaskId = tid;
+    const observeReplan = opts.replanObserve === true;
+    await consumeSseStream(res, taskIdRef, {
+      signal: sseAbort.signal,
+      replanObserve: observeReplan,
+    });
     return true;
   } catch (err) {
     if (!isSseAbortError(err)) {
-      appendLine(`steer stream error: ${err}`, "error");
+      appendLine(`message stream error: ${err}`, "error");
     }
     return false;
   } finally {
@@ -3216,7 +3151,7 @@ async function steerActiveMission(message, opts = {}) {
       activeSseAbortController = null;
     }
     setRunning(false);
-    const endedTaskId = taskIdRef?.id || taskId || activeTaskId;
+    const endedTaskId = taskIdRef?.id || tid || activeTaskId;
     const wasDetached = Boolean(sseAbort?.signal?.aborted);
     await afterClientStreamEnded(endedTaskId, {
       detached: wasDetached,
@@ -3345,7 +3280,7 @@ function formatStructuredConfirmHint(confirmation, confirmationActions) {
     );
   }
   return (
-    'Approve via POST /tasks/{id}/resume or /steer with body {"confirm":true}. ' +
+    'Approve via POST /tasks/{id}/message/stream with body {"message":"","confirm":true}. ' +
     "Web CLI: /confirm."
   );
 }
@@ -3504,126 +3439,6 @@ function appendSteerIntentConfirmPanel(confirmation, confirmationActions) {
 
 function appendSteerOutcomeConfirmPanel(confirmation, confirmationActions) {
   appendConfirmationBlock(confirmation, confirmationActions, "steer-outcome-panel");
-}
-
-async function resumeMissionOnce(taskId, { confirm = false } = {}) {
-  const res = await apiFetch(`/tasks/${taskId}/resume`, {
-    method: "POST",
-    headers: getAuthHeaders(),
-    body: JSON.stringify({ confirm: Boolean(confirm) }),
-  });
-  if (!res.ok) {
-    appendLine(await res.text(), "error");
-    return null;
-  }
-  return res.json();
-}
-
-/** Supersede mission with SSE (foreground_superseded, replan_started, graph events). */
-async function runSupersedeStream(taskId, { message = "", fromPendingQueue = false, echoCommand = true } = {}) {
-  if (running && !fromPendingQueue) {
-    appendLine("已有任务在运行，请稍候", "error");
-    return null;
-  }
-  setRunning(true);
-  shownConfirmationKeys.clear();
-  writingStreamCharsThisTurn = 0;
-  if (echoCommand) {
-    appendLine("> /supersede", "user");
-  }
-  const taskIdRef = { id: taskId };
-  const sseAbort = new AbortController();
-  bindActiveSseAbort(sseAbort);
-  try {
-    const body = {};
-    if (String(message || "").trim()) {
-      body.message = String(message).trim();
-    }
-    const res = await apiFetch(`/tasks/${taskId}/supersede/stream`, {
-      method: "POST",
-      headers: getAuthHeaders(),
-      body: JSON.stringify(body),
-      signal: sseAbort.signal,
-    });
-    if (!res.ok || !res.body) {
-      if (res.status !== 401) {
-        appendLine(`supersede stream failed: ${res.status} ${await res.text()}`, "error");
-      }
-      return null;
-    }
-    activeTaskId = taskId;
-    await consumeSseStream(res, taskIdRef, { signal: sseAbort.signal });
-    return { task_id: taskIdRef.id || taskId };
-  } catch (err) {
-    if (!isSseAbortError(err)) {
-      appendLine(`supersede stream error: ${err}`, "error");
-    }
-    return null;
-  } finally {
-    if (activeSseAbortController === sseAbort) {
-      activeSseAbortController = null;
-    }
-    setRunning(false);
-    const endedTaskId = taskIdRef?.id || taskId || activeTaskId;
-    const wasDetached = Boolean(sseAbort?.signal?.aborted);
-    await afterClientStreamEnded(endedTaskId, {
-      detached: wasDetached,
-      reason: sseStreamEndReason(sseAbort.signal),
-    });
-  }
-}
-
-/** Resume mission with SSE (progress, writing_delta, gates) — preferred for Web CLI. */
-async function runResumeStream(
-  taskId,
-  { confirm = false, fromPendingQueue = false, suppressUserEcho = false } = {},
-) {
-  if (running && !fromPendingQueue) {
-    appendLine("已有任务在运行，请稍候", "error");
-    return null;
-  }
-  setRunning(true);
-  shownConfirmationKeys.clear();
-  writingStreamCharsThisTurn = 0;
-  if (!suppressUserEcho) {
-    appendLine(`> /resume${confirm ? " confirm" : ""}`, "user");
-  }
-  const taskIdRef = { id: taskId };
-  const sseAbort = new AbortController();
-  bindActiveSseAbort(sseAbort);
-  try {
-    const res = await apiFetch(`/tasks/${taskId}/resume/stream`, {
-      method: "POST",
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ confirm: Boolean(confirm) }),
-      signal: sseAbort.signal,
-    });
-    if (!res.ok || !res.body) {
-      if (res.status !== 401) {
-        appendLine(`resume stream failed: ${res.status} ${await res.text()}`, "error");
-      }
-      return null;
-    }
-    activeTaskId = taskId;
-    await consumeSseStream(res, taskIdRef, { signal: sseAbort.signal });
-    return { task_id: taskIdRef.id || taskId };
-  } catch (err) {
-    if (!isSseAbortError(err)) {
-      appendLine(`resume stream error: ${err}`, "error");
-    }
-    return null;
-  } finally {
-    if (activeSseAbortController === sseAbort) {
-      activeSseAbortController = null;
-    }
-    setRunning(false);
-    const endedTaskId = taskIdRef?.id || taskId || activeTaskId;
-    const wasDetached = Boolean(sseAbort?.signal?.aborted);
-    await afterClientStreamEnded(endedTaskId, {
-      detached: wasDetached,
-      reason: sseStreamEndReason(sseAbort.signal),
-    });
-  }
 }
 
 function formatOrchestration(summary, detail) {
@@ -3920,7 +3735,12 @@ function formatNodeEvent(payload) {
     return;
   }
 
-  const line = `[${node}] → ${status}`;
+  const intent =
+    (node === "event_classification" || node === "acknowledge") && payload.event_type
+      ? String(payload.event_type)
+      : "";
+  const label = intent || status;
+  const line = `[${node}] → ${label}`;
   appendLine(line, isError ? "error" : "node");
   if (node === "tool_execution" && status === "TOOL_EXECUTED") {
     appendLine("  … 工具执行完成，正在收尾", "system");
@@ -4421,9 +4241,7 @@ function initSkillFromUrl() {
 }
 
 /**
- * 发起流式任务，结束后刷新 flow 面板。
- *
- * Start streamed task via POST /tasks/stream; refresh flow panel in finally.
+ * Start streamed task — QA/writing uses unified /message/stream; supervisor keeps legacy endpoint.
  */
 async function runTaskStream(
   goal,
@@ -4432,6 +4250,19 @@ async function runTaskStream(
   body = null,
   opts = {}
 ) {
+  if (endpoint === "/tasks/stream") {
+    const requestBody = body || buildTaskRequestBody(goal, riskLevel);
+    const tid = activeTaskId || getSessionId();
+    const meta = { ...(requestBody.input_payload || {}) };
+    if (requestBody.new_session) meta.new_session = true;
+    if (requestBody.skill_id) meta.skill_id = requestBody.skill_id;
+    if (requestBody.skill_params) meta.skill_params = requestBody.skill_params;
+    return sendMessage(tid, goal, {
+      suppressUserEcho: Boolean(opts.suppressUserEcho),
+      meta,
+      ...opts,
+    });
+  }
   setRunning(true);
   shownConfirmationKeys.clear();
   writingStreamCharsThisTurn = 0;
@@ -4455,7 +4286,7 @@ async function runTaskStream(
         appendLine(line, "error");
       }
       appendLine(
-        "（/health/live 不可达，已跳过 POST /tasks/stream；热更新后请等 agent 就绪再试）",
+        "（/health/live 不可达，已跳过 POST /message/stream；热更新后请等 agent 就绪再试）",
         "error"
       );
       return;
@@ -4506,8 +4337,8 @@ function printHelp() {
   appendLine("  <text>           Run agent task (SSE stream)", "system");
   appendLine("  /new             Start a new session (new task window)", "system");
   appendLine("  /clear           Clear terminal output", "system");
-  appendLine("  /confirm         POST /resume {\"confirm\":true} (pending steer gate)", "system");
-  appendLine("  /resume          Continue current paused mission stream", "system");
+  appendLine("  /confirm         message/stream {\"confirm\":true} (pending steer gate)", "system");
+  appendLine("  /resume          Send 「继续」 via message/stream", "system");
   appendLine("  /stop            Stop current running session task (best-effort immediate)", "system");
   appendLine("  /stop-all        Stop all in-flight missions in recent task list", "system");
   appendLine("  /append <text>   Add follow-up steer without replacing current goal", "system");
@@ -4559,13 +4390,15 @@ async function handleCommand(raw) {
   }
   if (text === "/confirm") {
     const taskId = activeTaskId || getSessionId();
-    await runResumeStream(taskId, { confirm: true });
+    await sendMessage(taskId, "", { confirm: true, suppressUserEcho: true });
+    appendLine("> /confirm", "user");
     sessionHasInFlightMission = false;
     return;
   }
   if (text === "/resume") {
     const taskId = activeTaskId || getSessionId();
-    await runResumeStream(taskId, { confirm: false });
+    appendLine("> /resume", "user");
+    await sendMessage(taskId, "继续", { suppressUserEcho: true });
     sessionHasInFlightMission = false;
     return;
   }
@@ -4590,10 +4423,8 @@ async function handleCommand(raw) {
       appendLine("usage: /append <text>", "error");
       return;
     }
-    const ok = await steerActiveMission(msg, {
-      preempt: false,
+    const ok = await sendMessage(activeTaskId || getSessionId(), msg, {
       priority: 0,
-      replaceGoal: false,
     });
     if (ok) sessionHasInFlightMission = true;
     return;
@@ -4641,43 +4472,25 @@ async function handleCommand(raw) {
     return;
   }
   if (text.startsWith("/risk high ")) {
-    await runTaskStream(text.slice("/risk high ".length), "HIGH");
+    const goal = text.slice("/risk high ".length);
+    const taskId = activeTaskId || getSessionId();
+    await sendMessage(taskId, goal, { meta: { risk_level: "HIGH", mission_auto: true } });
     sessionHasInFlightMission = false;
     return;
   }
-  // Steer queue only while the executor is actually running on the server.
-  // After worker_lost / PAUSED, use normal session turn (insert + explicit /resume).
+  // Unified ingress: backend classifies steer/resume/new turn via fsm_state.
   if (!text.startsWith("/")) {
     const taskId = activeTaskId || getSessionId();
-    const statusData = await fetchTaskStatus(taskId);
-    const st = String(statusData?.status || "");
-    const executorActive = Boolean(statusData?.executor_active);
-    sessionMissionExecutorActive = st === "MISSION_RUNNING" && executorActive;
-    sessionHasInFlightMission = st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
-    updateStopButtonState();
-    if (shouldSteerUserMessage(statusData, text)) {
-      appendLine(`> ${text}`, "user");
-      if (isMissionStatusQuery(text)) {
-        await handleMissionStatusInquiry(text, { suppressUserEcho: true });
-      } else {
-        await steerActiveMission(text, {
-          preempt: true,
-          priority: 80,
-          replaceGoal: true,
-        });
-      }
+    appendLine(`> ${text}`, "user");
+    if (isMissionStatusQuery(text)) {
+      await handleMissionStatusInquiry(text, { suppressUserEcho: true });
       return;
     }
-    if (
-      isContinueWritingGoal(text) &&
-      (st === "MISSION_PAUSED" || st === "MISSION_RUNNING" || sessionHasInFlightMission)
-    ) {
-      appendLine(`> ${text}`, "user");
-      await runResumeStream(taskId, { confirm: false, suppressUserEcho: true });
-      return;
-    }
+    await sendMessage(taskId, text, { suppressUserEcho: true });
+    return;
   }
-  await runTaskStream(text, "LOW");
+  const taskId = activeTaskId || getSessionId();
+  await sendMessage(taskId, text, { suppressUserEcho: true });
   sessionHasInFlightMission = false;
 }
 
@@ -4802,22 +4615,12 @@ formEl.addEventListener("submit", async (event) => {
       await handleCommand(value);
       return;
     }
-    if (isWritingMissionActive(statusData)) {
-      if (isMissionStatusQuery(value)) {
-        appendLine(`> ${value}`, "user");
-        await handleMissionStatusInquiry(value, { suppressUserEcho: true });
-      } else if (isContinueWritingGoal(value)) {
-        enqueuePendingStreamInput(value);
-      } else {
-        await steerActiveMission(value, {
-          preempt: true,
-          priority: 80,
-          replaceGoal: true,
-        });
-      }
+    // Unified ingress: interrupt current stream and let backend classify (no frontend steer heuristics).
+    if (isMissionStatusQuery(value)) {
+      await handleMissionStatusInquiry(value, { suppressUserEcho: true });
       return;
     }
-    enqueuePendingStreamInput(value);
+    await sendMessage(taskId, value, { suppressUserEcho: true });
     return;
   }
   await handleCommand(value);
@@ -5107,11 +4910,12 @@ async function restoreSessionOnLoad() {
     persistFlowHistoryToStorage(taskId);
   }
   const st = String(data.status || "");
-  const executorActive = Boolean(data.executor_active);
   const pauseReason = String(data.pause_reason || "");
-  sessionMissionExecutorActive = st === "MISSION_RUNNING" && executorActive;
+  const executorActive = Boolean(data.executor_active);
+  const fsm = getFsmState(data);
+  sessionMissionExecutorActive = fsm === "RUNNING" && executorActive;
   sessionHasInFlightMission =
-    executorActive || st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
+    executorActive || fsm === "RUNNING" || fsm === "REPLANNING" || fsm === "WAITING_USER";
   await refreshFlowPanel(taskId);
   const hasMission =
     executorActive ||

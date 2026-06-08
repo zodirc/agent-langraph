@@ -1,9 +1,56 @@
 """Steer resend / mid-mission correction must replan, not mechanical append."""
 
 from app.runtime.state import TaskStatus, merge_state
+from app.services.event_classification import classify_user_event
 from app.services.confirmation.gate_registry import GateContext, intent_gate_required
 from app.services.mission_steer import planning_steer_replan_active, steer_requires_planning
 from app.services.session.turn_policy import resolve_session_turn
+
+
+def test_turn_policy_resend_with_active_mission_is_supersede(base_state):
+    goal = "写一份电影剧本，谍战剧情，要包括细节，民国背景"
+    mission = {"kind": "writing", "objective": goal}
+    state = merge_state(base_state, mission=mission, session_turn=2)
+    decision = resolve_session_turn(
+        state,
+        {"goal": goal, "meta": {"resend": True}},
+        goal,
+        incoming={"goal": goal, "meta": {"resend": True}},
+    )
+    assert decision.intent == "supersede_active_mission"
+    assert decision.source == "user_resend"
+
+
+def test_turn_policy_resend_without_mission_is_isolate_qa(base_state):
+    goal = "写一份电影剧本，谍战剧情，要包括细节，民国背景"
+    decision = resolve_session_turn(
+        base_state,
+        {"goal": goal, "meta": {"resend": True}},
+        goal,
+        incoming={"goal": goal, "meta": {"resend": True}},
+    )
+    assert decision.intent == "isolate_qa"
+    assert decision.source == "user_resend"
+
+
+def test_resend_classified_as_new_task_not_resume(base_state):
+    goal = "写一份电影剧本，谍战剧情，要包括细节，民国背景"
+    mission = {"kind": "writing", "objective": goal}
+    state = merge_state(
+        base_state,
+        mission=mission,
+        session_turn=3,
+        input_payload={"mission": mission},
+    )
+    result = classify_user_event(
+        state,
+        payload={
+            "goal": goal,
+            "meta": {"resend": True},
+            "turn_policy_decision": {"intent": "resume_mission"},
+        },
+    )
+    assert result.event_type == "new_task"
 
 
 def test_turn_policy_steer_correction_is_supersede(base_state):

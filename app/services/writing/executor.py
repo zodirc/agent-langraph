@@ -84,11 +84,9 @@ def _bind_command_payload(payload: dict[str, Any], command: WritingCommand) -> d
         command,
         mission_step=int(out.get("mission_step") or 1),
     )
-    tools, tool_params = tools_for_command(command)
+    tools = tools_for_command(command)
     if tools:
         out["selected_tools"] = tools
-        out.setdefault("tool_params", {})
-        out["tool_params"].update(tool_params)
         stages = tool_stages_for_command(command)
         if stages:
             out["tool_stages"] = stages
@@ -96,13 +94,16 @@ def _bind_command_payload(payload: dict[str, Any], command: WritingCommand) -> d
 
 
 def _execute_edit_plot(state: AgentState, command: WritingCommand) -> AgentState:
-    spec = dict(command.edit_spec)
-    filename = command.target_filename
-    payload = dict(state.get("input_payload") or {})
-    from app.services.outline_steer_patch import is_outline_filename, run_outline_edit_via_tools
+    from app.services.artifact_resolver import maybe_run_outline_edit, resolve_artifact_target
 
-    if is_outline_filename(filename) and not spec.get("old_text"):
-        return run_outline_edit_via_tools(state, spec={**spec, "filename": filename})
+    outline_edit = maybe_run_outline_edit(state)
+    if outline_edit is not None:
+        return outline_edit  # type: ignore[return-value]
+
+    spec = dict(command.edit_spec)
+    payload = dict(state.get("input_payload") or {})
+    target = resolve_artifact_target(state, action="edit_plot", target_hint=command.target_kind)
+    filename = target.filename
 
     if spec.get("old_text"):
         from app.services.artifact_tools import handle_edit_text_artifact, handle_read_text_artifact
@@ -138,6 +139,8 @@ def _execute_edit_plot(state: AgentState, command: WritingCommand) -> AgentState
                 status=TaskStatus.MISSION_RUNNING.value,
                 errors=[reason],
             )
+
+        from app.services.outline_steer_patch import is_outline_filename
 
         ms = resolve_manuscript(task_id, state.get("manuscript"))
         nbytes = int(edit_out.get("bytes") or 0)

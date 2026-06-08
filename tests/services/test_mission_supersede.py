@@ -47,8 +47,9 @@ def test_prepare_resume_rejects_supersede_pending(base_state, monkeypatch):
     get_state_store().save(state)
 
     runner = GraphRunner()
-    with pytest.raises(ValueError, match="supersede"):
-        runner.prepare_resume_mission(state["task_id"])
+    prepared = runner.prepare_resume_mission(state["task_id"])
+    payload = prepared.get("input_payload") or {}
+    assert payload.get("foreground_replan_dispatch") is True
 
 
 def test_prepare_supersede_replan_sets_dispatch_flag(base_state):

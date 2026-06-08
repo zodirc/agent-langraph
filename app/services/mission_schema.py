@@ -268,8 +268,10 @@ def apply_mission_step_to_payload(state: AgentState) -> dict[str, Any]:
 
     from app.services.mission_intervention import normalize_payload_execution_fields
 
+    from app.runtime.state_field_access import mission_from_state
+
     payload = normalize_payload_execution_fields(dict(state.get("input_payload") or {}))
-    mission = state.get("mission") or {}
+    mission = mission_from_state(state) or {}
     if mission.get("kind") != "writing":
         return payload
 
@@ -283,10 +285,6 @@ def apply_mission_step_to_payload(state: AgentState) -> dict[str, Any]:
     )
     from app.domain.packs.registry import get_domain_pack
 
-    names = get_domain_pack("writing").resolve_artifact_names(
-        dict(mission.get("step_policy") or {}),
-        mission=mission,
-    )
     from app.services.mission.step_reconcile import reconcile_writing_intent
 
     intent = reconcile_writing_intent(
@@ -294,8 +292,13 @@ def apply_mission_step_to_payload(state: AgentState) -> dict[str, Any]:
         intent,
     )
     payload["writing_intent"] = intent
-    payload["novel_filename"] = names.get("novel_filename") or policy.body_artifact
-    payload["outline_filename"] = names.get("outline_filename") or policy.outline_artifact
+    ms = dict(state.get("manuscript") or {})
+    if not ms.get("body_path") and policy.body_artifact:
+        ms["body_path"] = policy.body_artifact
+    if not ms.get("outline_path") and policy.outline_artifact:
+        ms["outline_path"] = policy.outline_artifact
+    if ms:
+        payload["manuscript"] = ms
     payload["requested_total_chars"] = (mission.get("success_criteria") or {}).get("target")
     payload["chars_per_step"] = policy.chars_per_step
 

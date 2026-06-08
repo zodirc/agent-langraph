@@ -117,7 +117,7 @@ def _pause_context_lines(state: AgentState, control: dict[str, Any]) -> list[str
     reason = str(control.get("reason") or "").strip()
     pause_reason = str(control.get("pause_reason") or "").strip()
     if pause_reason == "user_requested_pause":
-        lines.append("任务已按你的请求暂停；已提交内容已保存，可用 /resume 从检查点继续。")
+        lines.append("任务已按你的请求暂停；已提交内容已保存，发送「继续」可从检查点续跑。")
     elif pause_reason == "user_requested_cancel":
         lines.append("任务已取消；已提交内容保留，未提交部分已丢弃。")
     if reason and reason not in lines:
@@ -139,7 +139,9 @@ def _payload_for_gates(state: AgentState) -> dict[str, Any]:
 def _consecutive_failures_paused(state: AgentState, control: dict[str, Any]) -> bool:
     if "consecutive_failures" in str(control.get("reason") or ""):
         return True
-    progress = state.get("progress") or {}
+    from app.runtime.state_field_access import progress_from_state
+
+    progress = progress_from_state(state) or {}
     failures = int(progress.get("consecutive_failures") or 0)
     if failures <= 0:
         return False
@@ -157,7 +159,7 @@ def _next_step_line(state: AgentState, control: dict[str, Any], action_label: Op
     if _wall_clock_pause(control):
         return (
             "任务已暂停：已达 mission 墙钟上限（max_wall_sec）。"
-            "请调大配置后执行 /resume，或新建会话继续写作。"
+            "请调大配置后发送「继续」，或新建会话继续写作。"
         )
     from app.services.mission_orchestrator import orchestration_detail
 
@@ -165,11 +167,11 @@ def _next_step_line(state: AgentState, control: dict[str, Any], action_label: Op
     done = int(detail.get("done") or 0)
     total = int(detail.get("total") or 0)
     if total > 0 and done >= total and not detail.get("current_title"):
-        return "编排队列已完成；若仍需续写请发送「继续」或 /resume。"
+        return "编排队列已完成；若仍需续写请发送「继续」。"
     if total > 0 and not detail.get("current_title") and done < total:
         return (
             f"编排进度 {done}/{total}，当前无活动工作项；"
-            f"发送「继续」或 /resume 以生成下一项"
+            f"发送「继续」以生成下一项"
             + (f"（建议：{action_label}）" if action_label else "")
         )
     if action_label:
@@ -178,8 +180,10 @@ def _next_step_line(state: AgentState, control: dict[str, Any], action_label: Op
 
 
 def autonomous_ui_for_pause(state: AgentState, *, autonomous: bool, steer_pause: bool) -> dict[str, Any]:
+    from app.runtime.state_field_access import mission_control_from_state
+
     payload = _payload_for_gates(state)
-    control = state.get("mission_control") or {}
+    control = mission_control_from_state(state)
     if not autonomous:
         return {"enabled": False, "behavior": None, "system_lines": []}
 
@@ -189,17 +193,17 @@ def autonomous_ui_for_pause(state: AgentState, *, autonomous: bool, steer_pause:
 
     if steer_outcome_confirmation_pending(payload):
         behavior = "wait_outcome_confirm"
-        lines.append("autonomous: paused until outcome gate approved (confirm:true on resume/steer)")
+        lines.append("autonomous: paused until outcome gate approved (/confirm or confirm:true)")
     elif steer_confirmation_pending(payload):
         behavior = "wait_intent_confirm"
-        lines.append("autonomous: paused until intent gate approved (confirm:true on resume/steer)")
+        lines.append("autonomous: paused until intent gate approved (/confirm or confirm:true)")
     elif payload.get("steer_review_outline"):
         behavior = "steer_review_only"
         lines.append("autonomous: review_outline — resume when ready to read outline")
     elif _wall_clock_pause(control):
         behavior = "wall_clock_pause"
         lines.append(
-            "autonomous: wall-clock limit reached — increase max_wall_sec or /resume manually"
+            "autonomous: wall-clock limit reached — increase max_wall_sec or send 继续"
         )
     elif _consecutive_failures_paused(state, control):
         behavior = "failure_pause"
@@ -208,10 +212,10 @@ def autonomous_ui_for_pause(state: AgentState, *, autonomous: bool, steer_pause:
         )
     elif steer_pause:
         behavior = "manual_resume"
-        lines.append("autonomous: paused after steer — continue with /resume or 「继续写作」 when ready")
+        lines.append("autonomous: paused after steer — send 「继续写作」 when ready")
     elif not steer_pause:
         behavior = "manual_resume"
-        lines.append("autonomous: step paused — continue with /resume or 「继续写作」 when ready")
+        lines.append("autonomous: step paused — send 「继续写作」 when ready")
 
     if behavior in ("wait_outcome_confirm", "wait_intent_confirm"):
         resume_confirm = True
@@ -280,8 +284,10 @@ def build_mission_paused_payload(
     confirmation_actions: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """SSE mission_paused body — render system_lines on the client."""
+    from app.runtime.state_field_access import mission_control_from_state
+
     payload = _payload_for_gates(state)
-    control = state.get("mission_control") or {}
+    control = mission_control_from_state(state)
     intervention = _intervention_display(payload)
 
     system_lines = _pause_context_lines(state, control)
@@ -392,11 +398,11 @@ def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[
             lines.append("续写已暂停直至队列消费；消费后将重新规划（非自动 append 下一章）。")
     else:
         lines = ["steer_applied: 插入/纠偏已写入任务状态"]
-        replan_pending = bool(payload.get("require_planning_after_steer")) and not payload.get(
-            "steer_planning_done"
-        )
+        from app.services.session_fsm import get_fsm_state, routing_needs_replan
+
+        replan_pending = routing_needs_replan(state)
+        replanning = get_fsm_state(state) == "REPLANNING"
         ctx = state.get("interrupt_context") or {}
-        replanning = isinstance(ctx, dict) and str(ctx.get("control_state") or "") == "REPLANNING"
         if replan_pending or pause_reason == "foreground_replan" or replanning:
             lines.append(
                 "steer_replan_pending: 纠偏已生效，旧计划已作废；将重新规划（非 append 续写）。"
@@ -414,13 +420,13 @@ def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[
             lines.append(contract_line)
         if pause_reason == "worker_lost":
             lines.append(
-                "执行器已中断：不会自动写作；续跑请 /resume 或发送「继续写作」。"
+                "执行器已中断：不会自动写作；续跑请发送「继续写作」。"
             )
         elif str(state.get("status") or "") == "MISSION_PAUSED":
             if replan_pending or replanning:
-                lines.append("纠偏已接管前台：将启动重新规划（/supersede，非 /resume）。")
+                lines.append("纠偏已接管前台：将启动重新规划（发送纠偏消息即可）。")
             else:
-                lines.append("任务已暂停：续跑请 /resume 或发送「继续写作」。")
+                lines.append("任务已暂停：续跑请发送「继续写作」。")
         if status_inquiry:
             lines.append(build_mission_status_answer(state))
         if intervention and intervention.get("reason"):
@@ -430,10 +436,12 @@ def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[
 
     from app.services.mission_supersede import is_supersede_replan_pending
 
+    from app.services.session_fsm import FSM_REPLANNING, get_fsm_state
+
     supersede_stream_recommended = (
         not queued
         and is_supersede_replan_pending(payload, state)
-        and str(state.get("status") or "") == "MISSION_PAUSED"
+        and get_fsm_state(state) in (FSM_REPLANNING, "WAITING_USER")
     )
 
     return {

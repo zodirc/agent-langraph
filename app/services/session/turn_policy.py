@@ -83,6 +83,32 @@ def _pattern_kind_decision(
     return None
 
 
+def _goal_requires_steer_replan(goal: str) -> bool:
+    """True for mid-mission direction corrections that need replan, not casual QA."""
+    import re
+
+    from app.services.interaction_goal import goal_is_mission_status_query
+    from app.services.manuscript_service import is_continue_writing_goal
+
+    text = (goal or "").strip()
+    if not text or is_continue_writing_goal(text) or goal_is_mission_status_query(text):
+        return False
+    if len(text) <= 24 and re.match(
+        r"^(你好|您好|hello|hi|hey|嗨|在吗|在么|哈喽|嗨喽)\b",
+        text,
+        re.IGNORECASE,
+    ):
+        return False
+    if re.fullmatch(r"(你好|您好|hello|hi|hey|嗨)[!.?，,\s]*", text, re.IGNORECASE):
+        return False
+    correction_cues = re.compile(
+        r"(不要|别用|改用|换成|应该|需要|认为|改一下|修改|调整|纠正|更正|"
+        r"instead|rather|should not|should use|change the|modify the|correct)",
+        re.IGNORECASE,
+    )
+    return bool(correction_cues.search(text))
+
+
 def _evaluate_active_mission_turn(
     goal: str,
     *,
@@ -115,9 +141,7 @@ def _evaluate_active_mission_turn(
             reason="continue writing signal",
         )
 
-    from app.services.mission_steer import steer_needs_planning_llm
-
-    if steer_needs_planning_llm(message=text):
+    if _goal_requires_steer_replan(text):
         return TurnDecision(
             intent="supersede_active_mission",
             source="steer_correction",
@@ -164,6 +188,16 @@ def _evaluate_active_mission_turn(
     )
 
 
+def _is_user_resend(req: dict[str, Any], payload: dict[str, Any]) -> bool:
+    for block in (req, payload):
+        if block.get("resend") is True:
+            return True
+        meta = block.get("meta")
+        if isinstance(meta, dict) and meta.get("resend"):
+            return True
+    return False
+
+
 def resolve_session_turn(
     state: dict[str, Any],
     payload: dict[str, Any],
@@ -181,6 +215,22 @@ def resolve_session_turn(
     turn_cfg = turn_cfg or load_session_turn_policy_config()
     route_cfg = route_cfg or load_route_audit_config()
     req = incoming if incoming is not None else payload
+
+    if _is_user_resend(req, payload):
+        mission = state.get("mission")
+        if not isinstance(mission, dict) or not mission:
+            mission = payload.get("mission") or (state.get("input_payload") or {}).get("mission")
+        if isinstance(mission, dict) and mission and not payload.get("mission_suspended"):
+            return TurnDecision(
+                intent="supersede_active_mission",
+                source="user_resend",
+                reason="resend retries goal with active mission — replan, not resume",
+            )
+        return TurnDecision(
+            intent="isolate_qa",
+            source="user_resend",
+            reason="resend retries turn without resume",
+        )
 
     if not turn_cfg.enabled:
         if explicit_mission_requested(req, str(req.get("execution_mode") or "")):
@@ -238,6 +288,8 @@ def resolve_session_turn(
         )
 
     mission = state.get("mission")
+    if not isinstance(mission, dict) or not mission:
+        mission = (payload.get("mission") or (state.get("input_payload") or {}).get("mission"))
     if not mission:
         archived = payload.get("archived_mission")
         if isinstance(archived, dict) and archived and _matches_continue_patterns(goal, turn_cfg):
@@ -313,7 +365,7 @@ def apply_qa_turn_isolation(payload: dict[str, Any], existing: dict[str, Any]) -
     mission = existing.get("mission")
     if isinstance(mission, dict) and mission:
         out["archived_mission"] = mission
-    for key in ("manuscript", "session_artifacts"):
+    for key in ("manuscript",):
         raw = out.get(key) or existing.get(key) or (existing.get("input_payload") or {}).get(
             key
         )

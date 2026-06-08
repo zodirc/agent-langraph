@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -39,11 +40,9 @@ def sanitize_manuscript_bindings(raw: Any) -> dict[str, Any]:
     for path_key, bytes_key in (
         ("body_path", "body_bytes"),
         ("outline_path", "outline_bytes"),
-        ("novel_filename", None),
-        ("outline_filename", None),
     ):
         path = out.get(path_key)
-        if path and not is_text_artifact_filename(str(path)):
+        if path and not is_manuscript_pointer_filename(str(path)):
             out.pop(path_key, None)
             if bytes_key:
                 out.pop(bytes_key, None)
@@ -52,10 +51,10 @@ def sanitize_manuscript_bindings(raw: Any) -> dict[str, Any]:
 
 def _finalize_text_manuscript_pointers(ms: Manuscript) -> Manuscript:
     """Clear body/outline pointers that are not text-artifact extensions."""
-    if ms.body_path and not is_text_artifact_filename(ms.body_path):
+    if ms.body_path and not is_manuscript_pointer_filename(ms.body_path):
         ms.body_path = None
         ms.body_bytes = 0
-    if ms.outline_path and not is_text_artifact_filename(ms.outline_path):
+    if ms.outline_path and not is_manuscript_pointer_filename(ms.outline_path):
         ms.outline_path = None
         ms.outline_bytes = 0
     return ms
@@ -88,7 +87,16 @@ _MISSION_PHASE_GOAL_TAG_RE = re.compile(
     r"edit_plot)\][^[]*",
     re.IGNORECASE,
 )
+_MANUSCRIPT_POINTER_EXTENSIONS = frozenset({".txt", ".md"})
 _OUTLINE_MARKERS = ("outline", "大纲", "提纲")
+
+
+def is_manuscript_pointer_filename(filename: str) -> bool:
+    """Body/outline artifact basenames (.txt/.md); excludes json/csv/log sidecars."""
+    name = Path(str(filename or "")).name.strip()
+    if not name:
+        return False
+    return Path(name).suffix.lower() in _MANUSCRIPT_POINTER_EXTENSIONS
 _CHAPTER_FOOTER_RE = re.compile(r"（第\s*[^）]{1,12}章完）")
 _CHAPTER_HEADER_MD_RE = re.compile(r"^#{1,3}\s*第\s*.+章", re.MULTILINE)
 _BEAT_LINE_RE = re.compile(r"^(\s*[-*•]|\s*\d+[\.\)、]|【)")
@@ -122,20 +130,9 @@ class Manuscript:
             "outline_revision": self.outline_revision,
             "body_revision": self.body_revision,
             "body_outline_revision_seen": self.body_outline_revision_seen,
-            "novel_filename": self.body_path,
-            "outline_filename": self.outline_path,
-            "novel_bytes": self.body_bytes,
             "files": self.files,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-
-    @property
-    def novel_filename(self) -> Optional[str]:
-        return self.body_path
-
-    @property
-    def outline_filename(self) -> Optional[str]:
-        return self.outline_path
 
 
 def _default_body() -> str:
@@ -168,51 +165,6 @@ def _pick_artifact_basename(*candidates: Any, default: str) -> str:
     return sanitize_artifact_basename(default)
 
 
-def resolve_outline_filename(
-    *,
-    manuscript: Manuscript,
-    payload: dict[str, Any],
-    intent: Optional[dict[str, Any]] = None,
-) -> str:
-    """Bound outline path, else model/mission names, else default."""
-    if manuscript.outline_path and is_text_artifact_filename(manuscript.outline_path):
-        return str(manuscript.outline_path)
-    intent = intent or {}
-    mission = payload.get("mission") or {}
-    policy = mission.get("step_policy") if isinstance(mission.get("step_policy"), dict) else {}
-    return _pick_artifact_basename(
-        intent.get("outline_filename"),
-        intent.get("outline_path"),
-        payload.get("outline_filename"),
-        policy.get("outline_artifact"),
-        default=_default_outline(),
-    )
-
-
-def resolve_body_filename(
-    *,
-    manuscript: Manuscript,
-    payload: dict[str, Any],
-    intent: Optional[dict[str, Any]] = None,
-) -> str:
-    """Bound body path, else model/mission names, else default."""
-    if manuscript.body_path and is_text_artifact_filename(manuscript.body_path):
-        return str(manuscript.body_path)
-    intent = intent or {}
-    mission = payload.get("mission") or {}
-    policy = mission.get("step_policy") if isinstance(mission.get("step_policy"), dict) else {}
-    return _pick_artifact_basename(
-        intent.get("body_filename"),
-        intent.get("body_path"),
-        intent.get("novel_filename"),
-        payload.get("novel_filename"),
-        payload.get("body_filename"),
-        policy.get("body_artifact"),
-        policy.get("artifact_path"),
-        default=_default_body(),
-    )
-
-
 def normalize_writing_intent_filenames(
     intent: dict[str, Any],
     *,
@@ -227,102 +179,22 @@ def normalize_writing_intent_filenames(
             policy = raw_policy
         else:
             policy = mission_block
-    if not out.get("outline_filename") and policy.get("outline_artifact"):
-        out["outline_filename"] = str(policy["outline_artifact"]).strip()
-    if not out.get("body_filename") and policy.get("body_artifact"):
-        out["body_filename"] = str(policy["body_artifact"]).strip()
-    for key in ("outline_filename", "body_filename"):
+    for key in ("body_filename",):
         if out.get(key):
             try:
                 out[key] = sanitize_artifact_basename(out[key])
             except ValueError:
                 out.pop(key, None)
-    return out
-
-
-def apply_planner_artifact_names(
-    payload: dict[str, Any],
-    *,
-    planning_result: Optional[dict[str, Any]] = None,
-) -> dict[str, Any]:
-    """Lift planner-chosen basenames into mission.step_policy and payload."""
-    out = dict(payload)
-    manuscript = _coerce_dict(out.get("manuscript") or out.get("session_artifacts"))
-    if manuscript.get("body_path") or manuscript.get("outline_path"):
-        return sync_payload_artifact_names(out)
-
-    plan_intent: dict[str, Any] = {}
-    if isinstance(planning_result, dict):
-        raw = planning_result.get("writing_intent")
-        if isinstance(raw, dict):
-            plan_intent = raw
-
-    intent = dict(_coerce_dict(out.get("writing_intent")) or plan_intent or {})
-    raw_mission = out.get("mission")
-    mission = _coerce_dict(raw_mission)
-    if raw_mission is not None and not isinstance(raw_mission, dict):
-        out.pop("mission", None)
-    if mission and str(mission.get("kind") or "") == "writing":
-        policy = dict(mission.get("step_policy") or {})
-        body = _pick_artifact_basename(
-            policy.get("body_artifact"),
-            policy.get("artifact_path"),
-            intent.get("body_filename"),
-            intent.get("novel_filename"),
-            plan_intent.get("body_filename"),
-            out.get("novel_filename"),
-            out.get("body_filename"),
-            default=_default_body(),
-        )
-        outline = _pick_artifact_basename(
-            policy.get("outline_artifact"),
-            intent.get("outline_filename"),
-            plan_intent.get("outline_filename"),
-            out.get("outline_filename"),
-            default=_default_outline(),
-        )
-        policy["body_artifact"] = body
-        policy["outline_artifact"] = outline
-        out["mission"] = {**mission, "step_policy": policy}
-
-    return sync_payload_artifact_names(out, intent=intent)
-
-
-def sync_payload_artifact_names(
-    payload: dict[str, Any],
-    *,
-    intent: Optional[dict[str, Any]] = None,
-) -> dict[str, Any]:
-    """Promote intent/mission artifact names onto payload before manuscript bind."""
-    out = dict(payload)
-    intent = dict(_coerce_dict(intent) or _coerce_dict(out.get("writing_intent")))
-    manuscript = _coerce_dict(out.get("manuscript") or out.get("session_artifacts"))
-    mission = _coerce_dict(out.get("mission"))
-    policy = _coerce_dict(mission.get("step_policy"))
-
-    if not manuscript.get("outline_path"):
-        outline_raw = (
-            intent.get("outline_filename")
-            or out.get("outline_filename")
-            or policy.get("outline_artifact")
-        )
-        promoted = _promote_text_artifact_basename(outline_raw)
-        if promoted:
-            out["outline_filename"] = promoted
-
-    if not manuscript.get("body_path"):
-        body_raw = (
-            intent.get("body_filename")
-            or intent.get("novel_filename")
-            or out.get("novel_filename")
-            or out.get("body_filename")
-            or policy.get("body_artifact")
-            or policy.get("artifact_path")
-        )
-        promoted = _promote_text_artifact_basename(body_raw)
-        if promoted:
-            out["novel_filename"] = promoted
-
+    if policy.get("outline_artifact"):
+        try:
+            out.setdefault("outline_path_hint", sanitize_artifact_basename(policy["outline_artifact"]))
+        except ValueError:
+            pass
+    if policy.get("body_artifact"):
+        try:
+            out.setdefault("body_path_hint", sanitize_artifact_basename(policy["body_artifact"]))
+        except ValueError:
+            pass
     return out
 
 
@@ -429,49 +301,20 @@ def resolve_manuscript(task_id: str, stored: Optional[dict[str, Any]] = None) ->
         ms.outline_revision = int(stored.get("outline_revision") or 0)
         ms.body_revision = int(stored.get("body_revision") or 0)
         ms.body_outline_revision_seen = int(stored.get("body_outline_revision_seen") or 0)
-        if body and is_text_artifact_filename(str(body)) and any(
+        if body and is_manuscript_pointer_filename(str(body)) and any(
             f.get("filename") == body for f in files
         ):
             ms.body_path = str(body)
             ms.body_bytes = int(stored.get("body_bytes") or 0)
-        if outline and is_text_artifact_filename(str(outline)) and any(
+        if outline and is_manuscript_pointer_filename(str(outline)) and any(
             f.get("filename") == outline for f in files
         ):
             ms.outline_path = str(outline)
             ms.outline_bytes = int(stored.get("outline_bytes") or 0)
-        if ms.body_path or ms.outline_path:
-            return _finalize_text_manuscript_pointers(_refresh_bytes(ms))
+    from app.services.artifact_resolver import reconcile_manuscript_pointers
 
-    outline_candidates: list[dict[str, Any]] = []
-    body_candidates: list[dict[str, Any]] = []
-    for item in files:
-        name = str(item.get("filename") or "")
-        if not name:
-            continue
-        if _is_outline_name(name):
-            if is_text_artifact_filename(name):
-                outline_candidates.append(item)
-        elif is_text_artifact_filename(name):
-            body_candidates.append(item)
-
-    if outline_candidates:
-        outline_candidates.sort(key=lambda x: int(x.get("bytes") or 0), reverse=True)
-        pick = outline_candidates[0]
-        ms.outline_path = str(pick["filename"])
-        ms.outline_bytes = int(pick.get("bytes") or 0)
-
-    if body_candidates:
-        default_body = _default_body()
-        by_name = {str(f["filename"]): f for f in body_candidates}
-        if default_body in by_name and int(by_name[default_body].get("bytes") or 0) >= 512:
-            pick = by_name[default_body]
-        else:
-            body_candidates.sort(key=lambda x: int(x.get("bytes") or 0), reverse=True)
-            pick = body_candidates[0]
-        ms.body_path = str(pick["filename"])
-        ms.body_bytes = int(pick.get("bytes") or 0)
-
-    return _finalize_text_manuscript_pointers(ms)
+    ms = reconcile_manuscript_pointers(task_id, ms)
+    return _finalize_text_manuscript_pointers(_refresh_bytes(ms))
 
 
 def _sync_chapter_from_disk(ms: Manuscript) -> None:
@@ -560,13 +403,11 @@ def build_writing_intent(
     mission_step: int = 0,
 ) -> dict[str, Any]:
     """Derive writing_intent from plan tools + session (no file content)."""
-    from app.services.mission_schema import should_use_mission_runtime
+    from app.services.writing_step import should_delegate_planning_writing_to_mission
 
-    if (
-        mission_block
-        and should_use_mission_runtime({"mission": mission_block}, "")
-        and not active_mission
-        and int(mission_step or 0) < 1
+    if should_delegate_planning_writing_to_mission(
+        mission_block=mission_block,
+        payload={"mission": mission_block} if mission_block else None,
     ):
         return {
             "enabled": False,
@@ -673,22 +514,43 @@ def enrich_payload(
 ) -> dict[str, Any]:
     goal = str(payload.get("goal") or payload.get("query") or "").strip()
     ms = manuscript or resolve_manuscript(task_id)
-    if not ms.files and not ms.body_path:
+    if manuscript is not None:
+        cleaned = sanitize_manuscript_bindings(manuscript.to_dict())
+        if not cleaned.get("body_path") and not cleaned.get("outline_path") and not ms.files:
+            return payload
+        if cleaned.get("body_path") or cleaned.get("outline_path"):
+            ms = Manuscript(task_id=task_id, files=ms.files, **{
+                k: cleaned[k]
+                for k in (
+                    "body_path",
+                    "outline_path",
+                    "body_bytes",
+                    "outline_bytes",
+                    "chapter_cursor",
+                    "last_chapter_index",
+                    "revision",
+                    "outline_revision",
+                    "body_revision",
+                    "body_outline_revision_seen",
+                )
+                if k in cleaned
+            })
+    elif not ms.files and not ms.body_path and not ms.outline_path:
         return payload
 
+    from app.services.artifact_resolver import build_artifact_manifest
+
     tail_chars = int(getattr(settings, "MANUSCRIPT_TAIL_EXCERPT_CHARS", 2400))
-    enriched = {**payload, "manuscript": ms.to_dict(), "session_artifacts": ms.to_dict()}
-    enriched = sync_payload_artifact_names(enriched, intent=payload.get("writing_intent"))
+    enriched = {**payload, "manuscript": ms.to_dict()}
+    enriched["artifact_manifest"] = [
+        e.to_dict() for e in build_artifact_manifest(task_id, manuscript=ms, payload=payload)
+    ]
 
     if ms.body_path and is_text_artifact_filename(ms.body_path):
-        enriched["novel_filename"] = ms.body_path
         tail = read_artifact_tail(task_id, ms.body_path, max_chars=tail_chars)
         if tail:
             enriched["previous_artifact_excerpt"] = tail
         enriched["previous_artifact_summary"] = f"{ms.body_path}（约 {ms.body_bytes} 字节）"
-
-    if ms.outline_path and is_text_artifact_filename(ms.outline_path):
-        enriched["outline_filename"] = ms.outline_path
 
     if (
         (session_turn > 1 or is_continue_writing_goal(goal))
@@ -701,17 +563,3 @@ def enrich_payload(
             f"勿在 tool_params 填写 content 或占位符。"
         )
     return enriched
-
-
-def resolve_read_paths(state: dict[str, Any], filename: str) -> str:
-    payload = state.get("input_payload") or {}
-    manuscript = payload.get("manuscript") or payload.get("session_artifacts") or {}
-    body = manuscript.get("body_path") or payload.get("novel_filename")
-    outline = manuscript.get("outline_path") or payload.get("outline_filename")
-    name = filename
-    lower = name.lower()
-    if lower in ("novel.txt", "body.txt") and body and is_text_artifact_filename(str(body)):
-        return str(body)
-    if lower in ("outline.txt",) and outline and is_text_artifact_filename(str(outline)):
-        return str(outline)
-    return name

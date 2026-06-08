@@ -69,19 +69,24 @@ def bump_supersede_intent_revision(payload: dict[str, Any]) -> dict[str, Any]:
     return bump_intent_revision(dict(payload))
 
 
+def supersede_replan_queued(state: AgentState | dict[str, Any]) -> bool:
+    """True when foreground supersede is already queued or dispatching."""
+    op = foreground_operation(dict(state.get("interrupt_context") or {}))
+    return op.get("kind") == FOREGROUND_KIND_SUPERSEDE and op.get("status") in (
+        FG_STATUS_QUEUED,
+        FG_STATUS_DISPATCHING,
+    )
+
+
 def is_supersede_replan_pending(payload: dict[str, Any], state: AgentState | None = None) -> bool:
+    """Deprecated alias — use routing_needs_replan(state) for control-plane routing."""
+    from app.services.session_fsm import routing_needs_replan
+
+    if state is not None:
+        return routing_needs_replan(state)
     from app.services.mission_steer import steer_requires_planning
 
-    if steer_requires_planning(payload):
-        return True
-    if state is not None:
-        op = foreground_operation(dict(state.get("interrupt_context") or {}))
-        if op.get("kind") == FOREGROUND_KIND_SUPERSEDE and op.get("status") in (
-            FG_STATUS_QUEUED,
-            FG_STATUS_DISPATCHING,
-        ):
-            return True
-    return False
+    return steer_requires_planning(payload)
 
 
 def is_supersede_replan_dispatch(payload: dict[str, Any], state: AgentState | None = None) -> bool:
@@ -125,7 +130,9 @@ def mark_supersede_replan_queued(state: AgentState, *, source: str = "api_steer"
         intent_revision=int(payload.get("intent_revision") or 0),
         supersedes_run_id=str(run_meta.get("run_id") or "") or None,
     )
-    return updated
+    from app.services.session_fsm import FSM_REPLANNING, transition_fsm
+
+    return transition_fsm(updated, FSM_REPLANNING)
 
 
 def prepare_supersede_replan_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -179,7 +186,7 @@ def finalize_steer_for_supersede_replan(
     from app.services.mission_steer import steer_requires_planning
 
     payload = dict(state.get("input_payload") or {})
-    if not steer_requires_planning(payload):
+    if not steer_requires_planning(payload, state):
         return state
 
     text = (steer_text or "").strip()

@@ -116,6 +116,36 @@ def test_steer_replan_fallback_write_outline_when_no_outline_file(base_state):
     assert fb.get("mission_intervention", {}).get("action") == "rewrite_outline"
 
 
+def test_apply_steer_replan_outline_route_clears_read_only_tools(base_state):
+    from app.services.turn_contract import apply_steer_replan_outline_route
+    from app.services.mission_steer import apply_steer_planning_gate
+
+    mission = {"kind": "writing"}
+    payload = apply_steer_planning_gate(
+        {
+            "goal": STEER,
+            "latest_steer_message": STEER,
+            "foreground_replan_dispatch": True,
+            "mission": mission,
+        }
+    )
+    state = merge_state(
+        base_state,
+        mission=mission,
+        manuscript={"outline_path": "暗流涌动_大纲.txt", "outline_bytes": 500},
+        input_payload=payload,
+    )
+    llm_read_loop = {
+        "plan": ["read outline"],
+        "selected_tools": ["read_text_artifact"],
+        "tool_stages": [["read_text_artifact"]],
+    }
+    routed = apply_steer_replan_outline_route(state, llm_read_loop)
+    assert routed.get("steer_outline_route") == "modify"
+    assert routed.get("selected_tools") == []
+    assert "tool_stages" not in routed
+
+
 def test_apply_steer_replan_outline_route_overrides_llm_edit_when_no_file(base_state):
     from app.services.turn_contract import apply_steer_replan_outline_route
 

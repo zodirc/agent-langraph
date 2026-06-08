@@ -9,6 +9,17 @@ from app.services.state_store import get_state_store
 STEER = "我认为你需要使用原电影的人物，只是在一些原电影的剧情走向上改动，也不需要架空人物"
 
 
+def _mission_control(state: dict) -> dict:
+    mc = state.get("mission_control")
+    if isinstance(mc, dict):
+        return mc
+    plan_graph = state.get("plan_graph") or {}
+    meta = plan_graph.get("meta") if isinstance(plan_graph, dict) else {}
+    if isinstance(meta, dict) and isinstance(meta.get("mission_control"), dict):
+        return meta["mission_control"]
+    return {}
+
+
 def test_paused_steer_queues_supersede_with_latest_message(base_state):
     mission = build_mission_dict(
         base_state,
@@ -27,7 +38,7 @@ def test_paused_steer_queues_supersede_with_latest_message(base_state):
     payload = updated.get("input_payload") or {}
     assert payload.get("latest_steer_message") == STEER
     assert payload.get("require_planning_after_steer") is True
-    assert (updated.get("mission_control") or {}).get("pause_reason") == "superseded_by_new_input"
+    assert _mission_control(updated).get("pause_reason") == "superseded_by_new_input"
     op = foreground_operation(updated.get("interrupt_context") or {})
     assert op.get("kind") == "supersede_with_input"
     assert op.get("status") == "replan_queued"

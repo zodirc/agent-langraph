@@ -390,7 +390,7 @@ def enter_replanning_state(
         reason="foreground_replan",
         superseded_by_revision=int(payload.get("intent_revision") or 0) or None,
     )
-    return record_control_event(
+    updated = record_control_event(
         updated,
         "foreground_replanning",
         detail={
@@ -399,6 +399,9 @@ def enter_replanning_state(
             "epoch": get_foreground_epoch(updated),
         },
     )
+    from app.services.session_fsm import FSM_REPLANNING, transition_fsm
+
+    return transition_fsm(updated, FSM_REPLANNING)
 
 
 def resolve_pending_steer_action_hint(

@@ -210,12 +210,16 @@ def _prepare_mission_for_turn(
 def _begin_task_graph_run(state: AgentState) -> tuple[AgentState, str]:
     """Register in-process executor and task control; persist execution_run on state."""
     from app.services.foreground_execution import get_foreground_epoch, init_foreground_epoch_on_run
+    from app.services.run_controller import RunController
 
     task_id = str(state["task_id"])
     run_id = begin_graph_run(task_id)
     state = init_foreground_epoch_on_run(state, run_id=run_id)
     register_task_control(task_id, run_id, foreground_epoch=get_foreground_epoch(state))
-    state = merge_state(state, execution_run=execution_run_meta(run_id))
+    state = RunController.begin_run(state, run_id)
+    meta = dict(state.get("execution_run") or execution_run_meta(run_id))
+    meta.setdefault("run_id", run_id)
+    state = merge_state(state, execution_run=meta)
     return state, run_id
 
 
@@ -599,6 +603,7 @@ def _node_stream_payload(state: AgentState, node_name: str) -> dict[str, Any]:
         "task_id": state["task_id"],
         "node": node_name,
         "status": status,
+        "event_type": state.get("event_type"),
         "current_node": state.get("current_node"),
         "policy_result": state.get("policy_result"),
         "mission_step": state.get("mission_step"),
@@ -691,6 +696,7 @@ class GraphRunner:
     def _finalize_turn(self, state: AgentState) -> AgentState:
         from app.services.mission_worker_lost import reconcile_worker_lost
         from app.services.otel_export import finalize_trace_export
+        from app.services.turn_guard import can_finalize_turn
 
         task_id = str(state["task_id"])
         control = snapshot_task_control(task_id)
@@ -702,6 +708,14 @@ class GraphRunner:
             ctx = state.get("interrupt_context") or {}
             if ctx.get("pause_requested") or ctx.get("cancel_requested"):
                 state = finalize_control_outcome(state, None)
+        allowed, reason = can_finalize_turn(state)
+        if not allowed:
+            from app.services.session_fsm import FSM_REPLANNING, get_fsm_state, set_fsm_state
+
+            if get_fsm_state(state) == FSM_REPLANNING or reason.startswith("unexecuted_contract"):
+                state = set_fsm_state(state, FSM_REPLANNING)
+                if str(state.get("status") or "") == TaskStatus.COMPLETED.value:
+                    state = merge_state(state, status=TaskStatus.MISSION_PAUSED.value)
         # Graph worker already ended (_end_task_graph_run); persist orphan MISSION_RUNNING as PAUSED.
         return reconcile_worker_lost(state, persist=False)
 
@@ -830,12 +844,12 @@ class GraphRunner:
         if task_id and not session_key:
             state = merge_state(state, task_id=task_id)
         state_payload = dict(state.get("input_payload") or {})
-        from app.services.mission_steer import steer_requires_planning
-        from app.services.mission_supersede import is_supersede_replan_pending
+        from app.services.session_fsm import is_fsm_replanning, stamp_session_mode, sync_fsm_state
 
-        steer_replan = steer_requires_planning(state_payload) or is_supersede_replan_pending(
-            state_payload, state
-        )
+        state = sync_fsm_state(state)
+        state_payload = stamp_session_mode(dict(state.get("input_payload") or {}))
+        state = merge_state(state, input_payload=state_payload)
+        steer_replan = is_fsm_replanning(state)
         if should_use_mission_runtime(payload, mode):
             goal = str(payload.get("goal") or "").strip()
             from app.services.session_goal import should_enter_mission_runtime
@@ -1375,8 +1389,6 @@ class GraphRunner:
         Prepare resume: confirm steer gates, issue_execution_grant, MISSION_RUNNING, no graph invoke.
         """
         from app.services.mission_worker_lost import reconcile_worker_lost
-        from app.services.mission_steer import steer_requires_planning
-        from app.services.mission_supersede import is_supersede_replan_pending
 
         stored = get_state_store().load(task_id)
         if not stored:
@@ -1385,20 +1397,24 @@ class GraphRunner:
         status = str(stored.get("status", ""))
         if status == TaskStatus.CANCELLED.value:
             raise ValueError(f"Task {task_id} is cancelled and cannot resume")
-        payload_check = dict(stored.get("input_payload") or {})
-        if is_supersede_replan_pending(payload_check, stored) or steer_requires_planning(
-            payload_check
-        ):
-            raise ValueError(
-                f"Task {task_id} awaits supersede replan; "
-                f"POST /tasks/{task_id}/supersede or /supersede/stream"
-            )
+        from app.services.session_fsm import (
+            FSM_IDLE,
+            FSM_WAITING_USER,
+            get_fsm_state,
+            is_fsm_replanning,
+            sync_fsm_state,
+        )
 
-        if status not in (
+        stored = sync_fsm_state(stored)
+        if is_fsm_replanning(stored):
+            return self.prepare_supersede_replan(task_id)
+
+        fsm = get_fsm_state(stored)
+        if fsm not in (FSM_IDLE, FSM_WAITING_USER) and status not in (
             TaskStatus.MISSION_PAUSED.value,
             TaskStatus.REASONED.value,
         ):
-            raise ValueError(f"Task {task_id} cannot resume from status {status}")
+            raise ValueError(f"Task {task_id} cannot resume from fsm={fsm} status={status}")
 
         from app.services.mission_steer_confirm import (
             confirm_steer_intent,
@@ -1414,7 +1430,7 @@ class GraphRunner:
             if not confirm:
                 raise ValueError(
                     f"Task {task_id} awaits steer intent confirmation; "
-                    "POST /resume with {\"confirm\": true} or POST /steer with {\"confirm\": true}"
+                    "POST /message/stream with {\"message\": \"\", \"confirm\": true}"
                 )
             stored = confirm_steer_intent(stored)
             get_state_store().save(stored)
@@ -1423,7 +1439,7 @@ class GraphRunner:
             if not confirm:
                 raise ValueError(
                     f"Task {task_id} awaits steer outcome confirmation; "
-                    "POST /resume with {\"confirm\": true} or POST /steer with {\"confirm\": true}"
+                    "POST /message/stream with {\"message\": \"\", \"confirm\": true}"
                 )
             stored = confirm_steer_outcome(stored)
             get_state_store().save(stored)
@@ -1485,26 +1501,24 @@ class GraphRunner:
     def prepare_supersede_replan(self, task_id: str) -> AgentState:
         """Dispatch supersede replan — no execution_grant, routes to planner."""
         from app.services.mission_worker_lost import reconcile_worker_lost
-        from app.services.mission_steer import steer_requires_planning
         from app.services.mission_supersede import (
             FG_STATUS_DISPATCHING,
             FOREGROUND_KIND_SUPERSEDE,
-            is_supersede_replan_pending,
             prepare_supersede_replan_payload,
             record_foreground_operation,
         )
+        from app.services.session_fsm import routing_needs_replan, sync_fsm_state
 
         stored = get_state_store().load(task_id)
         if not stored:
             raise KeyError(f"Task not found: {task_id}")
         stored = reconcile_worker_lost(stored)
+        stored = sync_fsm_state(stored)
         status = str(stored.get("status", ""))
         if status == TaskStatus.CANCELLED.value:
             raise ValueError(f"Task {task_id} is cancelled")
         payload = dict(stored.get("input_payload") or {})
-        if not is_supersede_replan_pending(payload, stored) and not steer_requires_planning(
-            payload
-        ):
+        if not routing_needs_replan(stored):
             raise ValueError(f"Task {task_id} has no pending supersede replan")
         if status not in (
             TaskStatus.MISSION_PAUSED.value,
@@ -1663,23 +1677,17 @@ class GraphRunner:
             preempt=bool(preempt),
             replace_goal=bool(replace_goal),
         )
-        from app.services.mission_steer import (
-            consume_pending_steer,
-            pending_steer_is_set,
-            steer_requires_planning,
-        )
-        from app.services.mission_supersede import is_supersede_replan_pending
+        from app.services.mission_steer import consume_pending_steer, pending_steer_is_set
+        from app.services.session_fsm import routing_needs_replan, sync_fsm_state
 
         stored = self._sync_steer_message_for_stream(
             task_id,
             message,
             replace_goal=bool(replace_goal),
         )
-        payload = dict(stored.get("input_payload") or {})
+        stored = sync_fsm_state(stored)
         if pending_steer_is_set(stored.get("pending_user_message")):
-            if is_supersede_replan_pending(payload, stored) or steer_requires_planning(
-                payload
-            ):
+            if routing_needs_replan(stored):
                 stored = consume_pending_steer(stored)
                 get_state_store().save(stored)
                 stored = self._sync_steer_message_for_stream(
@@ -1687,14 +1695,14 @@ class GraphRunner:
                     message,
                     replace_goal=bool(replace_goal),
                 )
-                payload = dict(stored.get("input_payload") or {})
+                stored = sync_fsm_state(stored)
             else:
                 yield _format_stream_event(
                     "steer_queued",
                     {"task_id": task_id, "status": str(stored.get("status") or "")},
                 )
                 return
-        if is_supersede_replan_pending(payload, stored):
+        if routing_needs_replan(stored):
             yield from self.stream_supersede_mission(task_id, quiet=False)
             return
         yield _format_stream_event(
@@ -1721,6 +1729,14 @@ class GraphRunner:
 
     def stream_resume_mission(self, task_id: str, *, confirm: bool = False) -> Iterator[str]:
         """SSE stream for mission resume (same events as /tasks/stream)."""
+        from app.services.session_fsm import FSM_REPLANNING, get_fsm_state, sync_fsm_state
+
+        stored = get_state_store().load(task_id)
+        if stored:
+            stored = sync_fsm_state(stored)
+            if get_fsm_state(stored) == FSM_REPLANNING:
+                yield from self.stream_supersede_mission(task_id, quiet=False)
+                return
         resumed = self.prepare_resume_mission(task_id, confirm=confirm)
         yield from self._stream_single(resumed, created=False)
 
@@ -1776,7 +1792,10 @@ class GraphRunner:
                 },
             )
         else:
-            from app.services.execution_control import CONTROL_CANCEL_REQUESTED
+            from app.services.execution_control import (
+                CONTROL_CANCEL_REQUESTED,
+                CONTROL_PAUSE_REQUESTED,
+            )
 
             eff = CONTROL_STREAMING_OUTPUT
             if control_action == "pause_task":

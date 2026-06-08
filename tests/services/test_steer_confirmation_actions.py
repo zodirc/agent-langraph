@@ -14,8 +14,9 @@ from app.services.steer_confirmation_actions import (
 
 def test_build_confirmation_actions():
     actions = build_confirmation_actions("t1")
-    assert actions["resume"]["body"] == {"confirm": True}
-    assert actions["steer"]["path"] == "/tasks/t1/steer"
+    assert actions["message"]["body"] == {"message": "", "confirm": True}
+    assert actions["message"]["path"] == "/tasks/t1/message/stream"
+    assert actions["resume"]["path"] == "/tasks/t1/message/stream"
 
 
 def test_structured_confirm_via_steer():

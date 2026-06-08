@@ -95,6 +95,31 @@ def decide_intent_observation_policy(
             skip_reason="trivial_chat",
         )
 
+    from app.services.interaction_goal import goal_is_capability_inquiry
+
+    if goal and goal_is_capability_inquiry(goal):
+        return IntentObservationPolicyDecision(
+            invoke_model=False,
+            reason="capability_inquiry",
+            skip_reason="qa_meta_question",
+        )
+
+    confidence = float(route_audit_seed.get("kind_confidence") or 0.0)
+    from app.runtime.state_field_access import mission_from_state
+
+    mission_active = bool(mission_from_state(state)) and not payload.get("mission_suspended")
+    session_turn = int(state.get("session_turn") or 0)
+    if (
+        not mission_active
+        and session_turn <= 1
+        and confidence >= low_confidence_threshold()
+    ):
+        return IntentObservationPolicyDecision(
+            invoke_model=False,
+            reason="turn1_structural",
+            skip_reason="new_session_high_confidence",
+        )
+
     if payload.get("execution_grant"):
         return IntentObservationPolicyDecision(
             invoke_model=False,
@@ -128,16 +153,12 @@ def decide_intent_observation_policy(
             reason="interaction_mode_auto",
         )
 
-    from app.runtime.state_field_access import mission_from_state
-
-    mission_active = bool(mission_from_state(state)) and not payload.get("mission_suspended")
     if mission_active and goal and not payload.get("confirm"):
         return IntentObservationPolicyDecision(
             invoke_model=True,
             reason="mission_active_non_confirm",
         )
 
-    confidence = float(route_audit_seed.get("kind_confidence") or 0.0)
     if confidence < low_confidence_threshold():
         return IntentObservationPolicyDecision(
             invoke_model=True,

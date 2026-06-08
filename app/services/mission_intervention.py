@@ -124,9 +124,9 @@ def coerce_steer_intervention(
             source=intent.source,
         )
 
-    from app.services.turn_contract import outline_artifact_status
+    from app.services.artifact_resolver import outline_exists
 
-    if not outline_artifact_status(state).get("outline_exists"):
+    if not outline_exists(state):
         return intent
 
     payload = state.get("input_payload") or {}

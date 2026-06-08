@@ -109,6 +109,8 @@ def test_commit_phase_checkpoint(isolated_stores):
     last = updated["interrupt_context"]["last_committed_step"]
     assert last["step_id"] == "wi-phase_review_chapter_ch2"
     assert last["last_run_id"] == "run-phase"
-    row = updated["progress"]["work_plan"]["items"][0]
+    from app.runtime.state_field_access import progress_from_state
+
+    row = (progress_from_state(updated) or {})["work_plan"]["items"][0]
     assert row["committed"] is True
     assert row["last_run_id"] == "run-phase"

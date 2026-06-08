@@ -19,6 +19,18 @@ def mission_from_state(state: AgentState | dict[str, Any]) -> dict[str, Any] | N
     return None
 
 
+def mission_control_from_state(state: AgentState | dict[str, Any]) -> dict[str, Any]:
+    """Mission control snapshot (pause reason, done flag) from §2.2 field families."""
+    raw = state.get("mission_control")
+    if isinstance(raw, dict):
+        return raw
+    plan_graph = state.get("plan_graph") or {}
+    meta = plan_graph.get("meta") if isinstance(plan_graph, dict) else {}
+    if isinstance(meta, dict) and isinstance(meta.get("mission_control"), dict):
+        return meta["mission_control"]
+    return {}
+
+
 def progress_from_state(state: AgentState | dict[str, Any]) -> dict[str, Any] | None:
     bg = state.get("background_status") or {}
     if isinstance(bg.get("progress"), dict):

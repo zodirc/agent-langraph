@@ -70,7 +70,7 @@ def test_resolve_session_turn_intervention():
     state = {"mission": {"kind": "writing"}}
     payload = {"goal": "调整", "mission_intervention": {"action": "edit_plot"}}
     decision = resolve_session_turn(state, payload, "调整", incoming=payload)
-    assert decision.intent == "resume_mission"
+    assert decision.intent == "supersede_active_mission"
     assert decision.source == "intervention"
 
 

@@ -84,7 +84,16 @@ def run_outline_edit_via_tools(state: AgentState, *, spec: dict[str, Any]) -> Ag
 
     task_id = state["task_id"]
     payload = dict(state.get("input_payload") or {})
-    filename = str(spec.get("filename") or payload.get("outline_filename") or "outline.txt")
+    filename = str(spec.get("filename") or "")
+    if not filename:
+        from app.services.artifact_resolver import resolve_artifact_target
+
+        filename = resolve_artifact_target(
+            state,
+            action="edit_plot",
+            target_hint="outline",
+            require_exists=True,
+        ).filename
     steer_text = str(spec.get("steer_correction") or payload.get("goal") or "")
 
     read_out = handle_read_text_artifact(

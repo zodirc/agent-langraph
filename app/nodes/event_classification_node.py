@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.runtime.state import AgentState, append_audit, merge_state
-from app.services.event_classification import classify_user_event
+from app.services.event_classification import resolve_inbound_event, stamp_inbound_classification
 from app.services.state_store import get_state_store
 
 
@@ -15,8 +15,8 @@ def event_classification_node(state: AgentState) -> AgentState:
     Writes: event_type, event_id, input_payload.event_classification, audit_log
     """
     payload = dict(state.get("input_payload") or {})
-    classification = classify_user_event(state, payload=payload)
-    payload["event_classification"] = classification.to_dict()
+    classification = resolve_inbound_event(state, payload=payload)
+    payload = stamp_inbound_classification(payload, classification)
 
     updated = merge_state(
         state,

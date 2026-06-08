@@ -38,16 +38,29 @@ class WritingPack(DomainPack):
         from app.services.mission_intervention import intervention_from_payload, is_forced
 
         policy = StepPolicy.from_dict(mission.get("step_policy") or {})
+        from app.services.manuscript_service import artifact_bytes_on_disk, manuscript_has_body
+
         ms = resolve_manuscript(state["task_id"], state.get("manuscript"))
         stored_ms = state.get("manuscript") or {}
-        outline_bytes = max(int(ms.outline_bytes or 0), int(stored_ms.get("outline_bytes") or 0))
-        body_bytes = max(int(ms.body_bytes or 0), int(stored_ms.get("body_bytes") or 0))
         outline_path = ms.outline_path or stored_ms.get("outline_path")
         body_path = ms.body_path or stored_ms.get("body_path")
         min_body = int(getattr(settings, "MANUSCRIPT_MIN_BODY_CHARS", 200))
         min_outline = int(getattr(settings, "MANUSCRIPT_MIN_OUTLINE_CHARS", 80))
-        has_outline = bool(outline_path) and outline_bytes > 0
-        has_body = bool(body_path) and body_bytes >= min_body
+        outline_bytes = max(
+            int(ms.outline_bytes or 0),
+            int(stored_ms.get("outline_bytes") or 0),
+            artifact_bytes_on_disk(state["task_id"], outline_path),
+        )
+        body_bytes = max(
+            int(ms.body_bytes or 0),
+            int(stored_ms.get("body_bytes") or 0),
+            artifact_bytes_on_disk(state["task_id"], body_path),
+        )
+        has_outline = bool(outline_path) and outline_bytes >= min_outline
+        has_body = manuscript_has_body(
+            ms,
+            min_bytes=min_body,
+        ) or (bool(body_path) and body_bytes >= min_body)
         last_ch = 0
         if has_body and ms.body_path:
             last_ch = parse_last_chapter_index(
@@ -93,8 +106,8 @@ class WritingPack(DomainPack):
         return {
             "bootstrap_artifact": sp.outline_artifact,
             "main_artifact": sp.body_artifact,
-            "outline_filename": sp.outline_artifact,
-            "novel_filename": sp.body_artifact,
+            "outline_path": sp.outline_artifact,
+            "body_path": sp.body_artifact,
         }
 
     def collect_metrics(

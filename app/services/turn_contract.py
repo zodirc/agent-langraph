@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from app.config.settings import settings
-from app.runtime.state import AgentState
+from app.runtime.state import AgentState, merge_state
 from app.services.manuscript_service import WRITING_TOOL_NAMES, split_execution_tools
 from app.services.mission_intervention import (
     apply_intervention_to_payload,
@@ -150,29 +150,10 @@ def _contract_from_intervention(
     tools = [str(t) for t in (payload.get("selected_tools") or []) if str(t) not in WRITING_TOOL_NAMES]
 
     if action == "edit_plot":
-        command = build_writing_command(
-            {"input_payload": payload, "mission": payload.get("mission") or {}},
-            intent=intent,
-        )
-        filename = command.target_filename
-        has_anchor = bool(command.edit_spec.get("old_text"))
-        ops: list[dict[str, Any]] = [
-            {
-                "op": "read",
-                "tool": "read_text_artifact",
-                "target": filename,
-            },
-            {
-                "op": "edit",
-                "tool": "edit_text_artifact",
-                "target": filename,
-                "anchor": "exact" if has_anchor else "from_read",
-            },
-        ]
         return {
             "intent_kind": "steer_material_change",
             "primary_op": "edit_plot",
-            "ops": ops,
+            "ops": [],
             "tools": tools or ["read_text_artifact", "edit_text_artifact"],
             "forbid": ["append_body", "write_body"],
             "override_step_policy": is_forced(intervention) or steer_planning_turn,
@@ -240,9 +221,20 @@ def _contract_from_planning_signals(
     *,
     steer_planning_turn: bool,
 ) -> dict[str, Any]:
+    from app.services.writing_step import (
+        ADVANCE_WRITING_PRIMARY_OP,
+        ignore_llm_writing_action,
+        writing_mission_from_payload,
+    )
+
     wi = result.get("writing_intent") if isinstance(result.get("writing_intent"), dict) else {}
     tools = [str(t) for t in (result.get("selected_tools") or []) if str(t) not in WRITING_TOOL_NAMES]
-    action = str(wi.get("action") or "append_body")
+    action = str(
+        wi.get("action")
+        or result.get("writing_action")
+        or result.get("writing_mode")
+        or ""
+    ).strip()
 
     if not wi.get("enabled") and action == "edit_plot":
         return _contract_from_intervention(
@@ -255,7 +247,31 @@ def _contract_from_planning_signals(
             steer_planning_turn=steer_planning_turn,
         )
 
-    if wi.get("enabled"):
+    mission = writing_mission_from_payload(payload)
+    if mission and not steer_planning_turn:
+        if action in ("pause", "batch_unit_quality"):
+            forbid = list(_WRITE_ACTIONS)
+            return {
+                "intent_kind": "mission_control" if action == "pause" else "batch_quality",
+                "primary_op": action,
+                "ops": [{"op": "evaluate", "unit": "chapter"}] if action == "batch_unit_quality" else [],
+                "tools": tools,
+                "forbid": forbid,
+                "override_step_policy": True,
+                "user_visible_reason": "",
+            }
+        if ignore_llm_writing_action(result, payload) or not wi.get("enabled"):
+            return {
+                "intent_kind": "mission_writing_step",
+                "primary_op": ADVANCE_WRITING_PRIMARY_OP,
+                "ops": [{"op": "advance"}],
+                "tools": tools,
+                "forbid": [],
+                "override_step_policy": False,
+                "user_visible_reason": "mission step_policy selects executor op",
+            }
+
+    if wi.get("enabled") and action:
         return {
             "intent_kind": "forward_write",
             "primary_op": action,
@@ -357,6 +373,16 @@ def apply_turn_contract_to_payload(
     from app.services.writing.command_builder import COMMAND_ACTIONS
 
     if primary in COMMAND_ACTIONS and out.get("writing_command"):
+        from app.domain.writing_command import WritingCommand
+        from app.services.writing.tool_adapter import tool_stages_for_command, tools_for_command
+
+        command = WritingCommand.from_dict(out["writing_command"])
+        tool_list = tools_for_command(command)
+        if tool_list:
+            out["selected_tools"] = tool_list
+            stages = tool_stages_for_command(command)
+            if stages:
+                out["tool_stages"] = stages
         return out
 
     tools = contract_tool_names(out)
@@ -395,6 +421,11 @@ def finalize_turn_execution_plan(
     payload = apply_turn_contract_to_payload(payload, contract)
 
     if str(mission.get("kind") or "").lower() == "writing":
+        from app.services.writing_step import (
+            ADVANCE_WRITING_PRIMARY_OP,
+            materialize_writing_step_intent,
+        )
+
         primary = str(contract.get("primary_op") or "")
         use_contract_intent = bool(
             contract.get("override_step_policy")
@@ -403,17 +434,23 @@ def finalize_turn_execution_plan(
         )
         from app.services.writing.command_builder import COMMAND_ACTIONS
 
+        merged_state = merge_state(state, input_payload=payload, mission=mission)
         if use_contract_intent:
             if primary in COMMAND_ACTIONS and (payload.get("writing_command") or payload.get("writing_intent_record")):
                 payload.pop("writing_intent", None)
             else:
                 payload["writing_intent"] = materialize_writing_intent_from_contract(
-                    contract, state, mission=mission
+                    contract, merged_state, mission=mission
                 )
         else:
-            from app.services.mission_schema import resolve_writing_intent_for_step
-
-            payload["writing_intent"] = resolve_writing_intent_for_step(state, mission=mission)
+            payload["writing_intent"] = materialize_writing_step_intent(merged_state, mission)
+            if primary in (ADVANCE_WRITING_PRIMARY_OP, "reasoning", ""):
+                contract = {
+                    **contract,
+                    "intent_kind": "mission_writing_step",
+                    "primary_op": ADVANCE_WRITING_PRIMARY_OP,
+                }
+                payload["turn_contract"] = contract
 
     merged_tools = contract_tool_names(payload)
     if merged_tools:
@@ -539,36 +576,15 @@ def record_contract_fulfilled(state: AgentState) -> None:
     get_metrics_service().inc_contract_event("fulfilled")
 
 
-def outline_artifact_status(state: dict[str, Any]) -> dict[str, Any]:
-    """Resolve outline artifact on disk/state (existence, not merely byte threshold)."""
-    task_id = str(state.get("task_id") or "")
-    stored = state.get("manuscript") if isinstance(state.get("manuscript"), dict) else {}
-    from app.services.manuscript_service import resolve_manuscript
-
-    ms = resolve_manuscript(task_id, stored or None) if task_id else None
-    if ms is None:
-        from app.services.manuscript_service import Manuscript
-
-        ms = Manuscript(task_id=task_id or "unknown")
-    path = str(ms.outline_path or stored.get("outline_path") or "").strip()
-    nbytes = max(int(ms.outline_bytes or 0), int(stored.get("outline_bytes") or 0))
-    on_disk = bool(ms.outline_path)
-    exists = bool(path) and (on_disk or nbytes > 0)
-    return {
-        "outline_path": path or None,
-        "outline_bytes": nbytes,
-        "outline_exists": exists,
-    }
-
-
 def steer_replan_outline_plan(state: dict[str, Any], *, steer: str) -> dict[str, Any]:
     """
     Steer replan outline routing (step 3):
     outline file exists → edit_plot; otherwise → full write_outline with steer constraints.
     """
-    status = outline_artifact_status(state)
+    from app.services.artifact_resolver import outline_exists
+
     steer = str(steer or "").strip()
-    if status["outline_exists"]:
+    if outline_exists(state):
         return {
             "plan": [
                 "read outline for anchors",
@@ -638,7 +654,9 @@ def apply_steer_replan_outline_route(
     if not steer:
         return planning_result
 
-    mission = state.get("mission") or payload.get("mission")
+    from app.runtime.state_field_access import mission_from_state
+
+    mission = mission_from_state(state) or payload.get("mission")
     if not isinstance(mission, dict) or str(mission.get("kind") or "").lower() != "writing":
         return planning_result
 
@@ -657,6 +675,15 @@ def apply_steer_replan_outline_route(
         if key in routed:
             out[key] = routed[key]
     out["risk_level"] = str(out.get("risk_level") or routed.get("risk_level") or "LOW")
+    if routed.get("steer_outline_route") == "modify":
+        out["selected_tools"] = []
+        out.pop("tool_stages", None)
+        out.pop("tool_dag", None)
+    else:
+        tools = [str(t) for t in (out.get("selected_tools") or [])]
+        if tools and set(tools) <= {"read_text_artifact"}:
+            out["selected_tools"] = []
+            out.pop("tool_stages", None)
     return out
 
 
@@ -681,7 +708,9 @@ def steer_replan_planning_fallback_from_state(
     if not steer:
         return None
 
-    mission = state.get("mission") or payload.get("mission")
+    from app.runtime.state_field_access import mission_from_state
+
+    mission = mission_from_state(state) or payload.get("mission")
     if not isinstance(mission, dict) or str(mission.get("kind") or "").lower() != "writing":
         return None
 
@@ -697,8 +726,10 @@ def planning_fallback_from_state(state: dict[str, Any] | None) -> Optional[dict[
     if not isinstance(state, dict):
         return None
 
+    from app.runtime.state_field_access import mission_from_state, progress_from_state
+
     payload = dict(state.get("input_payload") or {})
-    mission = state.get("mission") or payload.get("mission")
+    mission = mission_from_state(state) or payload.get("mission")
     if not isinstance(mission, dict) or str(mission.get("kind") or "").lower() != "writing":
         return None
 
@@ -713,7 +744,9 @@ def planning_fallback_from_state(state: dict[str, Any] | None) -> Optional[dict[
     )
     outline_bytes = int(ms.get("outline_bytes") or 0)
 
-    progress = state.get("progress") if isinstance(state.get("progress"), dict) else {}
+    progress = progress_from_state(state) if isinstance(state, dict) else {}
+    if not isinstance(progress, dict):
+        progress = {}
     work_plan = progress.get("work_plan") if isinstance(progress.get("work_plan"), dict) else {}
     items = list(work_plan.get("items") or [])
 

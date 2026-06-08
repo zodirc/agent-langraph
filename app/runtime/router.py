@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from app.config.settings import settings
-from app.runtime.state import AgentState, TaskStatus
+from app.runtime.state import AgentState
+from app.services.graph_execution_signals import (
+    graph_last_tool_failed,
+    graph_turn_had_fatal_error,
+)
 from app.services.mode_execution import mode_blocks_writing
 from app.services.route_audit.apply import writing_gate_allowed
 from app.services.turn_contract import (
@@ -56,7 +60,7 @@ def _is_non_retryable_tool_failure(state: AgentState) -> bool:
 
 def route_after_retrieval(state: AgentState) -> str:
     """Skip tool_execution when no registered tools were selected."""
-    if str(state.get("status", "")) == TaskStatus.FAILED.value:
+    if graph_turn_had_fatal_error(state):
         return _failed_route(state, "retrieval")
     payload = state.get("input_payload") or {}
     if state.get("selected_tools"):
@@ -70,8 +74,7 @@ def route_after_retrieval(state: AgentState) -> str:
 
 def route_after_tool(state: AgentState) -> str:
     """Retry tool node or route to dead letter (architecture §22)."""
-    status = str(state.get("status", ""))
-    if status == TaskStatus.TOOL_FAILED.value:
+    if graph_last_tool_failed(state):
         if _is_non_retryable_tool_failure(state):
             return "context_governance"
         if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
@@ -86,8 +89,7 @@ def route_after_tool(state: AgentState) -> str:
 
 
 def route_after_engineering(state: AgentState) -> str:
-    status = str(state.get("status", ""))
-    if status == TaskStatus.FAILED.value:
+    if graph_turn_had_fatal_error(state):
         return _failed_route(state, "engineering_execution")
     return "policy"
 

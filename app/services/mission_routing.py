@@ -194,11 +194,6 @@ def patch_mission_from_planning(
         mission["success_criteria"] = sc
 
     payload = {**payload, "mission": mission}
-    sp = mission.get("step_policy") if isinstance(mission.get("step_policy"), dict) else {}
-    if sp.get("body_artifact"):
-        payload["novel_filename"] = str(sp["body_artifact"])
-    if sp.get("outline_artifact"):
-        payload["outline_filename"] = str(sp["outline_artifact"])
     return payload, "planning_mission_patch"
 
 

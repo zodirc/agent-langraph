@@ -15,10 +15,10 @@ from app.services.state_store import get_state_store
 
 
 def mission_act_node(state: AgentState) -> AgentState:
-    """执行单步，由 execute_mission_step 调度。
+    """Execute one mission step via execute_mission_step."""
+    from app.services.run_controller import RunController
 
-    Execute one mission step via execute_mission_step.
-    """
+    RunController.assert_run_active(state, phase="mission_act_enter")
     decision = state.get("step_decision") or {}
     action = str(decision.get("action", "continue"))
 

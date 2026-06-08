@@ -19,14 +19,24 @@ _SENTENCE_RE = re.compile(r"[^.!?。！？\n]+[.!?。！？]?")
 _CITATION_RE = re.compile(r"\[([a-zA-Z0-9_\-]{4,})\]")
 
 
-def _claim_supported(claim: str, evidence_text: str) -> tuple[bool, str]:
-    tokens = [t for t in re.findall(r"[\w\u4e00-\u9fff]+", claim.lower()) if len(t) > 3]
+def _claim_supported(
+    claim: str,
+    evidence_text: str,
+    *,
+    support_ratio: float = 0.5,
+    min_token_len: int = 4,
+) -> tuple[bool, str]:
+    tokens = [
+        t
+        for t in re.findall(r"[\w\u4e00-\u9fff]+", claim.lower())
+        if len(t) >= min_token_len
+    ]
     if not tokens:
         return True, "trivial"
     corpus = evidence_text.lower()
     hits = sum(1 for t in tokens if t in corpus)
     ratio = hits / len(tokens)
-    if ratio >= 0.5:
+    if ratio >= support_ratio:
         return True, "direct" if ratio >= 0.75 else "contextual"
     return False, "none"
 
@@ -80,6 +90,8 @@ def check_grounding(
     hits: list[dict[str, Any]] | None = None,
     packets: list[EvidencePacket] | None = None,
     answer_mode: str = AnswerMode.BEST_EFFORT_GROUNDED.value,
+    support_ratio: float = 0.5,
+    min_token_len: int = 4,
 ) -> GroundingCheckResult:
     """Validate claims and citations against injected evidence."""
     strictness = str(getattr(settings, "RETRIEVAL_CITATION_CHECK_STRICTNESS", "basic")).lower()
@@ -105,7 +117,12 @@ def check_grounding(
             failure_tags.append(FailureTag.FAKE_CITATION.value)
 
     for claim_id, claim_text in _high_value_claims(answer):
-        supported, strength = _claim_supported(claim_text, corpus)
+        supported, strength = _claim_supported(
+            claim_text,
+            corpus,
+            support_ratio=support_ratio,
+            min_token_len=min_token_len,
+        )
         cite_id = ""
         cite_match = _CITATION_RE.search(claim_text)
         if cite_match:
@@ -146,6 +163,28 @@ def check_grounding(
         fake_citations=fake_citations,
         failure_tags=list(dict.fromkeys(failure_tags)),
         debug_info={"cited_ids": cited, "injected_count": len(injected)},
+    )
+
+
+def check_tool_observation_grounding(
+    answer: str,
+    *,
+    hits: list[dict[str, Any]] | None = None,
+    answer_mode: str = AnswerMode.BEST_EFFORT_GROUNDED.value,
+) -> GroundingCheckResult:
+    """Lenient grounding for summaries after successful tool side effects."""
+    hits = hits or []
+    if not answer.strip():
+        return GroundingCheckResult(grounded=True, score=1.0, answer_mode=answer_mode)
+    if not hits:
+        return GroundingCheckResult(grounded=True, score=1.0, answer_mode=answer_mode)
+    return check_grounding(
+        answer,
+        hits=hits,
+        packets=[],
+        answer_mode=answer_mode,
+        support_ratio=0.2,
+        min_token_len=2,
     )
 
 

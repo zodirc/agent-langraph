@@ -135,7 +135,7 @@ def test_route_after_tool_skips_writing_when_contract_forbids(base_state):
             "writing_intent": {"enabled": True, "action": "append_body"},
         },
     )
-    assert route_after_tool(state) == "reasoning"
+    assert route_after_tool(state) == "context_governance"
 
 
 def test_apply_planning_intervention_sets_turn_contract(base_state):
@@ -153,6 +153,31 @@ def test_apply_planning_intervention_sets_turn_contract(base_state):
     contract = payload.get("turn_contract") or {}
     assert contract.get("primary_op") == "edit_plot"
     assert "append_body" in (contract.get("forbid") or [])
+
+
+def test_apply_turn_contract_binds_outline_tool_params(base_state):
+    from app.services.turn_contract import apply_turn_contract_to_payload
+
+    payload = apply_turn_contract_to_payload(
+        {
+            "writing_command": {
+                "command_id": "cmd-1",
+                "action": "edit_plot",
+                "target_kind": "outline",
+                "target_filename": "锚点纪元_大纲.txt",
+                "edit_spec": {"filename": "锚点纪元_大纲.txt"},
+            }
+        },
+        {
+            "primary_op": "edit_plot",
+            "override_step_policy": True,
+            "forbid": ["append_body"],
+            "tools": ["read_text_artifact", "edit_text_artifact"],
+        },
+    )
+    assert payload.get("selected_tools") == ["read_text_artifact", "edit_text_artifact"]
+    assert payload.get("tool_stages") == [["read_text_artifact"], ["edit_text_artifact"]]
+    assert "read_text_artifact" not in (payload.get("tool_params") or {})
 
 
 def test_build_turn_contract_from_explicit_block():

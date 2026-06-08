@@ -15,6 +15,18 @@ from app.services.memory_store import MemoryStore
 from app.services.state_store import StateStore
 from app.services.tool_registry import ToolRegistry
 
+_ARTIFACT_DIR_PATCH_TARGETS = (
+    "app.services.artifact_tools.task_artifact_dir",
+    "app.services.manuscript_service.task_artifact_dir",
+)
+
+
+def patch_task_artifact_dir(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+    """Patch modules that bind task_artifact_dir at import time."""
+    resolver = lambda task_id: root / task_id
+    for target in _ARTIFACT_DIR_PATCH_TARGETS:
+        monkeypatch.setattr(target, resolver)
+
 
 def _merge_prod_mode_blocks(settings: Settings) -> None:
     """Align test Settings with production mode routing / contracts / verify."""

@@ -47,15 +47,10 @@ def has_injected_evidence(state: AgentState | dict) -> bool:
 
 
 def should_run_grounding_check(state: AgentState | dict) -> bool:
-    """Run citation/faithfulness checks only when the turn expected grounded evidence."""
-    citation_strictness = str(
-        getattr(settings, "RETRIEVAL_CITATION_CHECK_STRICTNESS", "basic")
-    ).lower()
-    if citation_strictness == "off" and not settings.RAG_FAITHFULNESS_CHECK_ENABLED:
-        return False
-    if state.get("skip_retrieval") and not has_injected_evidence(state):
-        return False
-    return True
+    """Run citation/faithfulness when tool observation or RAG evidence is available."""
+    from app.services.grounding_policy import should_run_grounding_check as _should_run
+
+    return _should_run(state)
 
 
 def should_skip_session_memory_retrieval(state: AgentState | dict) -> bool:

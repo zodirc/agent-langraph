@@ -14,7 +14,8 @@ route_mission_finalize: reasoning_result? → policy : mission_decide"""
 from __future__ import annotations
 
 from app.config.settings import settings
-from app.runtime.state import AgentState, TaskStatus
+from app.runtime.state import AgentState
+from app.services.graph_execution_signals import graph_turn_had_fatal_error
 
 
 def route_after_mission_decide(state: AgentState) -> str:
@@ -30,7 +31,9 @@ def route_after_mission_decide(state: AgentState) -> str:
 
 
 def route_after_mission_eval(state: AgentState) -> str:
-    control = state.get("mission_control") or {}
+    from app.runtime.state_field_access import mission_control_from_state
+
+    control = mission_control_from_state(state)
     if control.get("done"):
         return "finalize"
     step = int(state.get("mission_step") or 0)
@@ -43,7 +46,7 @@ def route_after_mission_eval(state: AgentState) -> str:
     )
     if step >= max_steps:
         return "finalize"
-    if str(state.get("status", "")) == TaskStatus.FAILED.value:
+    if graph_turn_had_fatal_error(state):
         return "dead_letter"
     return "mission_decide"
 

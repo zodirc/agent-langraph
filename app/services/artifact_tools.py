@@ -128,7 +128,19 @@ def handle_get_runtime_info(params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _assert_write_allowed(params: dict[str, Any]) -> None:
+    """Optional run fence when ``_agent_state`` is supplied by the executor."""
+    state = params.get("_agent_state")
+    if state is None:
+        return
+    from app.services.run_controller import RunCancelled, RunController
+
+    if not RunController.should_accept_write(state):
+        raise RunCancelled("artifact write rejected: run inactive or superseded")
+
+
 def handle_write_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
+    _assert_write_allowed(params)
     task_id = str(params["task_id"])
     filename = _safe_filename(str(params["filename"]))
     content = str(params.get("content", ""))
@@ -166,6 +178,7 @@ def handle_write_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_append_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
+    _assert_write_allowed(params)
     task_id = str(params["task_id"])
     filename = _safe_filename(str(params["filename"]))
     content = str(params.get("content", ""))
@@ -521,6 +534,8 @@ def collect_file_artifacts(tool_results: list[dict[str, Any]] | None) -> list[di
 
 def list_task_artifacts(task_id: str) -> list[dict[str, Any]]:
     directory = task_artifact_dir(task_id)
+    if not directory.is_dir():
+        return []
     items: list[dict[str, Any]] = []
     for path in sorted(directory.iterdir()):
         if path.is_file():

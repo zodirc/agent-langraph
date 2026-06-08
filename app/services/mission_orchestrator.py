@@ -14,6 +14,27 @@ from typing import Any, Optional
 from app.config.settings import settings
 from app.domain.mission import StepPolicy
 from app.runtime.state import AgentState, merge_state
+from app.runtime.state_field_access import mission_from_state, progress_from_state, set_progress_on_state
+
+
+def _mission(state: AgentState) -> dict[str, Any]:
+    return mission_from_state(state) or {}
+
+
+def _progress(state: AgentState) -> dict[str, Any]:
+    return dict(progress_from_state(state) or {})
+
+
+def _mission_step(state: AgentState) -> int:
+    plan_graph = state.get("plan_graph") or {}
+    meta = plan_graph.get("meta") if isinstance(plan_graph, dict) else {}
+    if isinstance(meta, dict) and meta.get("mission_step") is not None:
+        return int(meta.get("mission_step") or 1)
+    return int(state.get("mission_step") or 1)
+
+
+def _with_progress(state: AgentState, progress: dict[str, Any]) -> AgentState:
+    return set_progress_on_state(state, progress)
 
 
 def orchestration_config(mission: dict[str, Any]) -> dict[str, Any]:
@@ -133,10 +154,10 @@ def ensure_work_plan(state: AgentState) -> AgentState:
 
     Bootstrap work_plan when orchestration is enabled.
     """
-    mission = state.get("mission") or {}
+    mission = _mission(state)
     if not orchestration_enabled(mission):
         return state
-    progress = dict(state.get("progress") or {})
+    progress = _progress(state)
     if progress.get("work_plan"):
         return state
     plan = work_plan_from_mission(mission)
@@ -146,12 +167,13 @@ def ensure_work_plan(state: AgentState) -> AgentState:
     orch.setdefault("enabled", True)
     orch.setdefault("stepwise", True)
     mission = {**mission, "orchestration": orch}
-    return merge_state(state, mission=mission, progress=progress)
+    payload = {**(state.get("input_payload") or {}), "mission": mission}
+    return _with_progress(merge_state(state, input_payload=payload), progress)
 
 
 def ensure_next_work_item(state: AgentState) -> AgentState:
     """In lazy mode, append one step_policy-derived item when the queue is empty."""
-    mission = state.get("mission") or {}
+    mission = _mission(state)
     if not orchestration_enabled(mission):
         return state
     plan = dict(_plan(state))
@@ -162,13 +184,13 @@ def ensure_next_work_item(state: AgentState) -> AgentState:
     item = build_next_lazy_work_item(state, mission)
     if not item:
         return state
-    progress = dict(state.get("progress") or {})
+    progress = _progress(state)
     progress["work_plan"] = append_work_items(plan, [item])
-    return merge_state(state, progress=progress)
+    return _with_progress(state, progress)
 
 
 def _plan(state: AgentState) -> dict[str, Any]:
-    return dict((state.get("progress") or {}).get("work_plan") or {})
+    return dict(_progress(state).get("work_plan") or {})
 
 
 def _has_pending_items(plan: dict[str, Any]) -> bool:
@@ -211,9 +233,9 @@ def activate_work_item(state: AgentState, item: dict[str, Any]) -> AgentState:
             break
     plan["items"] = items
     plan["current_id"] = item.get("id")
-    progress = dict(state.get("progress") or {})
+    progress = _progress(state)
     progress["work_plan"] = plan
-    return merge_state(state, progress=progress)
+    return _with_progress(state, progress)
 
 
 def mark_current_work_item_failed(
@@ -234,9 +256,9 @@ def mark_current_work_item_failed(
     plan = set_item_status(plan, str(current_id), "failed", reason=reason)
     plan = propagate_failure(plan, str(current_id))
     plan["current_id"] = None
-    progress = dict(state.get("progress") or {})
+    progress = _progress(state)
     progress["work_plan"] = plan
-    return merge_state(state, progress=progress)
+    return _with_progress(state, progress)
 
 
 def complete_current_work_item(state: AgentState) -> AgentState:
@@ -255,10 +277,10 @@ def complete_current_work_item(state: AgentState) -> AgentState:
     plan["items"] = items
     plan["completed_ids"] = completed
     plan["current_id"] = None
-    progress = dict(state.get("progress") or {})
+    progress = _progress(state)
     progress["work_plan"] = plan
     progress["steps_completed"] = len(completed)
-    return merge_state(state, progress=progress)
+    return _with_progress(state, progress)
 
 
 def insert_work_item_after_current(
@@ -279,9 +301,9 @@ def insert_work_item_after_current(
     plan["total_items"] = len(items)
     plan["current_id"] = None
     plan["mode"] = plan.get("mode") or "lazy"
-    progress = dict(state.get("progress") or {})
+    progress = _progress(state)
     progress["work_plan"] = plan
-    return merge_state(state, progress=progress)
+    return _with_progress(state, progress)
 
 
 def work_item_to_writing_intent(
@@ -373,7 +395,7 @@ def _auto_tool_injection_enabled(mission: dict[str, Any], item: dict[str, Any]) 
 
 
 def apply_work_plan_to_payload(state: AgentState) -> AgentState:
-    mission = state.get("mission") or {}
+    mission = _mission(state)
     if not orchestration_enabled(mission):
         return state
 
@@ -390,7 +412,7 @@ def apply_work_plan_to_payload(state: AgentState) -> AgentState:
     payload = dict(state.get("input_payload") or {})
     intervention = intervention_from_payload(payload)
     if intervention and is_forced(intervention):
-        step = int(state.get("mission_step") or 1)
+        step = _mission_step(state)
         payload = dict(state.get("input_payload") or {})
         from app.services.mission_intervention import apply_intervention_to_payload
 
@@ -431,7 +453,7 @@ def apply_work_plan_to_payload(state: AgentState) -> AgentState:
         return state
     state = activate_work_item(state, item)
     payload = dict(state.get("input_payload") or {})
-    step = int(state.get("mission_step") or 1)
+    step = _mission_step(state)
     payload["current_work_item"] = item
     from app.config.settings import settings
 
@@ -471,7 +493,7 @@ def pending_work_items(state: AgentState) -> int:
 
 
 def work_plan_completed(state: AgentState) -> bool:
-    mission = state.get("mission") or {}
+    mission = _mission(state)
     plan = _plan(state)
     items = plan.get("items") or []
     if plan.get("mode") == "lazy":
@@ -481,7 +503,7 @@ def work_plan_completed(state: AgentState) -> bool:
             pack = get_domain_pack(str(mission.get("kind", "writing")))
             success, _ = pack.evaluate_success(
                 mission,
-                state.get("progress") or {},
+                _progress(state),
                 state.get("observation") or {},
             )
             return success

@@ -8,10 +8,9 @@ from app.services.confirmation.preview_resolver import resolve_outcome_preview
 
 @pytest.fixture
 def body_state(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "app.services.artifact_tools.task_artifact_dir",
-        lambda task_id: tmp_path / task_id,
-    )
+    from tests.conftest import patch_task_artifact_dir
+
+    patch_task_artifact_dir(monkeypatch, tmp_path)
     task_id = "preview-task"
     art = tmp_path / task_id
     art.mkdir(parents=True)

@@ -23,6 +23,7 @@ from app.runtime.planning_gate_router import route_after_incremental_planning
 from app.runtime.mission_pipeline_router import route_after_writing
 from app.runtime.router import route_after_retrieval, route_after_tool
 from app.runtime.state import AgentState, merge_state
+from app.runtime.state_field_access import mission_from_state
 
 
 def _forced_stop_requested(state: AgentState) -> bool:
@@ -56,7 +57,7 @@ def _bootstrap_executor_routing(state: AgentState) -> AgentState:
     from app.services.mission_schema import resolve_writing_intent_for_step
     from app.services.turn_kind import plan_steps_for_display
 
-    mission = state.get("mission") or {}
+    mission = mission_from_state(state) or {}
     if orchestration_enabled(mission):
         state = ensure_work_plan(state)
 
@@ -232,7 +233,7 @@ def _oma_pipeline_redirect(state: AgentState) -> AgentState:
 def _oma_act_available(state: AgentState) -> bool:
     from app.services.mission_oma.orchestrator import should_use_mission_oma
 
-    mission = state.get("mission") or {}
+    mission = mission_from_state(state) or {}
     if str(mission.get("kind", "")).lower() == "single_turn":
         return False
     return should_use_mission_oma(state)
@@ -302,7 +303,7 @@ def run_pipeline_request(state: AgentState) -> AgentState:
     if should_use_mission_oma(state):
         return _oma_pipeline_redirect(state)
 
-    mission = state.get("mission") or {}
+    mission = mission_from_state(state) or {}
     if str(mission.get("kind", "")).lower() == "writing":
         return run_subgraph_writing(state)
 
@@ -388,11 +389,11 @@ def _mission_writing_reasoning_summary(state: AgentState) -> AgentState:
     task_id = str(state["task_id"])
 
     if action in ("write_outline", "rewrite_outline"):
-        path = str(manuscript.get("outline_path") or payload.get("outline_filename") or "outline.txt")
+        path = str(manuscript.get("outline_path") or "")
         written = int(manuscript.get("outline_bytes") or 0)
         label = "大纲"
     else:
-        path = str(manuscript.get("body_path") or payload.get("novel_filename") or "novel.txt")
+        path = str(manuscript.get("body_path") or "")
         written = int(metrics.get("written_chars") or manuscript.get("body_bytes") or 0)
         label = "正文"
 
@@ -502,7 +503,7 @@ def run_subgraph_writing(state: AgentState) -> AgentState:
         )
         if kind not in write_kinds:
             return run_pipeline_request(state)
-        mission = state.get("mission") or {}
+        mission = mission_from_state(state) or {}
         from app.services.mission_schema import resolve_writing_intent_for_step
 
         resolved = resolve_writing_intent_for_step(state, mission=mission)
@@ -649,7 +650,7 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
     if mission_must_run_planning(state):
         return _mission_act_for_writing(state, step_decision, allow_pipeline=not _oma_act_available(state))
 
-    mission = state.get("mission") or {}
+    mission = mission_from_state(state) or {}
     executor = str(step_decision.get("next_executor") or "pipeline:request")
     if str(mission.get("kind", "")).lower() == "writing" and kind not in (
         "edit_plot",

@@ -17,10 +17,10 @@ def record_writing_step_start(
 ) -> dict[str, Any]:
     """Snapshot byte offset at step start for delta extraction."""
     from app.services.artifact_tools import task_artifact_dir
-    from app.services.manuscript_service import resolve_read_paths
+    from app.services.manuscript_service import sanitize_artifact_basename
 
     task_id = str(state["task_id"])
-    resolved = resolve_read_paths(state, filename)
+    resolved = sanitize_artifact_basename(filename)
     path = task_artifact_dir(task_id) / resolved
     start_bytes = path.stat().st_size if path.exists() else 0
     return {
@@ -39,7 +39,7 @@ def finalize_writing_step_delta(
 ) -> dict[str, Any]:
     """Read artifact tail since step start and store excerpt on progress."""
     from app.services.artifact_tools import read_artifact_tail, task_artifact_dir
-    from app.services.manuscript_service import resolve_read_paths
+    from app.services.manuscript_service import sanitize_artifact_basename
 
     cfg = load_confirmation_gates_config()
     task_id = str(state["task_id"])
@@ -47,7 +47,7 @@ def finalize_writing_step_delta(
     if not filename:
         return delta
 
-    resolved = resolve_read_paths(state, filename)
+    resolved = sanitize_artifact_basename(filename)
     path = task_artifact_dir(task_id) / resolved
     end_bytes = path.stat().st_size if path.exists() else 0
     start_bytes = int(delta.get("start_bytes") or 0)

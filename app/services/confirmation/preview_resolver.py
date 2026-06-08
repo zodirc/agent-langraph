@@ -11,7 +11,7 @@ from typing import Any, Optional
 from app.domain.mission import StepPolicy
 from app.services.confirmation.config import PreviewDefault, load_confirmation_gates_config
 from app.services.confirmation.snapshot import read_snapshot, unified_diff
-from app.services.manuscript_service import resolve_read_paths
+from app.services.manuscript_service import sanitize_artifact_basename
 from app.services.mission_intervention import intervention_from_payload
 
 
@@ -40,7 +40,7 @@ class PreviewResult:
 def _read_file(task_id: str, filename: str, *, state: Optional[dict[str, Any]] = None) -> str:
     from app.services.artifact_tools import task_artifact_dir
 
-    resolved = resolve_read_paths(state or {"task_id": task_id}, filename)
+    resolved = sanitize_artifact_basename(filename)
     path = task_artifact_dir(task_id) / resolved
     if not path.exists():
         return ""
@@ -144,7 +144,9 @@ def resolve_outcome_preview(
         max_chars = default.max_chars
         filename = _resolve_filename(state, completed_item, mission=mission)
 
-    progress = state.get("progress") or {}
+    from app.runtime.state_field_access import progress_from_state
+
+    progress = progress_from_state(state) or {}
 
     if mode == "delta":
         delta = progress.get("writing_step_delta") or {}
@@ -186,7 +188,7 @@ def resolve_outcome_preview(
     elif mode == "tail":
         from app.services.artifact_tools import read_artifact_tail
 
-        resolved = resolve_read_paths(state, filename)
+        resolved = sanitize_artifact_basename(filename)
         tail = read_artifact_tail(task_id, resolved, max_chars=max_chars)
         content = tail.strip()
         truncated = total > len(content)

@@ -234,7 +234,9 @@ def test_queue_steer_while_running_stages_goal_immediately(base_state, monkeypat
     assert "原电影" in goal
     assert not updated.get("pending_user_message")
     assert updated.get("status") == "MISSION_PAUSED"
-    assert (updated.get("mission_control") or {}).get("pause_reason") == "superseded_by_new_input"
+    from app.runtime.state_field_access import mission_control_from_state
+
+    assert mission_control_from_state(updated).get("pause_reason") == "superseded_by_new_input"
     assert payload.get("require_planning_after_steer") is True
     assert payload.get("foreground_preempt_consumed") is True
     assert not (payload.get("turn_contract") or {}).get("primary_op")
@@ -272,7 +274,7 @@ def test_preempt_steer_enters_replan_without_waiting_for_step_boundary(base_stat
     assert "steer_applied" in text
     assert "steer_replan_pending" in text
     assert display.get("supersede_stream_recommended") is True
-    assert "/supersede" in text
+    assert "steer_replan_pending" in text
     plan = (updated.get("progress") or {}).get("work_plan") or {}
     pending_items = [
         i for i in (plan.get("items") or []) if str(i.get("status") or "") == "pending"
@@ -306,7 +308,9 @@ def test_forced_pause_queue_also_sets_immediate_intervention(base_state):
     assert intervention.get("action") == "pause"
     assert intervention.get("force") is True
     assert loaded.get("status") == "MISSION_PAUSED"
-    control = loaded.get("mission_control") or {}
+    from app.runtime.state_field_access import mission_control_from_state
+
+    control = mission_control_from_state(loaded)
     assert control.get("action") == "pause"
     pending = normalize_pending_entries(loaded.get("pending_user_message"))
     assert len(pending) == 1

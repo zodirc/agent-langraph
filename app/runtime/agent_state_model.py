@@ -2,12 +2,43 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional, cast
+from typing import Any, Literal, Optional, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.runtime.state import AgentState, TaskStatus
 from app.runtime.state_models import coerce_agent_state
+
+FsmStateLiteral = Literal["IDLE", "RUNNING", "REPLANNING", "WAITING_USER"]
+SessionModeLiteral = Literal["chat", "mission"]
+
+
+class SessionSnapshot(BaseModel):
+    """Control-plane session fields — only declared fields may drive routing (Phase D)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fsm_state: FsmStateLiteral = "IDLE"
+    session_mode: SessionModeLiteral = "chat"
+    intent_revision: int = 0
+    last_applied_message_id: Optional[str] = None
+
+
+def session_snapshot_from_state(state: AgentState | dict[str, Any]) -> SessionSnapshot:
+    from app.services.session_fsm import get_fsm_state, session_mode
+
+    payload = state.get("input_payload") or {}
+    return SessionSnapshot(
+        fsm_state=get_fsm_state(state),  # type: ignore[arg-type]
+        session_mode=session_mode(state),  # type: ignore[arg-type]
+        intent_revision=int(payload.get("intent_revision") or 0),
+        last_applied_message_id=str(payload.get("last_applied_message_id") or "") or None,
+    )
+
+
+def validate_session_snapshot(state: AgentState | dict[str, Any]) -> SessionSnapshot:
+    """Validate control-plane session at graph/store boundaries."""
+    return session_snapshot_from_state(state)
 
 
 class AgentStateModel(BaseModel):

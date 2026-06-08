@@ -2,8 +2,7 @@
 Structured steer confirmation — no natural-language phrase matching.
 
 Clients approve pending intent/outcome gates via:
-  POST /tasks/{id}/resume  {"confirm": true}
-  POST /tasks/{id}/steer   {"confirm": true}
+  POST /tasks/{id}/message/stream  {"message": "", "confirm": true}
 """
 
 from __future__ import annotations
@@ -14,16 +13,23 @@ from app.runtime.state import AgentState
 
 
 def build_confirmation_actions(task_id: str) -> dict[str, Any]:
+    path = f"/tasks/{task_id}/message/stream"
+    body = {"message": "", "confirm": True}
     return {
+        "message": {
+            "method": "POST",
+            "path": path,
+            "body": body,
+        },
         "resume": {
             "method": "POST",
-            "path": f"/tasks/{task_id}/resume",
-            "body": {"confirm": True},
+            "path": path,
+            "body": body,
         },
         "steer": {
             "method": "POST",
-            "path": f"/tasks/{task_id}/steer",
-            "body": {"confirm": True},
+            "path": path,
+            "body": body,
         },
         "cli_alias": "/confirm",
     }
@@ -41,13 +47,10 @@ def enrich_confirmation_block(task_id: str, block: dict[str, Any]) -> dict[str, 
 
 
 def confirmation_actions_hint(actions: dict[str, Any]) -> str:
-    resume = actions.get("resume") or {}
-    steer = actions.get("steer") or {}
+    message = actions.get("message") or actions.get("resume") or {}
     return (
-        f"Approve: {resume.get('method', 'POST')} {resume.get('path', '')} "
-        f"body {resume.get('body', {'confirm': True})}; "
-        f"or {steer.get('method', 'POST')} {steer.get('path', '')} "
-        f"body {steer.get('body', {'confirm': True})}. "
+        f"Approve: {message.get('method', 'POST')} {message.get('path', '')} "
+        f"body {message.get('body', {'message': '', 'confirm': True})}. "
         f"Web CLI alias: {actions.get('cli_alias', '/confirm')}."
     )
 

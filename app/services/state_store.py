@@ -42,6 +42,11 @@ _PAYLOAD_VOLATILE_KEYS = (
     "steer_outcome_confirmation",
     "steer_review_outline",
     "mission_intervention",
+    "fsm_state",
+    "session_mode",
+    "last_applied_message_id",
+    "turn_step_executed",
+    "steer_planning_complete_pending",
 )
 
 # Cleared on each new steer batch — must not be restored from DB after pop/absent in snapshot.
@@ -179,6 +184,11 @@ class StateStore:
 
     def _save(self, state: AgentState) -> AgentState:
         state = self._preserve_volatile_fields(state)
+        from app.services.invariant_guard import validate
+        from app.runtime.agent_state_model import validate_session_snapshot
+
+        state = validate(state)
+        validate_session_snapshot(state)
         now = datetime.now(timezone.utc).isoformat()
         record = TaskRecord(
             task_id=state["task_id"],

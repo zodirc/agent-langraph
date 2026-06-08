@@ -36,9 +36,7 @@ from app.services.manuscript_context import (
 )
 from app.services.manuscript_service import (
     Manuscript,
-    resolve_body_filename,
     resolve_manuscript,
-    resolve_outline_filename,
     validate_manuscript_content,
 )
 from app.services.manuscript_service import manuscript_has_body
@@ -97,6 +95,12 @@ def writing_node(state: AgentState) -> AgentState:
     Writes: tool_results (append), manuscript, status, audit_log
     """
     try:
+        from app.services.run_controller import RunCancelled, RunController
+
+        try:
+            RunController.assert_run_active(state, phase="writing_enter")
+        except RunCancelled:
+            return merge_state(state, current_node="writing")
         from app.services.route_audit import writing_gate_allowed
 
         if not writing_gate_allowed(state):
@@ -162,6 +166,13 @@ def writing_node(state: AgentState) -> AgentState:
             )
 
         action = str(intent.get("action") or "append_body")
+        from app.services.writing_step import coerce_writing_action_for_manuscript_state
+
+        coerced = coerce_writing_action_for_manuscript_state(state, action)
+        if coerced != action:
+            intent = {**intent, "action": coerced, "source": intent.get("source") or "coerced"}
+            action = coerced
+            payload = {**payload, "writing_intent": intent}
         if action in PHASE_ACTIONS:
             report_progress(f"Writing 阶段：{action}…")
             report_status_trace("writing", f"写作阶段 action={action}")
@@ -174,8 +185,22 @@ def writing_node(state: AgentState) -> AgentState:
         task_id = state["task_id"]
         goal = str(payload.get("goal") or "")
         ms = resolve_manuscript(task_id, state.get("manuscript"))
-        outline_file = resolve_outline_filename(manuscript=ms, payload=payload, intent=intent)
-        body_file = resolve_body_filename(manuscript=ms, payload=payload, intent=intent)
+        from app.services.artifact_resolver import resolve_artifact_target
+
+        outline_target = resolve_artifact_target(
+            merge_state(state, input_payload=payload, manuscript=ms.to_dict()),
+            action="write_outline",
+            target_hint="outline",
+            require_exists=False,
+        )
+        body_target = resolve_artifact_target(
+            merge_state(state, input_payload=payload, manuscript=ms.to_dict()),
+            action=str(intent.get("action") or "append_body"),
+            target_hint="body",
+            require_exists=str(intent.get("action") or "") not in ("write_body", "write_outline"),
+        )
+        outline_file = outline_target.filename
+        body_file = body_target.filename
         target_chars = int(intent.get("target_chars") or settings.ARTIFACT_CHUNK_CHARS)
 
         results: list[dict[str, Any]] = list(state.get("tool_results") or [])
@@ -607,6 +632,11 @@ def writing_node(state: AgentState) -> AgentState:
             ),
         )
         updated = attach_turn_facts(updated)
+        from app.services.steer_planning_lifecycle import maybe_complete_steer_planning_after_execute
+        from app.services.turn_guard import mark_turn_step_executed
+
+        updated = mark_turn_step_executed(updated)
+        updated = maybe_complete_steer_planning_after_execute(updated)
         artifact_path = ms.body_path or ms.outline_path or action
         updated = record_turn_event(
             updated,

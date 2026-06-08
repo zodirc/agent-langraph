@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.runtime.state import AgentState, merge_state
+from app.runtime.state_field_access import progress_from_state, set_progress_on_state
 from app.services.manuscript_service import resolve_manuscript
 from app.services.state_store import get_state_store
 
@@ -18,7 +19,7 @@ def enrich_agent_state_manuscript(state: AgentState) -> AgentState:
     task_id = str(state["task_id"])
     ms_dict = resolve_manuscript(task_id, state.get("manuscript")).to_dict()
 
-    progress = dict(state.get("progress") or {})
+    progress = dict(progress_from_state(state) or {})
     metrics = dict(progress.get("metrics") or {})
     metrics["last_chapter_index"] = int(ms_dict.get("last_chapter_index") or 0)
     metrics["body_bytes"] = int(ms_dict.get("body_bytes") or 0)
@@ -27,7 +28,8 @@ def enrich_agent_state_manuscript(state: AgentState) -> AgentState:
     progress["metrics"] = metrics
     progress["disk_synced_at"] = _now_iso()
 
-    return merge_state(state, manuscript=ms_dict, progress=progress)
+    updated = merge_state(state, manuscript=ms_dict)
+    return set_progress_on_state(updated, progress)
 
 
 def checkpoint_writing_state(

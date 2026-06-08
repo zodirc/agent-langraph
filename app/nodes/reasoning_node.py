@@ -17,6 +17,7 @@ from app.services.resource_budget import (
 )
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
 from app.services.fast_reasoning import try_fast_reasoning
+from app.services.thin_execution import reasoning_llm_purpose
 from app.services.fact_layer import (
     apply_reasoning_guard,
     attach_turn_facts,
@@ -146,6 +147,7 @@ def reasoning_node(state: AgentState) -> AgentState:
 
         fast = None if force_llm else try_fast_reasoning(state)
         reasoning_source = "fast"
+        llm_purpose = reasoning_llm_purpose(state)
         report_boundary("reasoning", "enter")
 
         if fast is not None:
@@ -172,7 +174,7 @@ def reasoning_node(state: AgentState) -> AgentState:
                     controlled_iter(
                         str(state["task_id"]),
                         stream_structured(
-                            "reasoning",
+                            llm_purpose,
                             reasoning_system,
                             user_json,
                             budget_ctx=budget_ctx,
@@ -187,7 +189,7 @@ def reasoning_node(state: AgentState) -> AgentState:
                     field="summary",
                 )
                 result = extract_json_with_repair(
-                    "reasoning",
+                    llm_purpose,
                     raw,
                     prefer_keys=("summary",),
                     trace_state=state,
@@ -195,7 +197,7 @@ def reasoning_node(state: AgentState) -> AgentState:
                 )
             else:
                 result = invoke_structured(
-                    "reasoning",
+                    llm_purpose,
                     reasoning_system,
                     user_json,
                     budget_ctx=budget_ctx,

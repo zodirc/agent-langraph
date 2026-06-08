@@ -18,27 +18,36 @@ _ENGINEERING_SIGNAL_RE = re.compile(
 )
 
 _MISSION_STATUS_QUERY_RE = re.compile(
-    r"(你正在做什么|你在做什么|你在干嘛|在做什么|正在做什么|现在在做什么|"
+    r"(你正在做什么|你在做什么|你在干嘛|正在做什么|现在在做什么|"
     r"写到哪|写到哪里|当前进度|什么进度|进度如何|任务状态|现在在写什么|"
     r"what are you doing|current progress|task status)",
     re.IGNORECASE,
 )
 
+_CAPABILITY_INQUIRY_RE = re.compile(
+    r"(你能做什么|你能干什么|你可以做什么|你会做什么|能做什么|有什么功能|"
+    r"能帮我什么|what can you do|your capabilities)",
+    re.IGNORECASE,
+)
+
+
+def goal_is_capability_inquiry(goal: str) -> bool:
+    """User asks what the agent can do — QA, not mission progress."""
+    text = (goal or "").strip()
+    return bool(text) and bool(_CAPABILITY_INQUIRY_RE.search(text))
+
 
 def goal_is_mission_status_query(goal: str) -> bool:
     """
-    Meta questions during an active writing mission (Cursor-style status check).
+    Progress check while a mission is running (Cursor-style status check).
 
     Must not queue steer replan or mechanical append_body; answer with progress only.
+    Capability questions (你能做什么) are explicitly excluded.
     """
     text = (goal or "").strip()
-    if not text:
+    if not text or goal_is_capability_inquiry(text):
         return False
     if _MISSION_STATUS_QUERY_RE.search(text):
-        return True
-    if len(text) <= 28 and any(
-        token in text for token in ("做什么", "进度", "状态", "写到哪", "在写")
-    ):
         return True
     return False
 

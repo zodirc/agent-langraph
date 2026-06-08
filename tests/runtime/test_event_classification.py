@@ -1,4 +1,4 @@
-"""Unit tests for unified user event classification (WP-1.1)."""
+"""Unit tests for unified user event classification (WP-1.1 / Phase D)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,30 @@ from app.services.event_classification import VALID_EVENT_TYPES, classify_user_e
     [
         ({}, {}, "new_task"),
         ({"event_type": "interrupt"}, {}, "interrupt"),
-        ({"goal": "补充一点背景：主角是工程师"}, {"session_turn": 2}, "clarification"),
+        (
+            {"goal": "补充一点背景：主角是工程师"},
+            {
+                "session_turn": 2,
+                "conversation_history": [
+                    {"role": "user", "content": "写一份谍战剧本"},
+                    {"role": "assistant", "content": "好的，开始规划。"},
+                    {"role": "user", "content": "补充一点背景：主角是工程师"},
+                ],
+            },
+            "clarification",
+        ),
+        (
+            {"goal": "写一份电影剧本，谍战剧情，要包括细节，民国背景"},
+            {
+                "session_turn": 2,
+                "conversation_history": [
+                    {"role": "user", "content": "你好"},
+                    {"role": "assistant", "content": "你好！"},
+                    {"role": "user", "content": "写一份电影剧本，谍战剧情，要包括细节，民国背景"},
+                ],
+            },
+            "new_task",
+        ),
         (
             {"goal": "你好"},
             {
@@ -23,16 +46,22 @@ from app.services.event_classification import VALID_EVENT_TYPES, classify_user_e
             "new_task",
         ),
         (
-            {"goal": "停止", "preempt": True, "priority": 100},
-            {},
+            {"goal": "停止"},
+            {
+                "status": "MISSION_RUNNING",
+                "input_payload": {"mission": {"kind": "writing", "objective": "写剧本"}},
+            },
             "interrupt",
         ),
         (
             {
                 "goal": "改走悬疑线",
-                "replace_goal": True,
+                "turn_policy_decision": {"intent": "supersede_active_mission"},
             },
-            {},
+            {
+                "status": "MISSION_RUNNING",
+                "input_payload": {"mission": {"kind": "writing", "objective": "写剧本"}},
+            },
             "redirect",
         ),
         ({"confirm": True}, {}, "confirm"),
@@ -47,7 +76,19 @@ from app.services.event_classification import VALID_EVENT_TYPES, classify_user_e
             {},
             "resume",
         ),
-        ({"goal": "你正在做什么"}, {}, "status_query"),
+        (
+            {"goal": "你能做什么"},
+            {},
+            "new_task",
+        ),
+        (
+            {"goal": "你正在做什么"},
+            {
+                "status": "MISSION_RUNNING",
+                "input_payload": {"mission": {"kind": "writing", "objective": "x"}},
+            },
+            "status_query",
+        ),
     ],
 )
 def test_classify_user_event_matrix(payload, state_patch, expected):
@@ -61,14 +102,67 @@ def test_classify_user_event_matrix(payload, state_patch, expected):
 
 
 def test_interrupt_preempts_redirect(base_state):
+    from app.services.mission_schema import build_mission_dict
+
     payload = {
         "goal": "停止并重写大纲",
-        "preempt": True,
-        "replace_goal": True,
         "priority": 100,
     }
-    result = classify_user_event(base_state, payload=payload)
+    mission = build_mission_dict(
+        base_state,
+        {"mission": {"kind": "writing"}},
+        kind="writing",
+    )
+    mission_state = merge_state(
+        base_state,
+        status="MISSION_RUNNING",
+        input_payload={"mission": mission, "goal": "写剧本", "fsm_state": "RUNNING"},
+    )
+    result = classify_user_event(mission_state, payload=payload)
     assert result.event_type == "interrupt"
+
+
+def test_preempt_without_active_mission_is_not_interrupt(base_state):
+    payload = {
+        "goal": "你好",
+        "preempt": True,
+        "replace_goal": True,
+    }
+    result = classify_user_event(base_state, payload=payload)
+    assert result.event_type == "new_task"
+
+
+def test_client_routing_hints_stripped(base_state):
+    payload = {
+        "goal": "改走悬疑线",
+        "preempt": True,
+        "replace_goal": True,
+        "turn_policy_decision": {"intent": "supersede_active_mission"},
+    }
+    state = merge_state(
+        base_state,
+        status="MISSION_RUNNING",
+        input_payload={
+            "mission": {"kind": "writing", "objective": "写剧本"},
+            "fsm_state": "RUNNING",
+        },
+    )
+    result = classify_user_event(state, payload=payload)
+    assert result.event_type == "redirect"
+
+
+def test_fsm_replanning_with_goal_is_redirect(base_state):
+    state = merge_state(
+        base_state,
+        input_payload={
+            "fsm_state": "REPLANNING",
+            "require_planning_after_steer": True,
+            "steer_planning_done": False,
+            "goal": "旧目标",
+        },
+    )
+    result = classify_user_event(state, payload={"goal": "新剧情方向"})
+    assert result.event_type == "redirect"
 
 
 def test_resume_before_clarification_on_continue_signal(base_state):
@@ -85,7 +179,7 @@ def test_resume_before_clarification_on_continue_signal(base_state):
 def test_prepare_session_turn_session_enabled_turn_two_is_clarification(
     isolated_stores, monkeypatch
 ):
-    """Multi-turn session: turn 2+ classifies as clarification."""
+    """Multi-turn session: turn 2+ supplements an existing substantive task."""
     from app.nodes.event_classification_node import event_classification_node
     from app.runtime.state import TaskStatus, merge_state
     from app.services.session_turn import prepare_session_turn
@@ -98,7 +192,7 @@ def test_prepare_session_turn_session_enabled_turn_two_is_clarification(
         session_id=session_id,
         user_id="tester",
         task_type="qa",
-        payload={"goal": "hello"},
+        payload={"goal": "写一份谍战剧本"},
     )
     assert created is True
     state1 = merge_state(
@@ -119,6 +213,49 @@ def test_prepare_session_turn_session_enabled_turn_two_is_clarification(
 
     classified = event_classification_node(state2)
     assert classified["event_type"] == "clarification"
+
+
+def test_prepare_session_turn_greeting_then_screenplay_is_new_task(
+    isolated_stores, monkeypatch
+):
+    from app.nodes.acknowledge_node import acknowledge_node
+    from app.nodes.event_classification_node import event_classification_node
+    from app.runtime.state import TaskStatus, merge_state
+    from app.services.foreground_ack import build_foreground_ack
+    from app.services.session_turn import prepare_session_turn
+    from app.services.state_store import get_state_store
+
+    monkeypatch.setattr("app.services.session_turn.settings.SESSION_ENABLED", True)
+
+    session_id = "sess-greeting-screenplay"
+    state1, _ = prepare_session_turn(
+        session_id=session_id,
+        user_id="tester",
+        task_type="qa",
+        payload={"goal": "你好"},
+    )
+    state1 = merge_state(
+        state1,
+        session_id=session_id,
+        status=TaskStatus.COMPLETED.value,
+    )
+    get_state_store().save(state1)
+
+    screenplay = "写一份电影剧本，谍战剧情，要包括细节，民国背景"
+    state2, _ = prepare_session_turn(
+        session_id=session_id,
+        user_id="tester",
+        task_type="qa",
+        payload={"goal": screenplay},
+    )
+    classified = event_classification_node(state2)
+    assert classified["event_type"] == "new_task"
+    ack = build_foreground_ack(classified)
+    assert ack["recognized_intent"] == "新任务"
+    acknowledged = acknowledge_node(classified)
+    assert (acknowledged.get("input_payload") or {}).get("foreground_ack", {}).get(
+        "event_type"
+    ) == "new_task"
 
 
 def test_prepare_session_turn_session_enabled_turn_one_is_new_task(
@@ -172,6 +309,51 @@ def test_prepare_session_turn_first_message_is_new_task(isolated_stores, monkeyp
     acknowledged = acknowledge_node(classified)
     payload = acknowledged.get("input_payload") or {}
     assert payload.get("foreground_ack", {}).get("event_type") == "new_task"
+
+
+def test_resend_is_new_task_not_resume(base_state):
+    goal = "写一份电影剧本，谍战剧情，要包括细节，民国背景"
+    mission = {"kind": "writing", "objective": goal}
+    payload = {
+        "goal": goal,
+        "meta": {"resend": True},
+        "turn_policy_decision": {"intent": "resume_mission"},
+        "mission": mission,
+    }
+    state = merge_state(
+        base_state,
+        session_turn=3,
+        mission=mission,
+        status="COMPLETED",
+        input_payload={"mission": mission, "goal": goal},
+    )
+    result = classify_user_event(state, payload=payload)
+    assert result.event_type == "new_task"
+    assert result.source == "user_resend"
+
+
+def test_event_classification_node_reuses_stamped_classification(base_state):
+    from app.nodes.event_classification_node import event_classification_node
+
+    stamped = {
+        "event_type": "new_task",
+        "event_id": "evt-stamped-1",
+        "source": "prepare",
+        "reason": "stamped at ingress",
+        "confidence": 1.0,
+    }
+    state = merge_state(
+        base_state,
+        session_turn=2,
+        input_payload={
+            "goal": "写剧本",
+            "event_classification": stamped,
+            "inbound_event_id": "evt-stamped-1",
+        },
+    )
+    updated = event_classification_node(state)
+    assert updated["event_type"] == "new_task"
+    assert updated["event_id"] == "evt-stamped-1"
 
 
 def test_event_classification_node_sets_state(base_state):

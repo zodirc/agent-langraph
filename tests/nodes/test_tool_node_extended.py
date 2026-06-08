@@ -49,7 +49,7 @@ def test_tool_node_skips_writing_tools(base_state):
     assert result.get("turn_facts") is not None
 
 
-def test_read_text_artifact_prefers_registry_pointer(base_state):
+def test_read_text_artifact_prefers_manuscript_pointer(base_state):
     handle_write_text_artifact(
         {
             "task_id": base_state["task_id"],
@@ -60,12 +60,9 @@ def test_read_text_artifact_prefers_registry_pointer(base_state):
     state = merge_state(
         base_state,
         selected_tools=["read_text_artifact"],
+        manuscript={"body_path": "novel.txt", "body_bytes": 15},
         input_payload={
             **base_state["input_payload"],
-            "artifact_registry": {
-                "known": {"novel.txt": "novel.txt"},
-                "last_written": "novel.txt",
-            },
             "tool_params": {"read_text_artifact": {}},
         },
     )

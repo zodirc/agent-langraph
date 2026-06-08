@@ -190,66 +190,21 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
 
     ctx = ensure_interrupt_context(state)
     payload_replan = merge_input_payload_for_gates(state, stored)
-    if str(ctx.get("control_state") or "") == CONTROL_REPLANNING:
+    from app.services.session_fsm import routing_needs_replan
+
+    replan_active = routing_needs_replan(state) or str(ctx.get("control_state") or "") == CONTROL_REPLANNING
+    if replan_active:
         if is_supersede_replan_dispatch(payload_replan, state):
             return EvalResult(
                 done=False,
-                reason="supersede replan dispatch → planner",
+                reason="replan dispatch → planner",
                 action="continue",
-            )
-        if (
-            is_supersede_replan_pending(payload_replan, state)
-            and str(state.get("status") or "") == TaskStatus.MISSION_PAUSED.value
-        ):
-            return EvalResult(
-                done=True,
-                reason="supersede replan queued — await /supersede",
-                action="pause",
-                pause_reason=PAUSE_SUPERSEDED_BY_INPUT,
             )
         return EvalResult(
             done=True,
-            reason="foreground replan after preempt",
+            reason="replanning — await user message via unified ingress",
             action="pause",
-            pause_reason=PAUSE_FOREGROUND_REPLAN,
-        )
-
-    if payload_replan.get("foreground_preempt_consumed") and payload_replan.get(
-        "require_planning_after_steer"
-    ):
-        from app.services.mission_steer import steer_requires_planning
-
-        if is_supersede_replan_dispatch(payload_replan, state) and steer_requires_planning(
-            payload_replan
-        ):
-            return EvalResult(
-                done=False,
-                reason="supersede replan dispatch → planner",
-                action="continue",
-            )
-        if (
-            str(state.get("status") or "") == TaskStatus.MISSION_RUNNING.value
-            and steer_requires_planning(payload_replan)
-            and str(state.get("current_node") or "") in ("mission_decide", "api", "")
-            and is_supersede_replan_dispatch(payload_replan, state)
-        ):
-            return EvalResult(
-                done=False,
-                reason="supersede replan entry → planner",
-                action="continue",
-            )
-        if is_supersede_replan_pending(payload_replan, state):
-            return EvalResult(
-                done=True,
-                reason="supersede replan queued — await /supersede",
-                action="pause",
-                pause_reason=PAUSE_SUPERSEDED_BY_INPUT,
-            )
-        return EvalResult(
-            done=True,
-            reason="steer replan required after foreground preempt",
-            action="pause",
-            pause_reason=PAUSE_FOREGROUND_REPLAN,
+            pause_reason=PAUSE_SUPERSEDED_BY_INPUT,
         )
 
     control = snapshot_task_control(str(state["task_id"]))

@@ -22,8 +22,8 @@ from app.services.resource_budget import (
     budget_context_from_state,
     init_task_budget,
 )
+from app.services.artifact_resolver import bind_planned_artifact_names, manifest_for_planning
 from app.services.manuscript_service import (
-    apply_planner_artifact_names,
     build_writing_intent,
     enrich_payload,
     resolve_manuscript,
@@ -53,34 +53,6 @@ from app.services.runtime_capabilities import build_runtime_capabilities
 from app.services.state_store import get_state_store
 from app.services.stream_progress import report_progress
 from app.services.tool_registry import get_tool_registry
-
-
-def _outline_status_for_planning(state: AgentState, payload: dict[str, Any]) -> dict[str, Any]:
-    """Tell planning when outline is already materialized (steer should patch, not rewrite)."""
-    from app.config.settings import settings
-
-    from app.services.manuscript_service import _coerce_dict
-
-    stored = _coerce_dict(state.get("manuscript") or payload.get("manuscript"))
-    ms = resolve_manuscript(state["task_id"], stored or None)
-    outline_bytes = max(int(ms.outline_bytes or 0), int(stored.get("outline_bytes") or 0))
-    min_outline = int(getattr(settings, "MANUSCRIPT_MIN_OUTLINE_CHARS", 80))
-    body_bytes = max(int(ms.body_bytes or 0), int(stored.get("body_bytes") or 0))
-    from app.services.turn_contract import outline_artifact_status
-
-    artifact = outline_artifact_status(
-        {"task_id": state["task_id"], "manuscript": ms.to_dict()}
-    )
-    outline_path = artifact.get("outline_path") or ms.outline_path or stored.get("outline_path")
-    outline_exists = bool(artifact.get("outline_exists"))
-    return {
-        "outline_path": outline_path,
-        "outline_bytes": outline_bytes,
-        "outline_complete": outline_bytes >= min_outline,
-        "outline_exists": outline_exists,
-        "body_bytes": body_bytes,
-        "steer_should_patch_not_rewrite": outline_exists,
-    }
 
 
 def planning_node(state: AgentState) -> AgentState:
@@ -164,10 +136,15 @@ def planning_node(state: AgentState) -> AgentState:
 
         if state.get("mission") and detect_handoff_planning_loop(payload, state):
             from app.services.mission_schema import apply_mission_step_to_payload
-            from app.services.mission_steer import complete_steer_planning
+            from app.services.steer_planning_lifecycle import defer_steer_planning_completion
 
-            if not payload.get("steer_planning_done"):
-                payload = complete_steer_planning(payload)
+            if planning_steer_replan_active(payload, state) and not payload.get(
+                "steer_planning_done"
+            ):
+                state = defer_steer_planning_completion(
+                    merge_state(state, input_payload=payload)
+                )
+                payload = dict(state.get("input_payload") or {})
             payload = apply_mission_step_to_payload(
                 merge_state(state, input_payload=payload, manuscript=ms.to_dict())
             )
@@ -192,7 +169,8 @@ def planning_node(state: AgentState) -> AgentState:
                 "source": "thin_planning",
             }
             payload["writing_intent"] = intent
-            plan = qa_thin_plan(goal)
+            plan = qa_thin_plan(goal, intent_kind=str(payload.get("intent_kind") or "qa"))
+            payload["thin_execution_profile"] = "qa_direct"
             report_plan_trace(
                 plan,
                 [],
@@ -287,8 +265,6 @@ def planning_node(state: AgentState) -> AgentState:
             get_state_store().save(updated)
             return updated
 
-        from app.services.mission_steer import complete_steer_planning
-
         steer_planning_turn = planning_steer_replan_active(payload, state)
         mission_before_steer = dict(state.get("mission") or payload.get("mission") or {})
 
@@ -306,7 +282,7 @@ def planning_node(state: AgentState) -> AgentState:
                     mission=mission_in_state,
                 )
             intent = payload.get("writing_intent") or {}
-            payload = apply_planner_artifact_names(payload)
+            payload = bind_planned_artifact_names(payload)
             trace_tools = ["writing_node"] if intent.get("enabled") else []
             from app.services.turn_kind import plan_steps_for_display
 
@@ -407,7 +383,7 @@ def planning_node(state: AgentState) -> AgentState:
             "conversation_history": [],
             "session_turn": state.get("session_turn"),
             "manuscript": payload.get("manuscript"),
-            "outline_status": _outline_status_for_planning(state, payload),
+            **manifest_for_planning(state, payload),
             "writing_instruction": payload.get("writing_instruction"),
             "previous_artifact_summary": payload.get("previous_artifact_summary"),
             "risk_level": payload.get("risk_level", "LOW"),
@@ -519,7 +495,11 @@ def planning_node(state: AgentState) -> AgentState:
             result, payload, state=merge_state(state, input_payload=payload)
         )
         if steer_planning_turn:
-            payload = complete_steer_planning(payload)
+            from app.services.steer_planning_lifecycle import defer_steer_planning_completion
+
+            payload = defer_steer_planning_completion(merge_state(state, input_payload=payload)).get(
+                "input_payload"
+            ) or payload
             from app.services.mission_supersede import settle_foreground_operation
 
             state = settle_foreground_operation(merge_state(state, input_payload=payload))
@@ -571,7 +551,8 @@ def planning_node(state: AgentState) -> AgentState:
             )
 
         plan_tool_params = result.get("tool_params")
-        tool_params = dict(payload.get("tool_params") or {})
+        existing_params = payload.get("tool_params")
+        tool_params = dict(existing_params) if isinstance(existing_params, dict) else {}
         if isinstance(plan_tool_params, dict):
             for key, value in plan_tool_params.items():
                 if isinstance(value, dict):
@@ -607,17 +588,31 @@ def planning_node(state: AgentState) -> AgentState:
             dropped_tools = list(dict.fromkeys(list(dropped_tools or []) + selection_issues))
         all_tools = valid_tools
         exec_tools, writing_tools = split_execution_tools(all_tools)
+        from app.services.artifact_read_guard import filter_saturated_read_tools
+
+        exec_tools = filter_saturated_read_tools(
+            merge_state(state, input_payload=payload, manuscript=ms.to_dict()),
+            exec_tools,
+            tool_params,
+        )
 
         goal = str(payload.get("goal") or "")
         mission_before_patch = dict(payload.get("mission") or state.get("mission") or {})
         payload, mission_auto_reason = apply_planning_mission_decision(result, payload)
+        from app.services.writing_step import normalize_writing_mission
+
         plan_mission = result.get("mission")
         mission_block: dict[str, Any] | None = None
         if isinstance(plan_mission, dict) and plan_mission:
-            mission_block = {**(payload.get("mission") or {}), **plan_mission}
+            mission_block = normalize_writing_mission(
+                {**(payload.get("mission") or {}), **plan_mission}
+            ) or {**(payload.get("mission") or {}), **plan_mission}
             payload["mission"] = mission_block
         elif payload.get("mission"):
-            mission_block = dict(payload["mission"])
+            mission_block = normalize_writing_mission(payload["mission"]) or dict(
+                payload["mission"]
+            )
+            payload["mission"] = mission_block
 
         payload, patch_reason = patch_mission_from_planning(
             result,
@@ -652,7 +647,9 @@ def planning_node(state: AgentState) -> AgentState:
             mission_auto_reason = mission_auto_reason or patch_reason
             mission_block = dict(payload.get("mission") or mission_block or {})
 
-        mission_in_state = dict(payload.get("mission") or state.get("mission") or {})
+        mission_in_state = (
+            normalize_writing_mission(payload.get("mission") or state.get("mission")) or {}
+        )
         if mission_in_state.get("kind") == "writing":
             from app.services.turn_contract import finalize_turn_execution_plan
 
@@ -693,8 +690,13 @@ def planning_node(state: AgentState) -> AgentState:
             )
 
         if str(payload.get("target_mode") or "") != "engineering_mode":
-            payload = apply_planner_artifact_names(payload, planning_result=result)
+            payload = bind_planned_artifact_names(payload, planning_result=result)
 
+        for tool in ("read_text_artifact", "edit_text_artifact", "write_text_artifact", "append_text_artifact"):
+            cfg = tool_params.get(tool)
+            if isinstance(cfg, dict) and "filename" in cfg:
+                slim = {k: v for k, v in cfg.items() if k != "filename"}
+                tool_params[tool] = slim
         payload["tool_params"] = tool_params
 
         tool_stages = result.get("tool_stages")
@@ -855,7 +857,9 @@ def planning_node(state: AgentState) -> AgentState:
                 )
             else:
                 updated = init_mission_state(updated, payload)
-                payload_after = dict(updated.get("input_payload") or {})
+                from app.services.mission_schema import apply_mission_step_to_payload
+
+                payload_after = apply_mission_step_to_payload(updated)
                 payload_after["mission_handoff_completed"] = True
                 payload_after["mission_handoff_source"] = "planning_node_init"
                 updated = merge_state(updated, input_payload=payload_after)

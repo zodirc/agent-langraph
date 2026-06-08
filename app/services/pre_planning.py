@@ -237,10 +237,12 @@ def should_skip_planning_llm(state: AgentState) -> bool:
     return True
 
 
-def qa_thin_plan(goal: str) -> list[str]:
-    """Rule-based plan for conversational QA without planning LLM."""
+def qa_thin_plan(goal: str, *, intent_kind: str = "qa") -> list[str]:
+    """Thin plan step from intent + goal shape (no length-only heuristics)."""
+    from app.services.interaction_goal import goal_is_pure_greeting
+
     text = (goal or "").strip()
-    if len(text) <= 12:
+    if goal_is_pure_greeting(text):
         return ["respond greeting"]
     return ["respond directly"]
 

@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import patch
 
 from app.nodes.writing_node import writing_node
@@ -19,8 +20,15 @@ def test_writing_node_skipped_when_disabled(base_state):
 
 def test_writing_node_append_validated(base_state, test_settings, monkeypatch):
     import app.services.artifact_tools as art
+    from tests.conftest import patch_task_artifact_dir
 
     monkeypatch.setattr(art.settings, "ARTIFACTS_PATH", test_settings.ARTIFACTS_PATH)
+    patch_task_artifact_dir(monkeypatch, Path(test_settings.ARTIFACTS_PATH))
+    task_id = base_state["task_id"]
+    art_dir = Path(test_settings.ARTIFACTS_PATH) / task_id
+    art_dir.mkdir(parents=True, exist_ok=True)
+    (art_dir / "novel.txt").write_text("已有正文。" * 20, encoding="utf-8")
+
     state = {
         **base_state,
         "input_payload": {
@@ -32,7 +40,6 @@ def test_writing_node_append_validated(base_state, test_settings, monkeypatch):
                 "target_chars": 500,
                 "min_chars": 50,
             },
-            "novel_filename": "novel.txt",
         },
         "manuscript": {"body_path": "novel.txt", "body_bytes": 100},
     }

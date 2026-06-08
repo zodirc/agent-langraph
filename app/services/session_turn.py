@@ -24,12 +24,102 @@ from app.services.state_store import get_state_store
 
 __all__ = [
     "append_message",
+    "build_inbound_merged_payload",
     "compress_conversation_history",
     "compress_session_history",
     "finalize_turn_history",
     "graph_thread_id",
     "prepare_session_turn",
 ]
+
+
+def _stamp_turn_policy_and_classification(
+    existing: AgentState,
+    merged: dict[str, Any],
+    *,
+    goal: str,
+    incoming: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve turn_policy + authoritative event classification before turn increment."""
+    from app.services.event_classification import (
+        classify_user_event,
+        stamp_inbound_classification,
+    )
+    from app.services.session.config import load_session_turn_policy_config
+    from app.services.session.turn_policy import (
+        apply_qa_turn_isolation,
+        resolve_session_turn,
+        restore_archived_mission,
+    )
+
+    if not goal:
+        return merged
+
+    decision = resolve_session_turn(existing, merged, goal, incoming=incoming)
+    if load_session_turn_policy_config().audit_decisions:
+        merged["turn_policy_decision"] = decision.to_dict()
+
+    active_mission = existing.get("mission") or (existing.get("input_payload") or {}).get(
+        "mission"
+    )
+    if decision.intent in ("resume_mission", "supersede_active_mission"):
+        merged = restore_archived_mission(existing, merged)
+    if decision.intent == "resume_mission":
+        from app.services.mission_execution import (
+            is_mechanical_resume_decision,
+            issue_execution_grant_to_payload,
+            mechanical_resume_allowed,
+        )
+        from app.services.mission_steer import steer_needs_planning_llm
+
+        if is_mechanical_resume_decision(decision) and not steer_needs_planning_llm(message=goal):
+            if mechanical_resume_allowed(existing, decision):
+                merged = issue_execution_grant_to_payload(merged, source=str(decision.source))
+    elif active_mission and decision.intent == "isolate_qa":
+        merged = apply_qa_turn_isolation(merged, existing)
+
+    history = merged.get("conversation_history") or []
+    prospective_turn = int(existing.get("session_turn") or 0) + 1
+    classify_state = merge_state(
+        existing,
+        conversation_history=history,
+        session_turn=prospective_turn,
+    )
+    classification = classify_user_event(classify_state, payload=merged)
+    return stamp_inbound_classification(merged, classification)
+
+
+def build_inbound_merged_payload(
+    existing: AgentState,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Merge history, turn_policy, and L1 classification for an existing session turn.
+
+    Used by L0 ingress and ``prepare_session_turn`` before ``session_turn`` increments.
+    """
+    goal = str(
+        payload.get("goal") or payload.get("query") or payload.get("question") or ""
+    ).strip()
+    history = conversation_history_from_state(existing)
+    if goal:
+        history = append_message(history, "user", goal)
+    history = compress_session_history(history, state=existing)
+    merged = {
+        **existing.get("input_payload", {}),
+        **payload,
+        "conversation_history": history,
+    }
+    if goal:
+        merged = _stamp_turn_policy_and_classification(
+            existing,
+            merged,
+            goal=goal,
+            incoming=payload,
+        )
+    elif not merged.get("goal"):
+        merged["goal"] = str(existing.get("input_payload", {}).get("goal") or "")
+    return merged
 
 
 def graph_thread_id(state: AgentState) -> str:
@@ -106,12 +196,21 @@ def prepare_session_turn(
         history = append_message([], "user", goal) if goal else []
         if history:
             payload = {**payload, "conversation_history": history}
+        from app.services.event_classification import (
+            classify_user_event,
+            stamp_inbound_classification,
+        )
+
         state = create_initial_state(
             user_id=user_id,
             task_type=task_type,
             input_payload=payload,
         )
         state = apply_conversation_history(merge_state(state, session_turn=1), history)
+        if goal:
+            classification = classify_user_event(state, payload=payload)
+            payload = stamp_inbound_classification(payload, classification)
+            state = merge_state(state, input_payload=payload)
         return state, True
 
     store = get_state_store()
@@ -123,116 +222,7 @@ def prepare_session_turn(
         existing = reconcile_worker_lost(existing)
 
     if existing and existing.get("session_id") == session_id:
-        history = conversation_history_from_state(existing)
-        if goal:
-            history = append_message(history, "user", goal)
-        history = compress_session_history(history, state=existing)
-        merged = {
-            **existing.get("input_payload", {}),
-            **payload,
-            "conversation_history": history,
-        }
-        from app.services.session.config import load_session_turn_policy_config
-        from app.services.session.turn_policy import (
-            apply_qa_turn_isolation,
-            resolve_session_turn,
-            restore_archived_mission,
-        )
-
-        if goal:
-            decision = resolve_session_turn(existing, merged, goal, incoming=payload)
-            if load_session_turn_policy_config().audit_decisions:
-                merged["turn_policy_decision"] = decision.to_dict()
-
-            if decision.intent in ("resume_mission", "supersede_active_mission"):
-                merged = restore_archived_mission(existing, merged)
-            if decision.intent == "resume_mission":
-                from app.services.mission_execution import (
-                    is_mechanical_resume_decision,
-                    issue_execution_grant_to_payload,
-                )
-                from app.services.mission_steer import complete_steer_planning
-
-                from app.services.mission_steer import steer_needs_planning_llm
-
-                if is_mechanical_resume_decision(decision) and not steer_needs_planning_llm(
-                    message=goal
-                ):
-                    from app.services.mission_execution import mechanical_resume_allowed
-
-                    if mechanical_resume_allowed(existing, decision):
-                        merged = issue_execution_grant_to_payload(
-                            merged, source=str(decision.source)
-                        )
-                        merged = complete_steer_planning(merged)
-            elif existing.get("mission") and decision.intent == "isolate_qa":
-                merged = apply_qa_turn_isolation(merged, existing)
-        if goal:
-            mission_active = bool(existing.get("mission")) and not merged.get(
-                "mission_suspended"
-            )
-            if mission_active:
-                from app.services.interaction_goal import goal_is_mission_status_query
-                from app.services.mission_steer import (
-                    apply_review_outline_mode,
-                    apply_steer_message,
-                    goal_requests_outline_read,
-                )
-
-                from app.services.manuscript_service import is_continue_writing_goal
-                from app.services.mission_execution import is_mechanical_resume_decision
-
-                skip_steer_apply = goal_is_mission_status_query(goal) or (
-                    is_continue_writing_goal(goal)
-                    or (
-                        decision.intent == "resume_mission"
-                        and is_mechanical_resume_decision(decision)
-                    )
-                )
-                if not skip_steer_apply:
-                    steer_state = merge_state(
-                        existing,
-                        input_payload=merged,
-                        conversation_history=history,
-                        mission=existing.get("mission"),
-                        progress=existing.get("progress"),
-                        manuscript=existing.get("manuscript"),
-                    )
-                    steer_state = apply_steer_message(
-                        steer_state,
-                        goal,
-                        source="session_turn",
-                        skip_history_append=True,
-                        persist=False,
-                    )
-                    if decision.intent == "supersede_active_mission":
-                        from app.services.mission_supersede import (
-                            finalize_steer_for_supersede_replan,
-                        )
-
-                        steer_state = finalize_steer_for_supersede_replan(
-                            steer_state,
-                            source="session_turn",
-                            steer_text=goal,
-                        )
-                    merged = dict(steer_state.get("input_payload") or merged)
-                    history = list(
-                        steer_state.get("conversation_history")
-                        or merged.get("conversation_history")
-                        or history
-                    )
-                    merged["conversation_history"] = history
-                    if goal_requests_outline_read(goal):
-                        merged = apply_review_outline_mode(
-                            merged, existing.get("mission") or {}
-                        )
-            else:
-                from app.services.mission_steer import _append_steer_goal
-
-                merged = _append_steer_goal(merged, goal)
-        elif not merged.get("goal"):
-            merged["goal"] = str(existing.get("input_payload", {}).get("goal") or "")
-        payload = merged
+        payload = build_inbound_merged_payload(existing, payload)
         from app.services.mission_intervention import (
             apply_intervention_to_payload,
             intervention_from_payload,
@@ -248,11 +238,14 @@ def prepare_session_turn(
             payload = {
                 **payload,
                 "manuscript": ms.to_dict(),
-                "session_artifacts": ms.to_dict(),
             }
         else:
             payload = enrich_payload(payload, task_id, session_turn=turn, manuscript=ms)
+        from app.services.session_fsm import stamp_session_mode, sync_fsm_state
+
+        payload = stamp_session_mode(payload)
         state = _reset_execution_fields(existing, payload)
+        state = sync_fsm_state(state)
         if payload.get("mission_suspended"):
             state = merge_state(
                 state,
@@ -266,6 +259,13 @@ def prepare_session_turn(
 
     history = append_message([], "user", goal) if goal else []
     payload = {**payload, "conversation_history": history}
+    from app.services.event_classification import (
+        classify_user_event,
+        stamp_inbound_classification,
+    )
+    from app.services.session_fsm import stamp_session_mode
+
+    payload = stamp_session_mode(payload)
     state = create_initial_state(
         task_id=task_id,
         session_id=session_id,
@@ -274,4 +274,8 @@ def prepare_session_turn(
         input_payload=payload,
     )
     state = apply_conversation_history(merge_state(state, session_turn=1), history)
+    if goal:
+        classification = classify_user_event(state, payload=payload)
+        payload = stamp_inbound_classification(payload, classification)
+        state = merge_state(state, input_payload=payload)
     return state, True

@@ -22,4 +22,7 @@ def test_apply_intervention_edit_plot_with_null_tool_params():
     command = payload.get("writing_command") or {}
     assert command.get("action") == "edit_plot"
     assert command.get("target_filename") == "outline.txt"
-    assert "read_text_artifact" not in (payload.get("selected_tools") or [])
+    assert command.get("target_kind") == "outline"
+    assert "read_text_artifact" in (payload.get("selected_tools") or [])
+    assert "edit_text_artifact" in (payload.get("selected_tools") or [])
+    assert (payload.get("tool_params") or {}).get("read_text_artifact") in (None, {})

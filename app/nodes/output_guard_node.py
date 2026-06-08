@@ -49,40 +49,79 @@ def output_guard_node(state: AgentState) -> AgentState:
 
     faithfulness: dict[str, object] = {"skipped": True}
     grounding_result: dict[str, object] | None = None
-    from app.services.retrieval_policy import should_run_grounding_check
+    from app.services.grounding_policy import (
+        grounding_hits_for_state,
+        should_run_grounding_check,
+        substantive_tool_results,
+    )
 
     if should_run_grounding_check(state):
         from app.services.evidence_pipeline import get_answer_mode, get_evidence_packets
-        from app.services.grounding_check import check_grounding, grounding_to_faithfulness
-
-        grounding = check_grounding(
-            text,
-            hits=state.get("retrieved_knowledge") or [],
-            packets=get_evidence_packets(state),
-            answer_mode=get_answer_mode(state),
+        from app.services.grounding_check import (
+            check_grounding,
+            check_tool_observation_grounding,
+            grounding_to_faithfulness,
         )
-        grounding_result = grounding.model_dump()
-        from app.services.evidence_hierarchy import collect_unified_evidence
+
+        grounding_mode, grounding_hits = grounding_hits_for_state(state)
+        evidence_packets = (
+            []
+            if grounding_mode == "tool_observation"
+            else get_evidence_packets(state)
+        )
+        answer_mode = get_answer_mode(state)
+        if grounding_mode == "tool_observation":
+            grounding = check_tool_observation_grounding(
+                text,
+                hits=grounding_hits,
+                answer_mode=answer_mode,
+            )
+            if not grounding_hits and substantive_tool_results(state):
+                grounding = grounding.model_copy(
+                    update={
+                        "grounded": True,
+                        "score": 1.0,
+                        "unsupported_claims": [],
+                        "failure_tags": [],
+                    }
+                )
+            faithfulness = grounding_to_faithfulness(grounding)
+            faithfulness["evidence_source"] = grounding_mode
+            grounding_result = faithfulness
+        else:
+            grounding = check_grounding(
+                text,
+                hits=grounding_hits,
+                packets=evidence_packets,
+                answer_mode=answer_mode,
+            )
+            grounding_result = grounding.model_dump()
+            grounding_result["evidence_source"] = grounding_mode
+            from app.services.evidence_hierarchy import collect_unified_evidence
+            from app.services.insufficient_evidence import (
+                apply_insufficient_to_guard,
+                build_insufficient_response,
+            )
+
+            from app.runtime.evidence_models import EvidenceConflict
+
+            insufficient = build_insufficient_response(
+                mode=answer_mode,
+                packets=evidence_packets or collect_unified_evidence(state),
+                conflicts=[
+                    EvidenceConflict.model_validate(c)
+                    for c in (state.get("evidence_conflicts") or [])
+                    if isinstance(c, dict)
+                ],
+                failure_tags=grounding.failure_tags
+                + list((state.get("retrieval_trace") or {}).get("failure_tags") or []),
+            )
+            faithfulness = apply_insufficient_to_guard(
+                grounding_to_faithfulness(grounding), insufficient
+            )
+            faithfulness["evidence_source"] = grounding_mode
+            grounding_result = faithfulness
         from app.services.failure_attribution import attribute_failures, dashboard_rows
-        from app.services.insufficient_evidence import (
-            apply_insufficient_to_guard,
-            build_insufficient_response,
-        )
-
-        from app.runtime.evidence_models import EvidenceConflict
-
-        insufficient = build_insufficient_response(
-            mode=get_answer_mode(state),
-            packets=get_evidence_packets(state) or collect_unified_evidence(state),
-            conflicts=[
-                EvidenceConflict.model_validate(c)
-                for c in (state.get("evidence_conflicts") or [])
-                if isinstance(c, dict)
-            ],
-            failure_tags=grounding.failure_tags + list((state.get("retrieval_trace") or {}).get("failure_tags") or []),
-        )
-        faithfulness = apply_insufficient_to_guard(grounding_to_faithfulness(grounding), insufficient)
-        grounding_result = faithfulness
         attribution = attribute_failures(
             retrieval_trace=state.get("retrieval_trace") if isinstance(state.get("retrieval_trace"), dict) else None,
             grounding_result=grounding_result,

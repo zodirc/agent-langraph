@@ -139,7 +139,7 @@ def test_autonomous_step_pause_is_manual_resume():
     )
     body = build_mission_paused_payload(state, autonomous=True, steer_pause=False)
     assert body["autonomous_ui"]["behavior"] == "manual_resume"
-    assert "/resume" in " ".join(body["autonomous_ui"]["system_lines"])
+    assert "继续写作" in " ".join(body["autonomous_ui"]["system_lines"])
 
 
 def test_orchestration_summary_truncates_completed_list():

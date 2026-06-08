@@ -1,0 +1,18 @@
+{
+  "id": "R-artifact-1",
+  "description": "Outline written then steer edit_plot must target outline file only",
+  "steps": [
+    {
+      "event_type": "new_task",
+      "goal": "写一篇玄幻小说，仅要求20章"
+    },
+    {
+      "event_type": "steer",
+      "goal": "大纲新意不够，不要打败xx的套路"
+    }
+  ],
+  "assertions": [
+    {"type": "artifact_exists", "filename_suffix": "_大纲.txt"},
+    {"type": "artifact_missing", "filename": "锚点纪元.txt"}
+  ]
+}

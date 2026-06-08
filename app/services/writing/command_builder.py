@@ -129,7 +129,14 @@ def build_writing_command(
     """Single resolver: intent + manuscript metadata → WritingCommand."""
     payload = dict(state.get("input_payload") or {})
     mission = state.get("mission") or {}
-    manuscript = dict(state.get("manuscript") or {})
+    task_id = str(state.get("task_id") or "")
+    stored_ms = state.get("manuscript") if isinstance(state.get("manuscript"), dict) else {}
+    if task_id:
+        from app.services.manuscript_service import resolve_manuscript
+
+        manuscript = resolve_manuscript(task_id, stored_ms or None).to_dict()
+    else:
+        manuscript = dict(stored_ms or {})
     policy = StepPolicy.from_dict(mission.get("step_policy") or {})
 
     item_params = dict((item or {}).get("params") or {})

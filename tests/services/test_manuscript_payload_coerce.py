@@ -1,44 +1,33 @@
-"""Planning payload coercion: non-dict manuscript/mission and code basenames."""
-
-from app.services.manuscript_service import (
-    apply_planner_artifact_names,
-    sync_payload_artifact_names,
-)
+from app.services.artifact_resolver import bind_planned_artifact_names
+from app.services.manuscript_service import enrich_payload, resolve_manuscript
 
 
-def test_sync_payload_string_manuscript_no_get_error():
-    out = sync_payload_artifact_names(
+def test_bind_planned_names_sets_mission_policy():
+    out = bind_planned_artifact_names(
         {
-            "manuscript": "novel.txt",
-            "writing_intent": {"body_filename": "main.cpp"},
-        }
-    )
-    assert "novel_filename" not in out
-
-
-def test_sync_payload_code_basename_skipped_not_raised():
-    out = sync_payload_artifact_names(
-        {
-            "writing_intent": {"body_filename": "index.html"},
-        }
-    )
-    assert "novel_filename" not in out
-
-
-def test_apply_planner_string_mission_no_get_error():
-    out = apply_planner_artifact_names(
-        {
-            "mission": "writing",
-            "goal": "demo",
-            "writing_intent": {"body_filename": "game.js"},
+            "mission": {
+                "kind": "writing",
+                "step_policy": {"outline_artifact": "outline.txt"},
+            },
+            "writing_intent": {"enabled": True, "action": "write_outline"},
         },
-        planning_result={"writing_intent": {"body_filename": "game.js"}},
+        planning_result={"writing_intent": {"body_filename": "暗战.txt"}},
     )
-    assert not isinstance(out.get("mission"), str)
+    sp = out["mission"]["step_policy"]
+    assert sp["body_artifact"] == "暗战.txt"
+    assert sp["outline_artifact"] == "outline.txt"
 
 
-def test_sync_payload_text_basename_still_promoted():
-    out = sync_payload_artifact_names(
-        {"writing_intent": {"body_filename": "novel.txt"}},
+def test_enrich_payload_includes_manifest(tmp_path, monkeypatch):
+    task_id = "enrich-m"
+    monkeypatch.setattr(
+        "app.services.artifact_tools.task_artifact_dir",
+        lambda tid: tmp_path / tid,
     )
-    assert out.get("novel_filename") == "novel.txt"
+    art = tmp_path / task_id
+    art.mkdir(parents=True)
+    (art / "novel.txt").write_text("body", encoding="utf-8")
+    ms = resolve_manuscript(task_id)
+    out = enrich_payload({"goal": "续写"}, task_id, manuscript=ms)
+    assert "artifact_manifest" in out
+    assert "novel_filename" not in out

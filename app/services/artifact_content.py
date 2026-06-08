@@ -11,7 +11,8 @@ from app.services.manuscript_context import (
     read_body_text,
 )
 from app.services.artifact_tools import task_artifact_dir
-from app.services.manuscript_service import resolve_read_paths
+from app.services.artifact_resolver import resolve_artifact_target
+from app.services.manuscript_service import resolve_manuscript, sanitize_artifact_basename
 from app.services.llm_gateway import invoke_artifact_draft, stream_artifact_draft
 from app.services.writing_stream import writing_stream_enabled
 from app.services.reasoning_trace import report_block, report_status_trace, trace_enabled
@@ -132,7 +133,15 @@ def _read_artifact_snippet(
     state: Optional[dict[str, Any]] = None,
 ) -> str:
     if state:
-        filename = resolve_read_paths(state, filename)
+        try:
+            filename = resolve_artifact_target(
+                state,
+                action="read",
+                requested_filename=filename,
+                require_exists=False,
+            ).filename
+        except Exception:
+            filename = sanitize_artifact_basename(filename)
     path = task_artifact_dir(task_id) / filename
     if not path.exists():
         return ""
@@ -169,8 +178,19 @@ def generate_artifact_content(
     history = payload.get("conversation_history") or state.get("conversation_history") or []
 
     payload = state.get("input_payload") or {}
-    outline_name = str(payload.get("outline_filename") or "outline.txt")
-    novel_name = str(payload.get("novel_filename") or "novel.txt")
+    ms = resolve_manuscript(task_id, state.get("manuscript") if isinstance(state.get("manuscript"), dict) else None)
+    outline_name = resolve_artifact_target(
+        state,
+        action="write_outline",
+        target_hint="outline",
+        require_exists=False,
+    ).filename
+    novel_name = resolve_artifact_target(
+        state,
+        action="append_body",
+        target_hint="body",
+        require_exists=False,
+    ).filename
     outline_excerpt = _read_artifact_snippet(task_id, outline_name, state=state)
     intent = payload.get("writing_intent") or {}
     action = str(intent.get("action") or "")
@@ -404,17 +424,17 @@ def prefill_writing_tool_params(
             if tool_name not in writing_tools:
                 continue
             cfg = dict(tool_params.get(tool_name) or {})
-            filename = str(
-                cfg.get("filename")
-                or payload.get("novel_filename")
-                or "novel.txt"
-            )
-            if tool_name == "write_text_artifact" and (
-                "outline" in goal.lower() or "大纲" in goal
-            ):
-                filename = str(payload.get("outline_filename") or "outline.txt")
+            action = "write_outline" if (
+                tool_name == "write_text_artifact" and ("outline" in goal.lower() or "大纲" in goal)
+            ) else "append_body"
+            filename = resolve_artifact_target(
+                state,
+                action=action,
+                requested_filename=str(cfg.get("filename") or ""),
+                target_hint="outline" if action == "write_outline" else "body",
+                require_exists=False,
+            ).filename
             if tool_name == "append_text_artifact":
-                filename = str(payload.get("novel_filename") or filename)
                 requested = parse_requested_chars(goal)
                 if requested and requested > settings.ARTIFACT_CHUNK_CHARS:
                     chunks = _build_append_chunks(state, goal, filename)

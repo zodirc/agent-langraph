@@ -4,32 +4,34 @@ from app.main import app
 from app.runtime.state import TaskStatus
 
 
-def test_stream_task_sse(isolated_stores, monkeypatch):
+def test_message_stream_sse(isolated_stores, monkeypatch):
     events = [
         'event: task_created\ndata: {"task_id": "stream-1", "status": "NEW"}\n\n',
         'event: node\ndata: {"task_id": "stream-1", "node": "planning", "status": "PLANNED"}\n\n',
         'event: done\ndata: {"task_id": "stream-1", "status": "COMPLETED", "final_answer": "hello"}\n\n',
     ]
 
-    def fake_stream(**kwargs):
+    def fake_handle_message(task_id, text, **kwargs):
         yield from events
 
     monkeypatch.setattr(
-        "app.api.task_api.get_graph_runner",
-        lambda: type("R", (), {"stream_task": lambda self, **kw: fake_stream(**kw)})(),
+        "app.services.session_controller.get_session_controller",
+        lambda: type("C", (), {"handle_message": lambda self, *a, **kw: fake_handle_message(*a, **kw)})(),
     )
 
     client = TestClient(app)
     with client.stream(
         "POST",
-        "/tasks/stream",
-        json={"task_type": "qa", "input_payload": {"goal": "test"}},
+        "/tasks/stream-1/message/stream",
+        json={"message": "test"},
     ) as response:
         assert response.status_code == 200
         body = "".join(response.iter_text())
     assert "event: task_created" in body
     assert "event: done" in body
     assert "COMPLETED" in body
+    assert body.count("event: done") == 1
+    assert '"status": "FAILED"' not in body
 
 
 def test_list_tasks(isolated_stores):
@@ -59,7 +61,7 @@ def test_web_chat_page():
     client = TestClient(app)
     resp = client.get("/chat")
     assert resp.status_code == 200
-    assert "agent-langraph — 对话" in resp.text
+    assert "app.js" in resp.text
 
 
 def test_web_cli_redirect():

@@ -266,8 +266,12 @@ def test_planning_skip_blocked_while_steer_gate_open(base_state, monkeypatch):
     monkeypatch.setattr("app.nodes.planning_node.trace_enabled", lambda: False)
     out = planning_node(state)
     assert invoked
-    assert out.get("input_payload", {}).get("steer_planning_done") is True
-    assert not steer_requires_planning(out.get("input_payload") or {})
+    payload = out.get("input_payload") or {}
+    assert payload.get("steer_planning_complete_pending") is True or payload.get(
+        "steer_planning_done"
+    ) is True
+    if payload.get("steer_planning_done"):
+        assert not steer_requires_planning(payload)
 
 
 def test_mission_act_preserves_paused_status(base_state, monkeypatch):

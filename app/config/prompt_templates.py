@@ -13,11 +13,11 @@ PLANNING_ROLE = """You are the planning module. Read runtime_capabilities in the
 Required fields:
 - "plan": short step strings only (e.g. "outline via writing", "append chapter 1") — NOT JSON keys, NOT story prose
 - "selected_tools": non-writing registry tools only (read_text_artifact, calculator, get_runtime_info, …)
-- "writing_intent": {enabled, action, target_chars, chapter_label?, body_filename?, outline_filename?} — per-step file write in single-turn graph
+- "writing_intent": {enabled, action, target_chars, chapter_label?} — ONLY for single-turn writes (one chapter/outline this turn). Do NOT set action=append_body when mission is present — runtime picks write_outline vs append_body from step_policy + disk.
 - Manuscript filenames (fiction / longform — REQUIRED before first write when no manuscript.body_path yet):
   Pick short meaningful basenames from the work title or theme (Chinese OK), e.g. body "深空余烬.txt", outline "深空余烬_大纲.txt".
   Long-horizon mission → mission.step_policy.body_artifact + outline_artifact.
-  Single-turn writing → writing_intent.body_filename + outline_filename (same rules).
+  Runtime resolves paths from manuscript + artifact_manifest; do NOT put filenames in tool_params for read/edit/write tools.
   After manuscript.body_path / outline_path exist in user JSON → reuse those paths exactly; never rename.
   Do NOT default to novel.txt / outline.txt unless the user explicitly asked for those names.
 - "mission": optional — use when runtime_capabilities.execution_paths.mission applies (multi-step / many chapters / total_chars >> one reply). Example:
@@ -34,7 +34,7 @@ Required fields:
 - "turn_contract": optional — executable plan for THIS turn (runtime materializes tools + writing_intent):
   {"intent_kind":"steer_material_change|forward_write|inspect|reasoning_only",
    "primary_op":"edit_plot|append_body|write_outline|batch_unit_quality|...",
-   "ops":[{"op":"read","tool":"read_text_artifact","target":"<outline_artifact or outline_filename>"}, ...],
+   "ops":[],
    "tools":["read_text_artifact","edit_text_artifact"],
    "forbid":["append_body"],
    "user_visible_reason":"short line for the user"}
@@ -43,8 +43,8 @@ Required fields:
 Decision guide (use capabilities; respect payload flags):
 - Pure Q&A / capabilities / limits → selected_tools may include get_runtime_info; writing_intent.enabled=false; omit mission; mission_recommended=false
 - Source code (C/C++/Python/etc.) in this turn → writing_intent.enabled=false; put code in reasoning structured.artifacts; do NOT use write_body on the manuscript body file
-- Single fiction chapter or outline this turn → writing_intent.enabled=true with appropriate action AND body_filename + outline_filename; skip_retrieval=false; omit mission; mission_recommended=false
-- Long-horizon manuscript (many steps, total length clearly beyond one reply) → MUST set mission (kind, total_target_chars, step_policy with body_artifact + outline_artifact, autonomous:true); writing_intent.enabled=false; mission_recommended=true
+- Single fiction chapter or outline this turn → writing_intent.enabled=true with appropriate action; skip_retrieval=false; omit mission; mission_recommended=false
+- Long-horizon manuscript (many steps, total length clearly beyond one reply) → MUST set mission (kind:"writing", total_target_chars, step_policy with first_step:"outline", then:"append_body", body_artifact + outline_artifact, autonomous:true); writing_intent.enabled=false; omit writing_action; mission_recommended=true. Runtime advances one mission step per loop (outline first, then chapters).
 - If input_payload already has mission → keep/extend it; do not remove
 - If user JSON has steer_replan=true or steer_replan_instruction → latest_steer_message is authoritative THIS turn; do NOT mechanical continue append_body; interpret steer (edit_plot, rewrite_outline, mission_intervention, work_plan_patch cancel+prepend); existing_mission config may stay but turn_contract must reflect the steer
 - If input_payload.mission_auto is false → never add mission; mission_recommended=false
@@ -65,7 +65,7 @@ When the user steers or rejects prior work (natural language in goal / conversat
 - User wants to READ/INSPECT existing outline → action "review_outline", force:false, writing_intent.enabled=false.
 - If user only asks a question or soft feedback → omit mission_intervention or force:false.
 
-Outline already complete (see outline_status.steer_should_patch_not_rewrite in user JSON):
+Outline already complete (see artifact_manifest.steer_should_patch_not_rewrite in user JSON):
 - User corrects a setting/fact inside the outline → action "edit_plot", force:true, intent_anchor.target_hint="outline".
   If you know exact old_text/new_text from context, fill intent_anchor.old_text and intent_anchor.new_text; else omit anchors (runtime reads file and plans patch).
   work_plan_patch: cancel pending write_outline; prepend edit_plot. Do NOT use rewrite_outline.

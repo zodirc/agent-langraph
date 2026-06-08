@@ -18,8 +18,15 @@ REPLAY_CASES = [
     },
     {
         "name": "interrupt_preempt_stop",
-        "payload": {"goal": "停止", "preempt": True, "priority": 100},
-        "state": {"session_turn": 2, "status": "MISSION_RUNNING"},
+        "payload": {"goal": "停止"},
+        "state": {
+            "session_turn": 2,
+            "status": "MISSION_RUNNING",
+            "input_payload": {
+                "mission": {"kind": "writing", "objective": "novel"},
+                "fsm_state": "RUNNING",
+            },
+        },
         "expected_event_type": "interrupt",
     },
     {

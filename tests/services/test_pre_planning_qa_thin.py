@@ -11,6 +11,7 @@ from app.services.pre_planning import (
 
 def test_qa_thin_plan_greeting_label():
     assert qa_thin_plan("你好") == ["respond greeting"]
+    assert qa_thin_plan("你能做什么") == ["respond directly"]
     assert qa_thin_plan("请解释 LangGraph 状态机的设计思路") == ["respond directly"]
 
 

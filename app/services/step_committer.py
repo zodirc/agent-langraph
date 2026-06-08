@@ -144,6 +144,9 @@ class StepCommitter:
         )
 
     def check_control(self, *, phase: str = "") -> None:
+        from app.services.run_controller import RunController
+
+        RunController.assert_run_active(self._state, phase=phase or "step_commit")
         raise_if_cancel_requested(self.task_id, phase=phase)
         from app.services.foreground_execution import assert_epoch_valid_for_commit
 
@@ -225,11 +228,21 @@ class StepCommitter:
         commit_started = time.monotonic()
         if self.tool_name == "append_text_artifact":
             outcome = handle_append_text_artifact(
-                {"task_id": self.task_id, "filename": self.filename, "content": text}
+                {
+                    "task_id": self.task_id,
+                    "filename": self.filename,
+                    "content": text,
+                    "_agent_state": self._state,
+                }
             )
         else:
             outcome = handle_write_text_artifact(
-                {"task_id": self.task_id, "filename": self.filename, "content": text}
+                {
+                    "task_id": self.task_id,
+                    "filename": self.filename,
+                    "content": text,
+                    "_agent_state": self._state,
+                }
             )
 
         ms = resolve_manuscript(self.task_id, self._state.get("manuscript"))

@@ -43,14 +43,21 @@ def steer_replan_planning_satisfied(payload: dict[str, Any]) -> bool:
     return contract_from_payload(payload) is not None
 
 
-def steer_requires_planning(payload: dict[str, Any]) -> bool:
-    """True until planning runs after steer or after contract invalidation."""
-    from app.services.turn_contract_lifecycle import contract_replan_required
+def steer_requires_planning(
+    payload: dict[str, Any],
+    state: AgentState | dict[str, Any] | None = None,
+) -> bool:
+    """Replan gate — when state is present, routing reads fsm_state only."""
+    from app.services.session_fsm import routing_needs_replan
 
     if steer_replan_planning_satisfied(payload):
         return False
+    from app.services.turn_contract_lifecycle import contract_replan_required
+
     if contract_replan_required(payload):
         return True
+    if state is not None:
+        return routing_needs_replan(state)
     return bool(payload.get("require_planning_after_steer")) and not payload.get(
         "steer_planning_done"
     )
@@ -61,7 +68,11 @@ def planning_steer_replan_active(
     state: AgentState | dict[str, Any] | None = None,
 ) -> bool:
     """True when planning must interpret latest_steer_message (not mechanical resume)."""
-    if steer_requires_planning(payload):
+    from app.services.session_fsm import routing_needs_replan
+
+    if state is not None and routing_needs_replan(state):
+        return steer_requires_planning(payload, state)
+    if steer_requires_planning(payload, state):
         return True
     if payload.get("foreground_replan_dispatch"):
         return True
@@ -462,6 +473,10 @@ def apply_steer_message(
             },
         ),
     )
+    if payload.get("require_planning_after_steer") and not payload.get("steer_planning_done"):
+        from app.services.session_fsm import FSM_REPLANNING, transition_fsm
+
+        updated = transition_fsm(updated, FSM_REPLANNING)
 
     if norm and norm.get("work_item") and orchestration_enabled(updated.get("mission") or {}):
         wi = norm["work_item"]
@@ -490,23 +505,21 @@ def apply_steer_message(
         )
 
     if persist and steer_requires_planning(dict(updated.get("input_payload") or {})):
-        if source != "pending":
-            from app.services.mission_supersede import finalize_steer_for_supersede_replan
+        from app.services.mission_supersede import finalize_steer_for_supersede_replan
 
-            updated = finalize_steer_for_supersede_replan(
-                updated,
-                source=source,
-                steer_text=combined,
-            )
-            if str(updated.get("status") or "") in (
-                TaskStatus.REJECTED.value,
-                TaskStatus.FAILED.value,
-            ):
-                updated = merge_state(
-                    updated,
-                    status=TaskStatus.MISSION_PAUSED.value,
-                    mission_control=None,
-                )
+        updated = finalize_steer_for_supersede_replan(
+            updated,
+            source=source,
+            steer_text=combined,
+        )
+        if str(updated.get("status") or "") in (
+            TaskStatus.REJECTED.value,
+            TaskStatus.FAILED.value,
+            TaskStatus.WRITTEN.value,
+            TaskStatus.TOOL_EXECUTED.value,
+            TaskStatus.PLANNED.value,
+        ):
+            updated = merge_state(updated, status=TaskStatus.MISSION_PAUSED.value)
     if persist:
         get_state_store().save(updated)
     return updated
@@ -651,6 +664,7 @@ def queue_steer_message(
 
     from app.services.foreground_execution import (
         INTERRUPT_P0,
+        INTERRUPT_P2,
         classify_steer_interrupt,
         steer_action_hint,
         trigger_foreground_preempt,
@@ -868,5 +882,17 @@ def queue_steer_message(
         updated = merge_state(updated, input_payload=payload_now)
         updated = finalize_preempt_steer_replan(updated)
         return updated
+
+    payload_check = dict(updated.get("input_payload") or {})
+    if steer_requires_planning(payload_check, updated) and interrupt_tier < INTERRUPT_P2:
+        from app.services.mission_supersede import finalize_steer_for_supersede_replan
+
+        updated = finalize_steer_for_supersede_replan(
+            updated,
+            source="steer_queue",
+            steer_text=str(payload_check.get("latest_steer_message") or msg_text or ""),
+        )
+        if stage_goal and not is_forced_pause:
+            updated = merge_state(updated, pending_user_message=None)
     get_state_store().save(updated)
     return updated

@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from app.config.settings import settings
 from app.domain.react_loop import get_react_loop
-from app.runtime.state import AgentState, TaskStatus
+from app.runtime.state import AgentState
+from app.services.graph_execution_signals import graph_turn_had_fatal_error
 from app.services.react_loop_runner import should_abort_loop, should_finish_loop
 
 
@@ -26,7 +27,7 @@ def route_after_react_deliberate(state: AgentState) -> str:
 
 
 def route_after_react_execute(state: AgentState) -> str:
-    if str(state.get("status")) == TaskStatus.FAILED.value:
+    if graph_turn_had_fatal_error(state):
         if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
             return "dead_letter"
     return "react_observe"

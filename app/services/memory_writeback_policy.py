@@ -29,6 +29,10 @@ def should_index_episode(state: AgentState | dict[str, Any]) -> bool:
 
     reasoning = state.get("reasoning_result") or {}
     structured = reasoning.get("structured") if isinstance(reasoning.get("structured"), dict) else {}
+    from app.services.thin_execution import thin_execution_active
+
+    if thin_execution_active(state):
+        return False
     if structured.get("code_verify_failed") is True:
         return False
     for rule in skip_when:

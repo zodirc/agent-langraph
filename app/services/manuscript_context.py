@@ -12,7 +12,8 @@ from typing import Any, Optional
 
 from app.config.settings import settings
 from app.services.artifact_tools import read_artifact_tail, task_artifact_dir
-from app.services.manuscript_service import resolve_read_paths
+from app.services.artifact_resolver import resolve_artifact_target
+from app.services.manuscript_service import sanitize_artifact_basename
 
 _CHAPTER_HEADER_RE = re.compile(
     r"^#{1,3}\s*第\s*([一二三四五六七八九十百零两\d]+)\s*章",
@@ -141,7 +142,16 @@ def read_body_text(
     *,
     state: Optional[dict[str, Any]] = None,
 ) -> str:
-    name = resolve_read_paths(state or {}, filename) if state else filename
+    if state:
+        name = resolve_artifact_target(
+            state,
+            action="read",
+            requested_filename=filename,
+            target_hint="body",
+            require_exists=False,
+        ).filename
+    else:
+        name = sanitize_artifact_basename(filename)
     path = task_artifact_dir(task_id) / name
     if not path.exists():
         return ""
@@ -154,7 +164,16 @@ def read_outline_text(
     *,
     state: Optional[dict[str, Any]] = None,
 ) -> str:
-    name = resolve_read_paths(state or {}, outline_name) if state else outline_name
+    if state:
+        name = resolve_artifact_target(
+            state,
+            action="read",
+            requested_filename=outline_name,
+            target_hint="outline",
+            require_exists=False,
+        ).filename
+    else:
+        name = sanitize_artifact_basename(outline_name)
     path = task_artifact_dir(task_id) / name
     if not path.exists():
         return ""
@@ -292,7 +311,13 @@ def build_writing_context(
     )
     head_chars = int(getattr(settings, "MANUSCRIPT_HEAD_EXCERPT_CHARS", 1200))
 
-    body_name = resolve_read_paths(state, body_filename)
+    body_name = resolve_artifact_target(
+        state,
+        action="read",
+        requested_filename=body_filename,
+        target_hint="body",
+        require_exists=False,
+    ).filename
     body_text = read_body_text(task_id, body_name, state=state)
     last_chapter = parse_last_chapter_index(body_text)
     stored_cursor = int(manuscript.get("chapter_cursor") or 0)
@@ -314,11 +339,12 @@ def build_writing_context(
         if len(body_text) > head_chars:
             head += "\n...(head truncated)"
 
-    outline_name = outline_filename or str(
-        payload.get("outline_filename")
-        or manuscript.get("outline_path")
-        or settings.MANUSCRIPT_DEFAULT_OUTLINE
-    )
+    outline_name = outline_filename or resolve_artifact_target(
+        state,
+        action="read",
+        target_hint="outline",
+        require_exists=False,
+    ).filename
     outline_full = read_outline_text(task_id, outline_name, state=state)
     outline_slice = extract_outline_chapter_brief(outline_full, next_chapter)
 
@@ -460,7 +486,16 @@ def analyze_manuscript_structure(
     state: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Read-only analysis for planning / get_manuscript_context tool."""
-    body_name = resolve_read_paths(state or {}, body_path) if state else body_path
+    if state:
+        body_name = resolve_artifact_target(
+            state,
+            action="read",
+            requested_filename=body_path,
+            target_hint="body",
+            require_exists=False,
+        ).filename
+    else:
+        body_name = sanitize_artifact_basename(body_path)
     body_text = read_body_text(task_id, body_name, state=state)
     last_ch = parse_last_chapter_index(body_text)
     tail = read_artifact_tail(

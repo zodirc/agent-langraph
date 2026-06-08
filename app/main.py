@@ -2,7 +2,7 @@
 
 启动流程 lifespan：logging → 安全校验 → LangSmith → 存储初始化 → 知识库种子
 → 工具与 MCP 注册 → 定时调度与审核超时 → 可选 A2A 自注册。
-运行时：/tasks → graph_runner；/tasks/stream → SSE；/skills → 技能目录。
+运行时：/tasks → graph_runner；/tasks/{id}/message/stream → SSE；/skills → 技能目录。
 
 FastAPI entry: API routers and static web.
 lifespan initializes logging, storage, knowledge, tools, scheduler, optional A2A.

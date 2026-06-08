@@ -87,9 +87,9 @@ def resolve_command_preview(
         content, truncated = _truncate(text, max_chars)
     elif mode == "tail":
         from app.services.artifact_tools import read_artifact_tail
-        from app.services.manuscript_service import resolve_read_paths
+        from app.services.manuscript_service import sanitize_artifact_basename
 
-        resolved = resolve_read_paths(state_for_read, filename)
+        resolved = sanitize_artifact_basename(filename)
         tail = read_artifact_tail(snapshot.task_id, resolved, max_chars=max_chars)
         content = tail.strip()
         truncated = total > len(content)

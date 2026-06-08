@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from app.domain.packs.registry import resolve_mission_pack
 from app.runtime.state import AgentState, TaskStatus, merge_state
+from app.runtime.state_field_access import mission_from_state
 from app.services.mission_schema import (
     apply_mission_step_to_payload,
     build_mission_dict,
@@ -122,7 +123,7 @@ def init_mission_state(
 
 def update_progress_from_observation(state: AgentState) -> AgentState:
     """Merge pack metrics into progress after a step."""
-    mission = state.get("mission") or {}
+    mission = mission_from_state(state) or {}
     observation = state.get("observation") or {}
     kind = str(mission.get("kind", "single_turn"))
 
@@ -162,7 +163,8 @@ def prepare_state_for_mission_act(state: AgentState) -> AgentState:
 
     state = consume_pending_steer(state)
 
-    if orchestration_enabled(state.get("mission") or {}):
+    mission = mission_from_state(state) or {}
+    if orchestration_enabled(mission):
         state = apply_work_plan_to_payload(state)
         from app.services.writing_phases import apply_writing_phase_from_decision
 
@@ -171,7 +173,7 @@ def prepare_state_for_mission_act(state: AgentState) -> AgentState:
         if review_outline_requested(payload):
             from app.services.mission_steer import apply_review_outline_mode
 
-            payload = apply_review_outline_mode(payload, state.get("mission") or {})
+            payload = apply_review_outline_mode(payload, mission)
             return merge_state(state, input_payload=payload)
         if steer_requires_planning(payload):
             payload["skip_planning_llm"] = False

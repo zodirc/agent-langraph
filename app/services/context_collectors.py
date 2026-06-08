@@ -51,16 +51,20 @@ def collect_writing_context_items(
 
     intent = payload.get("writing_intent") or {}
     manuscript = payload.get("manuscript") or state.get("manuscript") or {}
-    body_name = str(
-        payload.get("novel_filename")
-        or manuscript.get("body_path")
-        or "novel.txt"
-    )
-    outline_name = str(
-        payload.get("outline_filename")
-        or manuscript.get("outline_path")
-        or "outline.txt"
-    )
+    from app.services.artifact_resolver import resolve_artifact_target
+
+    body_name = resolve_artifact_target(
+        state,
+        action="read",
+        target_hint="body",
+        require_exists=False,
+    ).filename
+    outline_name = resolve_artifact_target(
+        state,
+        action="read",
+        target_hint="outline",
+        require_exists=False,
+    ).filename
     chapter = intent.get("chapter_index")
 
     try:

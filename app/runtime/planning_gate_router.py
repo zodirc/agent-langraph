@@ -9,7 +9,11 @@ from app.runtime.router import (
     _is_non_retryable_tool_failure,
     _writing_route_allowed,
 )
-from app.runtime.state import AgentState, TaskStatus
+from app.runtime.state import AgentState
+from app.services.graph_execution_signals import (
+    graph_last_tool_failed,
+    graph_turn_had_fatal_error,
+)
 from app.services.mode_resolution import should_route_engineering_execution
 from app.services.retrieval_policy import (
     needs_session_memory_retrieval,
@@ -20,12 +24,25 @@ from app.services.turn_contract import contract_requires_side_effects, contract_
 
 def route_after_incremental_planning(state: AgentState) -> str:
     """Post-incremental_planning fork: retrieval / tools / engineering / generation prep."""
-    status = str(state.get("status", ""))
-    if status == TaskStatus.FAILED.value:
+    if graph_turn_had_fatal_error(state):
         return _failed_route(state, "incremental_planning")
 
+    payload = state.get("input_payload") or {}
+
+    from app.services.turn_guard import contract_requires_execution_route
+
+    if contract_requires_execution_route(payload):
+        selected_tools = _effective_selected_tools(state)
+        if selected_tools:
+            return "tool_execution"
+        if _writing_route_allowed(state):
+            return "context_governance"
+        if contract_tool_names(payload):
+            return "tool_execution"
+        return "tool_execution"
+
     if (
-        status == TaskStatus.TOOL_FAILED.value
+        graph_last_tool_failed(state)
         and str(state.get("current_node") or "") == "tool_execution"
     ):
         if _is_non_retryable_tool_failure(state):

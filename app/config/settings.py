@@ -497,6 +497,7 @@ class Settings:
         self.ARTIFACT_CHUNK_CHARS = int(artifacts.get("chunk_chars", 3500))
         self.ARTIFACT_MAX_CHUNKS_PER_TURN = int(artifacts.get("max_chunks_per_turn", 4))
         self.ARTIFACT_MAX_CHARS_PER_TURN = int(artifacts.get("max_chars_per_turn", 14000))
+        self.ARTIFACT_MAX_READS_SAME_FILE = int(artifacts.get("max_reads_same_file", 5))
 
         manuscript = raw.get("manuscript", {})
         self.MANUSCRIPT_DEFAULT_BODY = str(manuscript.get("default_body", "novel.txt"))

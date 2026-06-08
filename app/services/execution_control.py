@@ -288,7 +288,9 @@ def update_work_plan_checkpoint(
     checkpoint_ref: str | None = None,
 ) -> AgentState:
     """Attach checkpoint metadata to matching work_plan item."""
-    progress = dict(state.get("progress") or {})
+    from app.runtime.state_field_access import progress_from_state, set_progress_on_state
+
+    progress = dict(progress_from_state(state) or {})
     work_plan = progress.get("work_plan")
     if not isinstance(work_plan, dict):
         return state
@@ -320,7 +322,7 @@ def update_work_plan_checkpoint(
         updated_items.append(row)
     work_plan = {**work_plan, "items": updated_items}
     progress["work_plan"] = work_plan
-    return merge_state(state, progress=progress)
+    return set_progress_on_state(state, progress)
 
 
 def finalize_control_outcome(state: AgentState, control: TaskControl | None) -> AgentState:

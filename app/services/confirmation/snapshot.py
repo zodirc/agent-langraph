@@ -6,7 +6,7 @@ import difflib
 from pathlib import Path
 from typing import Any, Optional
 
-from app.services.manuscript_service import resolve_read_paths
+from app.services.manuscript_service import sanitize_artifact_basename
 
 
 def snapshot_dir(task_id: str) -> Path:
@@ -30,7 +30,7 @@ def save_artifact_snapshot(
     """Copy artifact content to .snapshots/{id}.txt before destructive edit."""
     from app.services.artifact_tools import task_artifact_dir
 
-    resolved = resolve_read_paths(state or {"task_id": task_id}, filename)
+    resolved = sanitize_artifact_basename(filename)
     src = task_artifact_dir(task_id) / resolved
     if not src.exists():
         return False

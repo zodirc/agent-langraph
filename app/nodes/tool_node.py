@@ -17,12 +17,14 @@ from app.config.settings import settings
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
 from app.services.artifact_content import generate_artifact_content, needs_generated_content
 from app.services.fact_layer import attach_turn_facts
-from app.services.manuscript_service import WRITING_TOOL_NAMES, resolve_read_paths
-from app.services.artifact_tools import (
-    collect_file_artifacts,
-    extract_math_expression,
-    list_task_artifacts,
+from app.services.artifact_resolver import (
+    ArtifactResolutionError,
+    action_for_tool,
+    maybe_run_outline_edit,
+    resolve_artifact_target,
 )
+from app.services.manuscript_service import WRITING_TOOL_NAMES
+from app.services.artifact_tools import extract_math_expression
 from app.services.metrics_service import get_metrics_service
 from app.services.reasoning_trace import report_boundary, report_status_trace
 from app.services.state_store import get_state_store
@@ -40,6 +42,16 @@ def tool_execution_node(state: AgentState) -> AgentState:
     Writes: tool_results, turn_facts, status, current_node, audit_log
     """
     try:
+        from app.services.run_controller import RunCancelled, RunController
+
+        try:
+            RunController.assert_run_active(state, phase="tool_execution_enter")
+        except RunCancelled:
+            return merge_state(state, current_node="tool_execution")
+        outline_edit = maybe_run_outline_edit(state)
+        if outline_edit is not None:
+            get_state_store().save(outline_edit)
+            return outline_edit
         from app.services.execution_control import (
             CancelRequested,
             PauseRequested,
@@ -91,7 +103,35 @@ def tool_execution_node(state: AgentState) -> AgentState:
                 raise_on_cancel=True,
             )
             report_status_trace("tool_execution", f"调用工具: {tool_name}")
-            params = _build_tool_params(tool_name, st)
+            try:
+                params = _build_tool_params(tool_name, st)
+            except ArtifactResolutionError as exc:
+                pending_events.append(
+                    (
+                        "tool_failed",
+                        tool_name,
+                        {
+                            "status": "error",
+                            "error": exc.message,
+                            "error_code": exc.code,
+                            "manifest": exc.manifest_dicts(),
+                        },
+                    )
+                )
+                return {
+                    "tool": tool_name,
+                    "status": "error",
+                    "error": exc.message,
+                    "error_code": exc.code,
+                    "non_retryable": exc.code != "ambiguous",
+                    "result": {
+                        "status": "error",
+                        "error": exc.message,
+                        "error_code": exc.code,
+                        "manifest": exc.manifest_dicts(),
+                        "non_retryable": exc.code != "ambiguous",
+                    },
+                }
             spec = registry.get(tool_name)
             safe, issues = check_tool_params_safe(
                 tool_name,
@@ -117,6 +157,36 @@ def tool_execution_node(state: AgentState) -> AgentState:
                     }
                 )
                 return blocked_results[-1]["result"]
+            if tool_name == "read_text_artifact":
+                from app.services.artifact_read_guard import block_repeat_artifact_read
+
+                filename = str(params.get("filename") or "")
+                blocked = block_repeat_artifact_read(st, filename=filename)
+                if blocked is not None:
+                    status = str(blocked.get("status") or "cached")
+                    event_status = "cached" if status == "cached" else "blocked"
+                    pending_events.append(
+                        (
+                            "tool_blocked" if event_status == "blocked" else "tool_invoked",
+                            tool_name,
+                            {
+                                "status": event_status,
+                                "read_repeat_blocked": True,
+                                "filename": filename,
+                            },
+                        )
+                    )
+                    wrapped = {
+                        "tool": tool_name,
+                        "status": event_status,
+                        "result": blocked,
+                    }
+                    if blocked.get("error"):
+                        wrapped["error"] = str(blocked["error"])
+                        wrapped["error_code"] = blocked.get("error_code")
+                        wrapped["non_retryable"] = bool(blocked.get("non_retryable"))
+                    blocked_results.append(wrapped)
+                    return blocked
             try:
                 result = registry.invoke(tool_name, params, user_role=user_role)
             except FileNotFoundError as exc:
@@ -209,10 +279,8 @@ def tool_execution_node(state: AgentState) -> AgentState:
             get_state_store().save(updated)
             return updated
 
-        payload_updates = _build_artifact_registry_updates(state, payload, results)
         updated = merge_state(
             state,
-            input_payload={**payload, **payload_updates},
             tool_results=results,
             status=TaskStatus.TOOL_EXECUTED.value,
             current_node="tool_execution",
@@ -253,6 +321,11 @@ def tool_execution_node(state: AgentState) -> AgentState:
                     error="; ".join(detail.get("issues") or []),
                 )
         updated = attach_turn_facts(updated)
+        from app.services.steer_planning_lifecycle import maybe_complete_steer_planning_after_execute
+        from app.services.turn_guard import mark_turn_step_executed
+
+        updated = mark_turn_step_executed(updated)
+        updated = maybe_complete_steer_planning_after_execute(updated)
         get_state_store().save(updated)
         return updated
     except Exception as exc:
@@ -274,11 +347,44 @@ def tool_execution_node(state: AgentState) -> AgentState:
         )
 
 
+def _tool_cfg(payload: dict[str, Any], tool_name: str) -> dict[str, Any]:
+    raw = payload.get("tool_params")
+    if not isinstance(raw, dict):
+        return {}
+    entry = raw.get(tool_name)
+    return dict(entry) if isinstance(entry, dict) else {}
+
+
+def _artifact_filename(
+    state: AgentState,
+    *,
+    tool_name: str,
+    tool_params: dict[str, Any],
+    require_exists: bool = True,
+) -> str:
+    action = action_for_tool(tool_name, state)
+    hint = ""
+    payload = state.get("input_payload") or {}
+    record = payload.get("writing_intent_record") or {}
+    if isinstance(record, dict):
+        anchor = record.get("anchor") or {}
+        if isinstance(anchor, dict):
+            hint = str(anchor.get("target_hint") or "")
+    target = resolve_artifact_target(
+        state,
+        action=action,
+        requested_filename=str(tool_params.get("filename") or ""),
+        target_hint=hint,
+        require_exists=require_exists,
+    )
+    return target.filename
+
+
 def _build_tool_params(tool_name: str, state: AgentState) -> dict[str, Any]:
     payload = state.get("input_payload", {})
     goal = str(payload.get("goal") or payload.get("query") or "")
     task_id = state["task_id"]
-    tool_params = dict(payload.get("tool_params", {}).get(tool_name, {}))
+    tool_params = _tool_cfg(payload, tool_name)
 
     if tool_name == "echo":
         return {"message": goal or json.dumps(payload)}
@@ -308,9 +414,7 @@ def _build_tool_params(tool_name: str, state: AgentState) -> dict[str, Any]:
     ):
         return {"task_id": task_id, **tool_params}
     if tool_name == "edit_text_artifact":
-        filename = resolve_read_paths(
-            state, str(tool_params.get("filename") or "novel.txt")
-        )
+        filename = _artifact_filename(state, tool_name=tool_name, tool_params=tool_params)
         return {
             "task_id": task_id,
             "filename": filename,
@@ -338,14 +442,19 @@ def _build_tool_params(tool_name: str, state: AgentState) -> dict[str, Any]:
             },
         }
     if tool_name in ("write_text_artifact", "append_text_artifact", "read_text_artifact"):
-        filename = _resolve_artifact_filename(
+        require_exists = tool_name == "read_text_artifact" or tool_name == "edit_text_artifact"
+        if tool_name in ("write_text_artifact", "append_text_artifact"):
+            require_exists = False
+        filename = _artifact_filename(
             state,
             tool_name=tool_name,
-            requested_filename=str(tool_params.get("filename") or ""),
+            tool_params=tool_params,
+            require_exists=require_exists,
         )
         params: dict[str, Any] = {
             "task_id": task_id,
             "filename": filename,
+            "_agent_state": state,
             **tool_params,
         }
         if tool_name != "read_text_artifact":
@@ -384,102 +493,3 @@ def _build_tool_params(tool_name: str, state: AgentState) -> dict[str, Any]:
             **tool_params,
         }
     return {"task_id": task_id, **tool_params}
-
-
-def _build_artifact_registry_updates(
-    state: AgentState,
-    payload: dict[str, Any],
-    results: list[dict[str, Any]],
-) -> dict[str, Any]:
-    produced = collect_file_artifacts(results)
-    if not produced:
-        return {}
-    registry = dict(payload.get("artifact_registry") or {})
-    known = dict(registry.get("known") or {})
-    for item in produced:
-        name = str(item.get("filename") or "").strip()
-        path = str(item.get("path") or "").strip()
-        if name and path:
-            known[name] = path
-    last = produced[-1]
-    out = dict(registry)
-    out["known"] = known
-    if str(last.get("filename") or "").strip():
-        out["last_written"] = str(last["filename"])
-    out["updated_in_node"] = "tool_execution"
-    out["updated_turn"] = int(state.get("session_turn") or 0)
-    return {"artifact_registry": out}
-
-
-def _resolve_artifact_filename(
-    state: AgentState,
-    *,
-    tool_name: str,
-    requested_filename: str,
-) -> str:
-    requested = requested_filename.strip()
-    if requested:
-        return resolve_read_paths(state, requested)
-
-    payload = state.get("input_payload") or {}
-    registry = payload.get("artifact_registry") or {}
-    known = dict(registry.get("known") or {})
-
-    # 1) deterministic pointer from registry
-    last_written = str(registry.get("last_written") or "").strip()
-    if last_written:
-        return resolve_read_paths(state, last_written)
-
-    # 2) active manuscript pointer (for writing sessions)
-    from app.services.artifact_tools import is_text_artifact_filename
-
-    manuscript = payload.get("manuscript") or payload.get("session_artifacts") or {}
-    body = str(manuscript.get("body_path") or payload.get("novel_filename") or "").strip()
-    if body and is_text_artifact_filename(body):
-        return resolve_read_paths(state, body)
-
-    # 3) path map from previous writes in this or previous turns
-    if known:
-        preferred = ("output.md", "novel.txt", "outline.txt")
-        for name in preferred:
-            if name in known:
-                return resolve_read_paths(state, name)
-        text_keys = sorted(k for k in known if is_text_artifact_filename(k))
-        if text_keys:
-            return resolve_read_paths(state, text_keys[0])
-
-    # 4) latest tool result path in current runtime state
-    latest = collect_file_artifacts(state.get("tool_results"))
-    if latest:
-        return resolve_read_paths(state, str(latest[-1].get("filename") or "output.md"))
-
-    # 5) scan task artifact directory as a final deterministic fallback
-    task_id = str(state["task_id"])
-    files = list_task_artifacts(task_id)
-    if files:
-        preferred = ("output.md", "novel.txt", "outline.txt")
-        names = {str(item.get("filename") or "") for item in files}
-        for name in preferred:
-            if name in names:
-                return resolve_read_paths(state, name)
-        text_names = sorted(n for n in names if n and is_text_artifact_filename(n))
-        if text_names:
-            return resolve_read_paths(state, text_names[0])
-
-    mission = state.get("mission") or payload.get("mission") or {}
-    if str(mission.get("kind") or "").lower() == "writing" and tool_name == "read_text_artifact":
-        policy = mission.get("step_policy") or {}
-        outline_name = str(
-            policy.get("outline_artifact")
-            or getattr(settings, "MANUSCRIPT_DEFAULT_OUTLINE", "outline.txt")
-        )
-        task_id = str(state["task_id"])
-        files = list_task_artifacts(task_id)
-        names = {str(item.get("filename") or "") for item in files}
-        if outline_name in names:
-            return resolve_read_paths(state, outline_name)
-        body_name = str(policy.get("body_artifact") or "novel.txt")
-        if body_name in names:
-            return resolve_read_paths(state, body_name)
-
-    return resolve_read_paths(state, "output.md")
