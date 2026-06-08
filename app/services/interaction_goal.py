@@ -43,6 +43,12 @@ def goal_is_mission_status_query(goal: str) -> bool:
     return False
 
 
+def goal_is_pure_greeting(goal: str) -> bool:
+    """True only for greeting-style openers (你好 / hi / thanks), not mixed QA tasks."""
+    text = (goal or "").strip()
+    return bool(text) and bool(_CONVERSATIONAL_QA_RE.match(text))
+
+
 def goal_is_conversational_qa(goal: str) -> bool:
     """
     True for greetings and other non-delivery chat in engineering/writing UI.

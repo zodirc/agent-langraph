@@ -2869,6 +2869,15 @@ function appendAnswerDelta(text) {
   ensureAnswerStreamLine().appendChild(document.createTextNode(text));
 }
 
+function clearAnswerStream() {
+  answerStreamText = "";
+  if (answerStreamEl) {
+    const panel = answerStreamEl.closest(".file-panel");
+    if (panel) panel.remove();
+  }
+  answerStreamEl = null;
+}
+
 function ensureTracePanel() {
   if (tracePanelEl) return tracePanelEl;
   const header = document.createElement("p");
@@ -3716,6 +3725,11 @@ function handleStreamEvent(eventType, payload, taskIdRef, streamOpts = {}) {
       lastPhaseMessage = "重新规划中";
     }
     refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
+  } else if (eventType === "ack") {
+    if (silentSteer) return;
+    const msg = String(payload.message || payload.next_step || "").trim();
+    if (msg) appendLine(msg, "system");
+    updateProgressLine({ ...payload, message: msg || "已受理", phase: "ack" });
   } else if (eventType === "progress") {
     if (payload.phase === "mission_handoff") {
       sessionHasInFlightMission = true;
@@ -3780,6 +3794,10 @@ function handleStreamEvent(eventType, payload, taskIdRef, streamOpts = {}) {
     appendAnswerDelta(payload.text || "");
   } else if (eventType === "answer_preview") {
     setAnswerStreamText(payload.text || "");
+  } else if (eventType === "answer_revoked") {
+    clearAnswerStream();
+    const reason = String(payload.reason || "验证未通过").trim();
+    appendLine(`回答已撤回：${reason}`, "error");
   } else if (eventType === "node") {
     if (!silentSteer) {
       const nodeName = String(payload.node || payload.current_node || "");
@@ -3849,7 +3867,17 @@ function handleStreamEvent(eventType, payload, taskIdRef, streamOpts = {}) {
       refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
       return;
     }
-    if (payload.final_answer && !gatePending) {
+    if (payload.answer_revoked || String(payload.status || "") === "REJECTED") {
+      if (payload.answer_revoked) {
+        clearAnswerStream();
+      }
+      const rejectReason = String(payload.rejection_reason || "").trim();
+      if (rejectReason) {
+        appendLine(`任务未通过验证：${rejectReason}`, "error");
+      } else if (String(payload.status || "") === "REJECTED") {
+        appendLine("任务未通过验证（REJECTED）", "error");
+      }
+    } else if (payload.final_answer && !gatePending) {
       const finalText = String(payload.final_answer);
       if (answerStreamEl && finalText.length >= answerStreamText.length) {
         setAnswerStreamText(finalText);

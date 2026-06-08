@@ -174,6 +174,38 @@ def run_pre_planning_pipeline(state: AgentState) -> AgentState:
     return state
 
 
+def planning_must_run_llm(state: AgentState) -> bool:
+    """True when steer, replan, or reflection forces a full planning LLM call."""
+    payload = state.get("input_payload") or {}
+    if payload.get("route_audit_replan") or payload.get("route_audit_replan_feedback"):
+        return True
+    if payload.get("plan_validation_feedback"):
+        return True
+    reflection = state.get("reflection_result") or {}
+    if reflection.get("retry_planning"):
+        return True
+    from app.services.mission_steer import steer_requires_planning
+
+    if steer_requires_planning(payload):
+        return True
+    return int(state.get("planning_revision_count") or 0) > 0
+
+
+def should_skip_qa_planning_llm(state: AgentState) -> bool:
+    """Thin planning for conversational QA (greetings, short chat) in qa_mode."""
+    payload = state.get("input_payload") or {}
+    if not payload.get("pre_planning_completed"):
+        return False
+    if str(payload.get("target_mode") or "") != "qa_mode":
+        return False
+    if planning_must_run_llm(state):
+        return False
+    from app.services.interaction_goal import goal_is_conversational_qa
+
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    return goal_is_conversational_qa(goal)
+
+
 def should_skip_planning_llm(state: AgentState) -> bool:
     """
     Thin planning for engineering delivery (like Cursor Agent on a repo task).
@@ -200,20 +232,17 @@ def should_skip_planning_llm(state: AgentState) -> bool:
     goal = str(payload.get("goal") or payload.get("query") or "").strip()
     if goal_is_conversational_qa(goal):
         return False
-    if payload.get("route_audit_replan") or payload.get("route_audit_replan_feedback"):
-        return False
-    if payload.get("plan_validation_feedback"):
-        return False
-    reflection = state.get("reflection_result") or {}
-    if reflection.get("retry_planning"):
-        return False
-    from app.services.mission_steer import steer_requires_planning
-
-    if steer_requires_planning(payload):
-        return False
-    if int(state.get("planning_revision_count") or 0) > 0:
+    if planning_must_run_llm(state):
         return False
     return True
+
+
+def qa_thin_plan(goal: str) -> list[str]:
+    """Rule-based plan for conversational QA without planning LLM."""
+    text = (goal or "").strip()
+    if len(text) <= 12:
+        return ["respond greeting"]
+    return ["respond directly"]
 
 
 def engineering_thin_plan() -> list[str]:

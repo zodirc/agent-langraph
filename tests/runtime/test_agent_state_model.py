@@ -16,19 +16,18 @@ def test_state_to_model_roundtrip():
 
 
 def test_state_to_model_coerces_mission():
-    state = create_initial_state(
-        input_payload={"goal": "write"},
+    state = merge_state(
+        create_initial_state(input_payload={"goal": "write"}),
+        mission={
+            "id": "m1",
+            "kind": "writing",
+            "objective": "write novel",
+            "success_criteria": {"type": "metric_gte", "metric": "written_chars", "target": 1000},
+            "budget": {"max_steps": 3},
+        },
     )
-    state["mission"] = {
-        "id": "m1",
-        "kind": "writing",
-        "objective": "write novel",
-        "success_criteria": {"type": "metric_gte", "metric": "written_chars", "target": 1000},
-        "budget": {"max_steps": 3},
-    }
     model = state_to_model(state)
-    assert model.mission is not None
-    assert model.mission.get("kind") == "writing"
+    assert (model.input_payload or {}).get("mission", {}).get("kind") == "writing"
 
 
 def test_merge_state_validates_via_pydantic():

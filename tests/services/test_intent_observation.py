@@ -29,6 +29,16 @@ def test_structural_observation_engineering():
     assert result.trace_id
 
 
+def test_policy_skips_pure_greeting():
+    state = create_initial_state(task_id="io-greet", input_payload={"goal": "你好"})
+    seed = seed_pre_planning_route_audit(state)
+    decision = decide_intent_observation_policy(
+        state, explicit_mode=None, route_audit_seed=seed
+    )
+    assert decision.invoke_model is False
+    assert decision.reason == "pure_greeting"
+
+
 def test_policy_skips_explicit_engineering():
     state = create_initial_state(
         task_id="io-2",
@@ -125,8 +135,8 @@ def test_policy_invokes_model_on_foreground_preempt_replan():
             "foreground_preempt_consumed": True,
             "steer_replan_mode": "rewrite",
             "require_planning_after_steer": True,
+            "mission": {"kind": "writing"},
         },
-        mission={"kind": "writing"},
     )
     seed = seed_pre_planning_route_audit(state)
     decision = decide_intent_observation_policy(state, explicit_mode=None, route_audit_seed=seed)
@@ -140,8 +150,8 @@ def test_structural_observation_marks_steer_replan_after_preempt():
         input_payload={
             "foreground_preempt_consumed": True,
             "steer_replan_mode": "repair",
+            "mission": {"kind": "writing"},
         },
-        mission={"kind": "writing"},
     )
     seed = seed_pre_planning_route_audit(state)
     result = build_structural_observation(state, route_audit_seed=seed)

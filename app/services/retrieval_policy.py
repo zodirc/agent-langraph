@@ -37,6 +37,27 @@ def skip_knowledge_retrieval(state: AgentState) -> bool:
     return bool(state.get("skip_retrieval"))
 
 
+def has_injected_evidence(state: AgentState | dict) -> bool:
+    """True when retrieval or session memory produced evidence for this turn."""
+    if state.get("retrieved_knowledge"):
+        return True
+    if state.get("evidence_packets"):
+        return True
+    return bool(state.get("memory_hits"))
+
+
+def should_run_grounding_check(state: AgentState | dict) -> bool:
+    """Run citation/faithfulness checks only when the turn expected grounded evidence."""
+    citation_strictness = str(
+        getattr(settings, "RETRIEVAL_CITATION_CHECK_STRICTNESS", "basic")
+    ).lower()
+    if citation_strictness == "off" and not settings.RAG_FAITHFULNESS_CHECK_ENABLED:
+        return False
+    if state.get("skip_retrieval") and not has_injected_evidence(state):
+        return False
+    return True
+
+
 def should_skip_session_memory_retrieval(state: AgentState | dict) -> bool:
     """
     Autonomous writing missions do not use memory_hits for prose generation.

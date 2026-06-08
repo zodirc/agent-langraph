@@ -86,6 +86,15 @@ def decide_intent_observation_policy(
             skip_reason="control_command",
         )
 
+    from app.services.interaction_goal import goal_is_pure_greeting
+
+    if goal and goal_is_pure_greeting(goal):
+        return IntentObservationPolicyDecision(
+            invoke_model=False,
+            reason="pure_greeting",
+            skip_reason="trivial_chat",
+        )
+
     if payload.get("execution_grant"):
         return IntentObservationPolicyDecision(
             invoke_model=False,
@@ -119,7 +128,9 @@ def decide_intent_observation_policy(
             reason="interaction_mode_auto",
         )
 
-    mission_active = bool(state.get("mission")) and not payload.get("mission_suspended")
+    from app.runtime.state_field_access import mission_from_state
+
+    mission_active = bool(mission_from_state(state)) and not payload.get("mission_suspended")
     if mission_active and goal and not payload.get("confirm"):
         return IntentObservationPolicyDecision(
             invoke_model=True,

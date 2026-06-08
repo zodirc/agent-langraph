@@ -1,7 +1,8 @@
 """Turn contract: steer material change must block writing and route tools first."""
 
 from app.runtime.state import merge_state
-from app.runtime.router import route_after_planning, route_after_tool
+from app.runtime.planning_gate_router import route_after_incremental_planning
+from app.runtime.router import route_after_tool
 from app.services.mission_intervention import apply_planning_intervention
 from app.services.mission_schema import resolve_writing_intent_for_step, build_mission_dict
 from app.services.turn_contract import (
@@ -118,7 +119,7 @@ def test_route_after_planning_tools_before_writing_on_steer_contract(base_state)
         },
     )
     assert contract_blocks_writing(state["input_payload"])
-    assert route_after_planning(state) == "tool_execution"
+    assert route_after_incremental_planning(state) == "tool_execution"
 
 
 def test_route_after_tool_skips_writing_when_contract_forbids(base_state):

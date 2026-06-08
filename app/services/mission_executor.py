@@ -19,12 +19,9 @@ from app.nodes.writing_node import writing_node
 from app.services.mission_service import prepare_state_for_mission_act, update_progress_from_observation
 from app.services.observation import attach_observation
 from app.services.state_store import get_state_store
-from app.runtime.router import (
-    route_after_planning,
-    route_after_retrieval,
-    route_after_tool,
-    route_after_writing,
-)
+from app.runtime.planning_gate_router import route_after_incremental_planning
+from app.runtime.mission_pipeline_router import route_after_writing
+from app.runtime.router import route_after_retrieval, route_after_tool
 from app.runtime.state import AgentState, merge_state
 
 
@@ -120,6 +117,17 @@ def _run_executor_subgraph(state: AgentState) -> AgentState:
     return _run_pipeline_node_loop(state, allow_reasoning_terminal=False)
 
 
+def _normalize_pipeline_node(node: str, state: AgentState) -> str:
+    """Map frozen-spine routes to mission inline pipeline node names."""
+    if node == "context_governance":
+        from app.runtime.router import _writing_route_allowed
+
+        return "writing" if _writing_route_allowed(state) else "reasoning"
+    if node == "incremental_planning":
+        return "planning"
+    return node
+
+
 def _run_pipeline_node_loop(
     state: AgentState,
     *,
@@ -129,7 +137,7 @@ def _run_pipeline_node_loop(
     from app.services.turn_kind import agenda_has_executor_pending, should_use_reasoning_terminal
 
     current = state
-    node = route_after_planning(current)
+    node = _normalize_pipeline_node(route_after_incremental_planning(current), current)
     if not allow_reasoning_terminal and node == "reasoning" and agenda_has_executor_pending(
         current
     ):
@@ -142,12 +150,12 @@ def _run_pipeline_node_loop(
         safety += 1
         if node == "retrieval":
             current = retrieval_node(current)
-            node = route_after_retrieval(current)
+            node = _normalize_pipeline_node(route_after_retrieval(current), current)
         elif node == "tool_execution":
             current = tool_execution_node(current)
             if str(current.get("status", "")).endswith("FAILED"):
                 break
-            node = route_after_tool(current)
+            node = _normalize_pipeline_node(route_after_tool(current), current)
         elif node == "writing":
             current = writing_node(current)
             if str(current.get("status", "")).endswith("FAILED"):
@@ -193,7 +201,7 @@ def _run_pipeline_node_loop(
             break
         elif node == "planning":
             current = planning_node(current)
-            node = route_after_planning(current)
+            node = _normalize_pipeline_node(route_after_incremental_planning(current), current)
         elif node == "dead_letter":
             break
         else:

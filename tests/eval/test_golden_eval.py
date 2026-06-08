@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 from app.config.prompts import build_reasoning_system_prompt
-from app.runtime.router import route_after_policy_to_guard
+from app.runtime.router import route_after_policy
 from app.runtime.state import create_initial_state, merge_state
 from app.services.output_guard import evaluate_output
 from app.services.resource_budget import BudgetContext, BudgetExceededError
@@ -33,7 +33,7 @@ def test_golden_task(task: dict) -> None:
             create_initial_state(),
             policy_result=task["policy_result"],
         )
-        ok = route_after_policy_to_guard(state) == task["expect_route"]
+        ok = route_after_policy(state) == task["expect_route"]
         assert ok
         record(task_id, passed=1.0 if ok else 0.0)
 

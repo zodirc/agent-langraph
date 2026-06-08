@@ -1,8 +1,10 @@
 from app.services.retrieval_policy import (
+    has_injected_evidence,
     needs_session_memory_retrieval,
     retrieval_domains_for_state,
     restrict_memory_to_current_session,
     should_route_to_retrieval_after_planning,
+    should_run_grounding_check,
     should_skip_session_memory_retrieval,
 )
 
@@ -102,3 +104,33 @@ def test_retrieval_domains_for_code_task():
 def test_retrieval_domains_default_common():
     state = {"task_type": "qa", "input_payload": {}}
     assert retrieval_domains_for_state(state) == {"common"}
+
+
+def test_has_injected_evidence_from_packets():
+    state = {"evidence_packets": [{"packet_id": "p1", "snippet_text": "fact"}]}
+    assert has_injected_evidence(state) is True
+
+
+def test_should_not_run_grounding_when_skip_retrieval_without_evidence(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.retrieval_policy.settings.RETRIEVAL_CITATION_CHECK_STRICTNESS", "basic"
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval_policy.settings.RAG_FAITHFULNESS_CHECK_ENABLED", False
+    )
+    state = {"skip_retrieval": True, "retrieved_knowledge": [], "evidence_packets": []}
+    assert should_run_grounding_check(state) is False
+
+
+def test_should_run_grounding_when_skip_retrieval_but_memory_hits(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.retrieval_policy.settings.RETRIEVAL_CITATION_CHECK_STRICTNESS", "basic"
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval_policy.settings.RAG_FAITHFULNESS_CHECK_ENABLED", False
+    )
+    state = {
+        "skip_retrieval": True,
+        "memory_hits": [{"content": "prior turn fact"}],
+    }
+    assert should_run_grounding_check(state) is True

@@ -65,7 +65,9 @@ def build_structural_observation(
 ) -> IntentObservationResult:
     """L1 structural observation without model call."""
     payload = state.get("input_payload") or {}
-    mission_active = bool(state.get("mission")) and not payload.get("mission_suspended")
+    from app.runtime.state_field_access import mission_from_state
+
+    mission_active = bool(mission_from_state(state)) and not payload.get("mission_suspended")
     inferred = str(route_audit_seed.get("inferred_kind") or "general")
     confidence = float(route_audit_seed.get("kind_confidence") or 0.0)
     intent_kind = _STRUCTURAL_KIND_MAP.get(inferred.lower(), "qa")
@@ -136,7 +138,9 @@ def _invoke_observation_model(
     cfg = load_intent_observation_config()
     payload = state.get("input_payload") or {}
     goal = str(payload.get("goal") or payload.get("query") or "").strip()
-    mission = state.get("mission") or {}
+    from app.runtime.state_field_access import mission_from_state
+
+    mission = mission_from_state(state) or {}
     trace_id = new_observation_trace_id()
     t0 = time.monotonic()
 
@@ -337,11 +341,13 @@ def apply_intent_observation_to_state(
     }
     payload["route_audit"] = audit
 
+    from app.runtime.state_field_access import mission_from_state
+
     audit_entry = {
         "observation_source": result.source,
         "confidence": result.confidence,
         "explicit_mode_present": bool(payload.get("interaction_mode")),
-        "mission_active": bool(state.get("mission")),
+        "mission_active": bool(mission_from_state(state)),
         "session_relation": result.session_relation,
         "needs_planning": result.needs_planning,
         "model_name": result.model_name,

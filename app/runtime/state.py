@@ -89,27 +89,12 @@ class AgentState(TypedDict):
     node_history: list[dict[str, Any]]
     review_requested_at: Optional[str]
 
-    # Mission runtime (long-horizon ReAct control loop)
-    mission: Optional[dict[str, Any]]
-    progress: Optional[dict[str, Any]]
+    # Observation field family (§2.2) — tool/retrieval read-only buffers
     observation: Optional[dict[str, Any]]
     observations: Optional[list[dict[str, Any]]]
-    step_decision: Optional[dict[str, Any]]
-    mission_step: Optional[int]
-    mission_control: Optional[dict[str, Any]]
 
-    # Exploration runtime (Ch21 pilot)
-    exploration: Optional[dict[str, Any]]
-
-    # Phase 5 — Supervisor-Worker (architecture §20)
+    # Execution mode hint (payload-level contract lives in input_payload)
     execution_mode: Optional[str]
-    subtasks: Optional[list[dict[str, Any]]]
-    worker_results: Optional[dict[str, Any]]
-
-    # Self-Routed Deliberation Loop (SRDL) — bounded ReAct in single runtime
-    react_loop: Optional[dict[str, Any]]
-
-    # Skill platform (policy layer)
     skill_id: Optional[str]
     skill_version: Optional[str]
     skill_snapshot: Optional[dict[str, Any]]
@@ -120,6 +105,29 @@ class AgentState(TypedDict):
     interrupt_context: Optional[dict[str, Any]]
     execution_run: Optional[dict[str, Any]]
     pending_user_message: Optional[dict[str, Any]]
+
+    # Event-driven runtime (optimization_execution_plan WP-1.1)
+    event_type: Optional[str]
+    event_id: Optional[str]
+
+    # Foreground loop (optimization_execution_plan WP-1.2)
+    foreground_status: Optional[dict[str, Any]]
+    background_status: Optional[dict[str, Any]]
+
+    # Plan field family (WP-1.4)
+    plan_graph: Optional[dict[str, Any]]
+    plan_invalidations: Optional[dict[str, Any]]
+    execution_version: Optional[int]
+
+    # Governance field family (WP-2.1)
+    context_budget_buckets: Optional[dict[str, Any]]
+
+    # Verification field family (WP-3.1)
+    verification_result: Optional[dict[str, Any]]
+    submission_decision: Optional[dict[str, Any]]
+
+    # Evaluation field family (WP-3.2)
+    eval_capture: Optional[dict[str, Any]]
 
 
 def create_initial_state(
@@ -172,18 +180,20 @@ def create_initial_state(
             "retry_count": 0,
             "node_history": [],
             "review_requested_at": None,
-            "mission": None,
-            "progress": None,
             "observation": None,
             "observations": None,
-            "step_decision": None,
-            "mission_step": None,
-            "mission_control": None,
-            "exploration": None,
             "execution_mode": "single",
-            "subtasks": None,
-            "worker_results": None,
-            "react_loop": None,
+            "event_type": None,
+            "event_id": None,
+            "foreground_status": None,
+            "background_status": None,
+            "plan_graph": None,
+            "plan_invalidations": None,
+            "execution_version": 1,
+            "context_budget_buckets": None,
+            "verification_result": None,
+            "submission_decision": None,
+            "eval_capture": None,
         }
     )
 
@@ -219,12 +229,8 @@ def merge_state(state: AgentState, **updates: Any) -> AgentState:
         if (
             key in (
                 "input_payload",
-                "progress",
-                "mission",
                 "manuscript",
                 "observation",
-                "mission_control",
-                "react_loop",
             )
             and isinstance(value, dict)
             and isinstance(merged.get(key), dict)

@@ -85,7 +85,7 @@ def _looks_like_step_decision(data: dict[str, Any]) -> bool:
 
 
 def coerce_agent_state(state: dict[str, Any]) -> dict[str, Any]:
-    """Validate/coerce mission, progress, step_decision nested dicts in-place."""
+    """Validate/coerce nested dicts and fold legacy top-level containers (WP-4.2)."""
     out = dict(state)
     mission = out.get("mission")
     if isinstance(mission, dict) and _looks_like_mission(mission):
@@ -107,4 +107,47 @@ def coerce_agent_state(state: dict[str, Any]) -> dict[str, Any]:
             ).to_decision_dict()
         except Exception:
             pass
+    return _strip_legacy_top_level_fields(out)
+
+
+_LEGACY_TOP_LEVEL_FIELDS = (
+    "mission",
+    "progress",
+    "mission_step",
+    "mission_control",
+    "exploration",
+    "subtasks",
+    "worker_results",
+    "react_loop",
+    "step_decision",
+)
+
+
+def _strip_legacy_top_level_fields(out: dict[str, Any]) -> dict[str, Any]:
+    """Migrate legacy containers into §2.2 field families, then remove top-level keys."""
+    payload = dict(out.get("input_payload") or {})
+    plan_graph = dict(out.get("plan_graph") or {"nodes": []})
+    meta = dict(plan_graph.get("meta") or {})
+    bg = dict(out.get("background_status") or {})
+
+    if isinstance(out.get("mission"), dict):
+        payload.setdefault("mission", out["mission"])
+        meta["mission"] = out["mission"]
+    if isinstance(out.get("progress"), dict):
+        bg["progress"] = out["progress"]
+        meta["progress"] = out["progress"]
+    for key in ("mission_step", "mission_control", "exploration", "subtasks", "worker_results", "react_loop", "step_decision"):
+        if out.get(key) is not None:
+            meta[key] = out[key]
+
+    if meta:
+        plan_graph["meta"] = meta
+        out["plan_graph"] = plan_graph
+    if payload != out.get("input_payload"):
+        out["input_payload"] = payload
+    if bg:
+        out["background_status"] = bg
+
+    for key in _LEGACY_TOP_LEVEL_FIELDS:
+        out.pop(key, None)
     return out

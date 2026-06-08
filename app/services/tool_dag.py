@@ -18,6 +18,7 @@ from typing import Any, Callable, Optional
 
 from app.config.settings import settings
 from app.runtime.state import AgentState
+from app.services.tool_side_effect import normalize_stages_for_safe_parallel, tool_is_read_only
 
 
 def parse_tool_stages(payload: dict[str, Any], selected_tools: list[str]) -> list[list[str]]:
@@ -33,11 +34,11 @@ def parse_tool_stages(payload: dict[str, Any], selected_tools: list[str]) -> lis
             if names:
                 stages.append(names)
         if stages:
-            return stages
+            return normalize_stages_for_safe_parallel(stages)
 
     dag = payload.get("tool_dag")
     if isinstance(dag, dict) and dag.get("nodes"):
-        return _stages_from_dag(dag, selected_tools)
+        return normalize_stages_for_safe_parallel(_stages_from_dag(dag, selected_tools))
 
     return [[name] for name in selected_tools]
 
@@ -89,20 +90,26 @@ def execute_tool_stages(
     *,
     invoke_fn: Callable[[str, AgentState], dict[str, Any]],
     initial_results: Optional[list[dict[str, Any]]] = None,
+    execution_version: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Run each stage in order; tools within a stage run in parallel."""
+    """Run each stage in order; read-only tools within a stage may run in parallel."""
     results: list[dict[str, Any]] = list(initial_results or [])
     max_workers = max(1, int(getattr(settings, "TOOL_EXEC_MAX_WORKERS", 4)))
+    version = execution_version if execution_version is not None else state.get("execution_version")
 
     for stage_index, tools in enumerate(stages):
         if not tools:
             continue
-        if len(tools) == 1:
-            name = tools[0]
-            try:
-                results.append(invoke_fn(name, state))
-            except Exception as exc:
-                results.append(_error_outcome(name, exc))
+        parallel_ok = len(tools) > 1 and all(tool_is_read_only(t) for t in tools)
+        if len(tools) == 1 or not parallel_ok:
+            for name in tools:
+                try:
+                    row = invoke_fn(name, state)
+                    if isinstance(row, dict):
+                        row = {**row, "execution_version": version, "observation_only": True}
+                    results.append(row)
+                except Exception as exc:
+                    results.append(_error_outcome(name, exc, execution_version=version))
             continue
 
         with ThreadPoolExecutor(max_workers=min(max_workers, len(tools))) as pool:
@@ -110,12 +117,18 @@ def execute_tool_stages(
             for future in as_completed(futures):
                 name = futures[future]
                 try:
-                    results.append(future.result())
+                    row = future.result()
+                    if isinstance(row, dict):
+                        row = {**row, "execution_version": version, "observation_only": True}
+                    results.append(row)
                 except Exception as exc:
-                    results.append(_error_outcome(name, exc))
+                    results.append(_error_outcome(name, exc, execution_version=version))
 
     return results
 
 
-def _error_outcome(tool_name: str, exc: Exception) -> dict[str, Any]:
-    return {"tool": tool_name, "status": "error", "error": str(exc)}
+def _error_outcome(tool_name: str, exc: Exception, *, execution_version: int | None = None) -> dict[str, Any]:
+    out = {"tool": tool_name, "status": "error", "error": str(exc)}
+    if execution_version is not None:
+        out["execution_version"] = execution_version
+    return out

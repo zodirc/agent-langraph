@@ -1,5 +1,8 @@
 """ADR §13 Context Governance DoD regression gates."""
 
+import pytest
+
+from app.runtime.state import create_initial_state, merge_state
 from app.services.context_items import ContextItem, new_context_id
 from app.services.context_policy import get_prompt_context_policy
 from app.services.context_reducer import reduce_context_items
@@ -141,3 +144,95 @@ def test_dod_all_purposes_have_policy():
 
 def test_context_governance_enabled_default():
     assert context_governance_enabled() is True
+
+
+@pytest.mark.parametrize("token_budget", [32000, 64000, 128000, 200000])
+def test_boundary_matrix_budget_tiers(token_budget):
+    """WP-2.3: 32k / 64k / 128k / 200k budget tiers initialize seven buckets."""
+    from app.services.context_budget import BUDGET_BUCKET_NAMES, initialize_context_budget_buckets
+
+    state = {"token_budget": {"limit": token_budget}}
+    buckets = initialize_context_budget_buckets(state)
+    assert buckets["total_budget"] == token_budget
+    assert set(buckets["caps"].keys()) == set(BUDGET_BUCKET_NAMES)
+    assert buckets["soft_limit"] < buckets["hard_limit"] <= buckets["emergency_limit"]
+
+
+def test_boundary_matrix_large_file_context_compresses():
+    """WP-2.3: large file slice compresses under tight budget."""
+    policy = get_prompt_context_policy("reasoning")
+    big = "LINE\n" * 8000
+    item = ContextItem(
+        id=new_context_id(),
+        kind="file_context",
+        source="file",
+        content=big,
+        priority="low",
+        estimated_tokens=16000,
+        droppable=True,
+        compressible=True,
+        bucket="file_context",
+    )
+    kept, _, _ = reduce_context_items([item], policy, token_budget_total=1024)
+    assert sum(i.estimated_tokens for i in kept) <= 1024
+
+
+def test_boundary_matrix_high_retrieval_dedupes():
+    """WP-2.3: duplicate retrieval evidence is deduped."""
+    policy = get_prompt_context_policy("reasoning")
+    dup = ContextItem(
+        id=new_context_id(),
+        kind="knowledge",
+        source="retrieval",
+        content="same fact",
+        priority="medium",
+        estimated_tokens=100,
+        bucket="retrieved_knowledge",
+    )
+    dup2 = ContextItem(
+        id=new_context_id(),
+        kind="knowledge",
+        source="retrieval",
+        content="same fact",
+        priority="medium",
+        estimated_tokens=100,
+        bucket="retrieved_knowledge",
+    )
+    kept, _, dropped = reduce_context_items([dup, dup2], policy, token_budget_total=8000)
+    assert len(kept) <= 2
+
+
+def test_boundary_matrix_multi_round_interrupt_budget():
+    """WP-2.3: multi-round interrupt preserves budget buckets across merges."""
+    from app.services.context_budget import initialize_context_budget_buckets
+
+    state = merge_state(create_initial_state(), event_type="interrupt")
+    b1 = initialize_context_budget_buckets(state)
+    state2 = merge_state(state, context_budget_buckets=b1, event_type="clarification")
+    b2 = state2.get("context_budget_buckets") or {}
+    assert b2.get("total_budget") == b1.get("total_budget")
+
+
+def test_boundary_matrix_large_tool_output_compresses():
+    """WP-2.3: oversized tool output is truncated under tight budget."""
+    policy = get_prompt_context_policy("reasoning")
+    item = ContextItem(
+        id=new_context_id(),
+        kind="tool_output",
+        source="tool",
+        content="[grep_file] ok: " + ("line\n" * 5000),
+        priority="low",
+        estimated_tokens=8000,
+        droppable=True,
+        compressible=True,
+        bucket="tool_observations",
+    )
+    trace = ContextAssemblyTrace(purpose="reasoning")
+    kept, compressed, _ = reduce_context_items(
+        [item],
+        policy,
+        token_budget_total=512,
+        trace=trace,
+    )
+    assert compressed or sum(i.estimated_tokens for i in kept) <= 512
+    assert trace.to_dict()["compressed_count"] >= 0

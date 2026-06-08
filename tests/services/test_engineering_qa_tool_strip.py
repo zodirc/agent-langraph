@@ -3,7 +3,7 @@
 from unittest.mock import patch
 
 from app.nodes.planning_node import planning_node
-from app.runtime.router import route_after_planning
+from app.runtime.planning_gate_router import route_after_incremental_planning
 from app.runtime.state import TaskStatus, create_initial_state, merge_state
 from app.services.mode_execution import apply_qa_mode_contract
 
@@ -49,4 +49,4 @@ def test_planning_engineering_greeting_routes_to_reasoning(mock_invoke, isolated
     assert "write_file" not in tools
     assert "verify_backend" not in tools
     assert out.get("status") == TaskStatus.PLANNED.value
-    assert route_after_planning(out) in ("reasoning", "retrieval", "tool_execution")
+    assert route_after_incremental_planning(out) in ("context_governance", "retrieval", "tool_execution")

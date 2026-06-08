@@ -16,17 +16,13 @@ from app.runtime.checkpointer import create_checkpointer
 from app.runtime.graph_cache import cached_graph_compiler
 from app.nodes.human_review_node import human_review_node
 from app.nodes.memory_writeback_node import memory_writeback_node
-from app.nodes.output_guard_node import output_guard_node
 from app.nodes.output_node import output_node
 from app.nodes.policy_node import policy_node
 from app.nodes.rejected_node import rejected_node
 from app.nodes.supervisor_decompose_node import supervisor_decompose_node
 from app.nodes.supervisor_merge_node import supervisor_merge_node
 from app.nodes.supervisor_worker_node import supervisor_worker_node
-from app.runtime.router import (
-    route_after_output_guard,
-    route_after_policy_to_guard,
-)
+from app.runtime.router import route_after_policy
 from app.runtime.state import AgentState, append_node_history, ensure_agent_state, merge_state
 
 
@@ -38,7 +34,6 @@ def build_supervisor_graph() -> StateGraph:
     workflow.add_node("supervisor_worker", supervisor_worker_node)
     workflow.add_node("supervisor_merge", supervisor_merge_node)
     workflow.add_node("policy", policy_node)
-    workflow.add_node("output_guard", output_guard_node)
     workflow.add_node("human_review", human_review_node)
     workflow.add_node("rejected", rejected_node)
     workflow.add_node("output", output_node)
@@ -51,24 +46,15 @@ def build_supervisor_graph() -> StateGraph:
 
     workflow.add_conditional_edges(
         "policy",
-        route_after_policy_to_guard,
+        route_after_policy,
         {
-            "output_guard": "output_guard",
             "output": "output",
             "human_review": "human_review",
             "rejected": "rejected",
         },
     )
-    workflow.add_conditional_edges(
-        "output_guard",
-        route_after_output_guard,
-        {
-            "output": "output",
-            "rejected": "rejected",
-        },
-    )
     workflow.add_edge("rejected", END)
-    workflow.add_edge("human_review", "output_guard")
+    workflow.add_edge("human_review", "output")
     workflow.add_edge("output", "memory_writeback")
     workflow.add_edge("memory_writeback", END)
 
@@ -110,7 +96,7 @@ def run_supervisor_graph(
     result = graph.invoke(state, config)
     if isinstance(result, dict):
         return ensure_agent_state(result)
-    return cast(AgentState, result)  # invoke() untyped when not dict
+    return cast(AgentState, result)
 
 
 def stream_supervisor_graph(

@@ -19,6 +19,45 @@ from app.services.context_compressor import apply_semantic_context_compress
 _PRIORITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 
+_CONTENT_COMPRESSION_CLASSES = ("conversation", "tool", "retrieval", "file", "plan")
+
+
+def compression_class_for_item(item: ContextItem) -> str:
+    """Map context items to layered compression strategy (optimization §8.4)."""
+    bucket = item.resolve_bucket()
+    kind = str(item.kind or "")
+    if bucket in {"recent_transcript", "current_turn"} or kind in {"recent_history", "user_turn"}:
+        return "conversation"
+    if bucket == "tool_observations" or kind in {"tool_output", "tool_result"}:
+        return "tool"
+    if bucket in {"retrieved_knowledge", "retrieved_memory"} or kind in {"knowledge", "episodic_memory"}:
+        return "retrieval"
+    if bucket == "file_context" or kind in {"file_slice", "file_context"}:
+        return "file"
+    if kind in {"plan_step", "working_memory"} or bucket == "semantic_summary":
+        return "plan"
+    return "conversation"
+
+
+def summarize_compression_trace(trace: ContextAssemblyTrace) -> list[dict[str, Any]]:
+    """Expose bucket + method + token delta for observability (WP-2.2)."""
+    rows: list[dict[str, Any]] = []
+    for entry in trace.actions:
+        if entry.action != "compressed":
+            continue
+        rows.append(
+            {
+                "bucket": entry.bucket,
+                "compression_class": entry.bucket,
+                "method": entry.method,
+                "tokens_before": entry.tokens_before,
+                "tokens_after": entry.tokens_after,
+                "reason": entry.reason,
+            }
+        )
+    return rows
+
+
 def _record_quality_regression(purpose: str) -> None:
     try:
         from app.services.metrics_service import get_metrics_service

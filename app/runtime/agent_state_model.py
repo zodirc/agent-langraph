@@ -61,18 +61,9 @@ class AgentStateModel(BaseModel):
     retry_count: int = 0
     node_history: list[dict[str, Any]] = Field(default_factory=list)
     review_requested_at: Optional[str] = None
-    mission: Optional[dict[str, Any]] = None
-    progress: Optional[dict[str, Any]] = None
     observation: Optional[dict[str, Any]] = None
     observations: Optional[list[dict[str, Any]]] = None
-    step_decision: Optional[dict[str, Any]] = None
-    mission_step: Optional[int] = None
-    mission_control: Optional[dict[str, Any]] = None
-    exploration: Optional[dict[str, Any]] = None
     execution_mode: Optional[str] = "single"
-    subtasks: Optional[list[dict[str, Any]]] = None
-    worker_results: Optional[dict[str, Any]] = None
-    react_loop: Optional[dict[str, Any]] = None
     skill_id: Optional[str] = None
     skill_version: Optional[str] = None
     skill_snapshot: Optional[dict[str, Any]] = None
@@ -81,6 +72,17 @@ class AgentStateModel(BaseModel):
     interrupt_context: Optional[dict[str, Any]] = None
     execution_run: Optional[dict[str, Any]] = None
     pending_user_message: Optional[dict[str, Any]] = None
+    event_type: Optional[str] = None
+    event_id: Optional[str] = None
+    foreground_status: Optional[dict[str, Any]] = None
+    background_status: Optional[dict[str, Any]] = None
+    plan_graph: Optional[dict[str, Any]] = None
+    plan_invalidations: Optional[dict[str, Any]] = None
+    execution_version: Optional[int] = 1
+    context_budget_buckets: Optional[dict[str, Any]] = None
+    verification_result: Optional[dict[str, Any]] = None
+    submission_decision: Optional[dict[str, Any]] = None
+    eval_capture: Optional[dict[str, Any]] = None
 
 
 def state_to_model(state: AgentState | dict[str, Any]) -> AgentStateModel:

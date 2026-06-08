@@ -1,13 +1,9 @@
-"""Policy routing — ESCALATE must reach human_review; CONTINUE goes via output_guard."""
+"""Policy routing — ESCALATE must reach human_review; CONTINUE goes to output."""
 
 import pytest
 
-from app.runtime.router import (
-    route_after_policy,
-    route_after_policy_to_guard,
-    route_after_reflection,
-    should_reflect,
-)
+from app.runtime.reflection_router import route_after_reflection, should_reflect
+from app.runtime.router import route_after_policy
 from app.runtime.state import merge_state
 
 
@@ -23,20 +19,6 @@ from app.runtime.state import merge_state
 def test_route_after_policy(base_state, policy_result, expected):
     state = merge_state(base_state, policy_result=policy_result)
     assert route_after_policy(state) == expected
-
-
-@pytest.mark.parametrize(
-    "policy_result,expected",
-    [
-        ("CONTINUE", "output_guard"),
-        ("REVIEW", "human_review"),
-        ("ESCALATE", "human_review"),
-        ("REJECT", "rejected"),
-    ],
-)
-def test_route_after_policy_to_guard(base_state, policy_result, expected):
-    state = merge_state(base_state, policy_result=policy_result)
-    assert route_after_policy_to_guard(state) == expected
 
 
 def test_should_reflect_on_route_misalignment(base_state):
@@ -82,7 +64,7 @@ def test_route_after_reflection_retry_planning(base_state):
         reflection_count=1,
         planning_revision_count=0,
     )
-    assert route_after_reflection(state) == "planning"
+    assert route_after_reflection(state) == "incremental_planning"
 
 
 def test_route_after_reflection_retry(base_state):

@@ -1,12 +1,12 @@
-"""规划节点：图入口，决定路由与工具集。
+"""规划节点：增量规划层（WP-1.4 目标），当前仍承担较多路由职责。
 
-调用方：app.runtime.graph、mission_act 内联流水线、reflection 重规划。
+调用方：event_classification → planning、mission_act 内联流水线、reflection 重规划。
 主流程：早退（TOOL_FAILED）→ 重规划输入 → mission 机械 skip_planning_llm
 → LLM 规划（skill planning_overlay、tool_selection）→ mission/writing 后处理
 → validate_plan、work_plan、route_audit → PLANNED。
 写出：plan、selected_tools、writing_intent、skip_retrieval 等。
 
-Planning node: graph entry; LLM or skip path; writes plan and tools for routers.
+Planning node: follows event_classification; LLM or skip path; writes plan for routers.
 """
 
 from __future__ import annotations
@@ -141,8 +141,10 @@ def planning_node(state: AgentState) -> AgentState:
         from app.services.pre_planning import (
             engineering_thin_plan,
             engineering_thin_tools,
+            qa_thin_plan,
             run_pre_planning_pipeline,
             should_skip_planning_llm,
+            should_skip_qa_planning_llm,
         )
 
         state = run_pre_planning_pipeline(state)
@@ -181,6 +183,58 @@ def planning_node(state: AgentState) -> AgentState:
                 ),
             )
             payload = dict(state.get("input_payload") or {})
+
+        if should_skip_qa_planning_llm(state):
+            goal = str(payload.get("goal") or payload.get("query") or "").strip()
+            intent = {
+                "enabled": False,
+                "blocked_by": "qa_mode",
+                "source": "thin_planning",
+            }
+            payload["writing_intent"] = intent
+            plan = qa_thin_plan(goal)
+            report_plan_trace(
+                plan,
+                [],
+                meta={
+                    "planning": "qa_thin_skip",
+                    "target_mode": payload.get("target_mode"),
+                    "intent_kind": payload.get("intent_kind"),
+                    "skip_retrieval": True,
+                },
+            )
+            updated = merge_state(
+                state,
+                input_payload=payload,
+                plan=plan,
+                selected_tools=[],
+                manuscript=ms.to_dict(),
+                skip_retrieval=True,
+                review_required=False,
+                status=TaskStatus.PLANNED.value,
+                current_node="planning",
+                audit_log=append_audit(
+                    state,
+                    "planning",
+                    "qa_thin_skip",
+                    {
+                        "target_mode": payload.get("target_mode"),
+                        "intent_kind": payload.get("intent_kind"),
+                        "goal_preview": goal[:80],
+                    },
+                ),
+            )
+            from app.services.route_audit.pipeline import run_route_audit_pipeline
+
+            pinned_mode = str(payload.get("target_mode") or "")
+            updated = run_route_audit_pipeline(updated)
+            if pinned_mode:
+                lp = dict(updated.get("input_payload") or {})
+                lp["target_mode"] = pinned_mode
+                lp["current_mode"] = pinned_mode
+                updated = merge_state(updated, input_payload=lp)
+            get_state_store().save(updated)
+            return updated
 
         if should_skip_planning_llm(state):
             intent = {
@@ -223,7 +277,13 @@ def planning_node(state: AgentState) -> AgentState:
             )
             from app.services.route_audit.pipeline import run_route_audit_pipeline
 
+            pinned_mode = str(payload.get("target_mode") or "")
             updated = run_route_audit_pipeline(updated)
+            if pinned_mode:
+                lp = dict(updated.get("input_payload") or {})
+                lp["target_mode"] = pinned_mode
+                lp["current_mode"] = pinned_mode
+                updated = merge_state(updated, input_payload=lp)
             get_state_store().save(updated)
             return updated
 

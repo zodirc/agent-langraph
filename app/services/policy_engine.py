@@ -1,5 +1,5 @@
 """策略引擎
-policy_node 写入 policy_result；route_after_policy_to_guard 决定 guard/review/reject。
+policy_node 写入 policy_result；route_after_policy 决定 output/review/reject。
 
 Policy engine: risk + review flags → CONTINUE | REVIEW | ESCALATE | REJECT."""
 

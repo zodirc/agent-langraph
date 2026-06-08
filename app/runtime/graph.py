@@ -1,13 +1,9 @@
 """主 Agent 图（LangGraph StateGraph）。
 
-build_agent_graph → cached_graph_compiler，interrupt_before human_review。
-典型路径：planning → retrieval|tool|writing|reasoning|react → reflection →
-policy → output_guard → output → memory_writeback → END。
-路由：app.runtime.router、react_router。
-对外：run_graph、stream_graph、resume_graph（graph_runner 调用）。
-
-Main single-turn LangGraph graph with planning-through-output pipeline.
-Routers in router and react_router; invoked via run_graph, stream_graph, resume_graph.
+Frozen spine (optimization_execution_plan §2.1):
+event_classification → acknowledge → interrupt_control → incremental_planning
+→ retrieval/tool/engineering → context_governance → reasoning_or_writing
+→ verification → policy → output → memory_writeback → eval_capture → END
 """
 
 from __future__ import annotations
@@ -18,85 +14,102 @@ from langgraph.graph import END, StateGraph
 
 from app.runtime.checkpointer import create_checkpointer
 from app.runtime.graph_cache import cached_graph_compiler
+from app.nodes.acknowledge_node import acknowledge_node
+from app.nodes.context_governance_node import context_governance_node
 from app.nodes.dead_letter_node import dead_letter_node
-from app.nodes.human_review_node import human_review_node
-from app.nodes.memory_writeback_node import memory_writeback_node
-from app.nodes.output_guard_node import output_guard_node
-from app.nodes.output_node import output_node
 from app.nodes.engineering_node import engineering_execution_node
-from app.nodes.planning_node import planning_node
+from app.nodes.eval_capture_node import eval_capture_node
+from app.nodes.event_classification_node import event_classification_node
+from app.nodes.human_review_node import human_review_node
+from app.nodes.incremental_planning_node import incremental_planning_node
+from app.nodes.interrupt_control_node import interrupt_control_node
+from app.nodes.memory_writeback_node import memory_writeback_node
+from app.nodes.output_node import output_node
 from app.nodes.policy_node import policy_node
-from app.nodes.reasoning_node import reasoning_node
-from app.nodes.reflection_node import reflection_node
-from app.nodes.react_deliberate_node import react_deliberate_node
-from app.nodes.react_execute_node import react_execute_node
-from app.nodes.react_finalize_node import react_finalize_node
-from app.nodes.react_observe_node import react_observe_node
+from app.nodes.reasoning_or_writing_node import (
+    reasoning_or_writing_node,
+    route_after_reasoning_or_writing,
+)
 from app.nodes.rejected_node import rejected_node
 from app.nodes.retrieval_node import retrieval_node
 from app.nodes.tool_node import tool_execution_node
-from app.nodes.writing_node import writing_node
-from app.runtime.react_router import (
-    route_after_react_deliberate,
-    route_after_react_execute,
-    route_after_react_finalize,
-    route_after_react_observe,
+from app.nodes.verification_node import verification_node
+from app.runtime.event_router import (
+    route_after_acknowledge,
+    route_after_event_classification,
 )
 from app.runtime.router import (
-    route_after_output_guard,
     route_after_engineering,
-    route_after_planning,
-    route_after_policy_to_guard,
-    route_after_reasoning,
-    route_after_reflection,
+    route_after_policy,
     route_after_retrieval,
     route_after_tool,
-    route_after_writing,
+)
+from app.runtime.runtime_router import (
+    route_after_context_governance,
+    route_after_incremental_planning,
+    route_after_interrupt_control,
+    route_after_verification,
 )
 from app.runtime.state import AgentState, append_node_history, ensure_agent_state, merge_state
 from app.services.session_turn import graph_thread_id
 
 
 def build_agent_graph() -> StateGraph:
-    """注册主图节点与条件边；路由见 router 与 react_router。
-
-    Register agent graph nodes and conditional edges.
-    """
     workflow = StateGraph(AgentState)
 
-    # --- Cognition & execution ---
-    workflow.add_node("planning", planning_node)
+    # --- Foreground / control ---
+    workflow.add_node("event_classification", event_classification_node)
+    workflow.add_node("acknowledge", acknowledge_node)
+    workflow.add_node("interrupt_control", interrupt_control_node)
+    workflow.add_node("incremental_planning", incremental_planning_node)
+
+    # --- Execution ---
     workflow.add_node("engineering_execution", engineering_execution_node)
     workflow.add_node("retrieval", retrieval_node)
     workflow.add_node("tool_execution", tool_execution_node)
-    workflow.add_node("writing", writing_node)
-    workflow.add_node("reasoning", reasoning_node)
-    workflow.add_node("reflection", reflection_node)
+    workflow.add_node("context_governance", context_governance_node)
+    workflow.add_node("reasoning_or_writing", reasoning_or_writing_node)
+
+    # --- Verification / output ---
+    workflow.add_node("verification", verification_node)
     workflow.add_node("policy", policy_node)
-    workflow.add_node("output_guard", output_guard_node)
     workflow.add_node("human_review", human_review_node)
     workflow.add_node("rejected", rejected_node)
     workflow.add_node("dead_letter", dead_letter_node)
     workflow.add_node("output", output_node)
     workflow.add_node("memory_writeback", memory_writeback_node)
-    workflow.add_node("react_deliberate", react_deliberate_node)
-    workflow.add_node("react_execute", react_execute_node)
-    workflow.add_node("react_observe", react_observe_node)
-    workflow.add_node("react_finalize", react_finalize_node)
+    workflow.add_node("eval_capture", eval_capture_node)
 
-    workflow.set_entry_point("planning")  # Entry for all single-turn runs
+    workflow.set_entry_point("event_classification")
 
     workflow.add_conditional_edges(
-        "planning",
-        route_after_planning,
+        "event_classification",
+        route_after_event_classification,
+        {"acknowledge": "acknowledge"},
+    )
+    workflow.add_conditional_edges(
+        "acknowledge",
+        route_after_acknowledge,
+        {"interrupt_control": "interrupt_control"},
+    )
+    workflow.add_conditional_edges(
+        "interrupt_control",
+        route_after_interrupt_control,
+        {
+            "incremental_planning": "incremental_planning",
+            "end": END,
+        },
+    )
+    workflow.add_conditional_edges(
+        "incremental_planning",
+        route_after_incremental_planning,
         {
             "retrieval": "retrieval",
             "tool_execution": "tool_execution",
-            "writing": "writing",
-            "reasoning": "reasoning",
-            "react_deliberate": "react_deliberate",
+            "context_governance": "context_governance",
+            "reasoning_or_writing": "reasoning_or_writing",
             "engineering_execution": "engineering_execution",
-            "planning": "planning",
+            "incremental_planning": "incremental_planning",
             "dead_letter": "dead_letter",
             "end": END,
         },
@@ -111,45 +124,11 @@ def build_agent_graph() -> StateGraph:
         },
     )
     workflow.add_conditional_edges(
-        "react_deliberate",
-        route_after_react_deliberate,
-        {
-            "react_execute": "react_execute",
-            "react_finalize": "react_finalize",
-            "reflection": "reflection",
-            "reasoning": "reasoning",
-        },
-    )
-    workflow.add_edge("react_execute", "react_observe")
-    workflow.add_conditional_edges(
-        "react_observe",
-        route_after_react_observe,
-        {
-            "react_deliberate": "react_deliberate",
-            "react_finalize": "react_finalize",
-            "planning": "planning",
-            "reflection": "reflection",
-            "dead_letter": "dead_letter",
-        },
-    )
-    workflow.add_conditional_edges(
-        "react_finalize",
-        route_after_react_finalize,
-        {
-            "reasoning": "reasoning",
-            "planning": "planning",
-            "reflection": "reflection",
-            "human_review": "human_review",
-            "dead_letter": "dead_letter",
-        },
-    )
-    workflow.add_conditional_edges(
         "retrieval",
         route_after_retrieval,
         {
             "tool_execution": "tool_execution",
-            "writing": "writing",
-            "reasoning": "reasoning",
+            "context_governance": "context_governance",
             "retrieval": "retrieval",
             "dead_letter": "dead_letter",
         },
@@ -159,64 +138,50 @@ def build_agent_graph() -> StateGraph:
         route_after_tool,
         {
             "tool_execution": "tool_execution",
-            "writing": "writing",
-            "reasoning": "reasoning",
+            "context_governance": "context_governance",
             "dead_letter": "dead_letter",
         },
     )
     workflow.add_conditional_edges(
-        "writing",
-        route_after_writing,
+        "context_governance",
+        route_after_context_governance,
+        {"reasoning_or_writing": "reasoning_or_writing"},
+    )
+    workflow.add_conditional_edges(
+        "reasoning_or_writing",
+        route_after_reasoning_or_writing,
         {
-            "writing": "writing",
-            "reasoning": "reasoning",
+            "reasoning_or_writing": "reasoning_or_writing",
+            "verification": "verification",
             "dead_letter": "dead_letter",
         },
     )
     workflow.add_conditional_edges(
-        "reasoning",
-        route_after_reasoning,
+        "verification",
+        route_after_verification,
         {
-            "reasoning": "reasoning",
-            "reflection": "reflection",
             "policy": "policy",
-            "dead_letter": "dead_letter",
+            "human_review": "human_review",
+            "rejected": "rejected",
+            "incremental_planning": "incremental_planning",
+            "reasoning_or_writing": "reasoning_or_writing",
         },
     )
-    workflow.add_conditional_edges(
-        "reflection",
-        route_after_reflection,
-        {
-            "reasoning": "reasoning",
-            "planning": "planning",
-            "policy": "policy",
-        },
-    )
-
-    # --- Finish: policy → guard/review → output → memory ---
     workflow.add_conditional_edges(
         "policy",
-        route_after_policy_to_guard,
+        route_after_policy,
         {
-            "output_guard": "output_guard",
             "output": "output",
             "human_review": "human_review",
             "rejected": "rejected",
         },
     )
-    workflow.add_conditional_edges(
-        "output_guard",
-        route_after_output_guard,
-        {
-            "output": "output",
-            "rejected": "rejected",
-        },
-    )
     workflow.add_edge("rejected", END)
     workflow.add_edge("dead_letter", END)
-    workflow.add_edge("human_review", "output_guard")
+    workflow.add_edge("human_review", "verification")
     workflow.add_edge("output", "memory_writeback")
-    workflow.add_edge("memory_writeback", END)
+    workflow.add_edge("memory_writeback", "eval_capture")
+    workflow.add_edge("eval_capture", END)
 
     return workflow
 
@@ -241,7 +206,6 @@ def run_graph(
     *,
     thread_id: Optional[str] = None,
 ) -> AgentState:
-    """Execute graph until completion or human-review interrupt."""
     graph = get_compiled_graph()
     config = {"configurable": {"thread_id": thread_id or graph_thread_id(state)}}
     result = graph.invoke(state, config)
@@ -255,7 +219,6 @@ def resume_graph(
     *,
     thread_id: Optional[str] = None,
 ) -> AgentState:
-    """Resume graph after human review feedback is attached."""
     graph = get_compiled_graph()
     config = {"configurable": {"thread_id": thread_id or graph_thread_id(state)}}
     result = graph.invoke(state, config)
@@ -269,7 +232,6 @@ def stream_graph(
     *,
     thread_id: Optional[str] = None,
 ) -> Iterator[tuple[str, AgentState]]:
-    """Yield (node_name, state_snapshot) for each completed node."""
     graph = get_compiled_graph()
     config = {"configurable": {"thread_id": thread_id or graph_thread_id(state)}}
     latest: AgentState = state

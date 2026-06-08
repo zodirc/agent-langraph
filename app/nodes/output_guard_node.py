@@ -49,10 +49,9 @@ def output_guard_node(state: AgentState) -> AgentState:
 
     faithfulness: dict[str, object] = {"skipped": True}
     grounding_result: dict[str, object] | None = None
-    citation_strictness = str(
-        getattr(settings, "RETRIEVAL_CITATION_CHECK_STRICTNESS", "basic")
-    ).lower()
-    if citation_strictness != "off" or settings.RAG_FAITHFULNESS_CHECK_ENABLED:
+    from app.services.retrieval_policy import should_run_grounding_check
+
+    if should_run_grounding_check(state):
         from app.services.evidence_pipeline import get_answer_mode, get_evidence_packets
         from app.services.grounding_check import check_grounding, grounding_to_faithfulness
 

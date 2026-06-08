@@ -1155,6 +1155,14 @@ class MetricsService:
     def inc_resume_from_checkpoint(self) -> None:
         self._inc("resume_from_checkpoint_count")
 
+    def inc_structured_checkpoint_restore(self, *, success: bool, reason: str = "unknown") -> None:
+        if success:
+            self._inc("structured_checkpoint_restore_success")
+        else:
+            self._inc("structured_checkpoint_restore_failure")
+        reason_key = (reason or "unknown").strip().lower()[:24] or "unknown"
+        self._inc(f"structured_checkpoint_restore_{reason_key}")
+
     def inc_disconnect_without_cancel(self) -> None:
         self._inc("disconnect_without_cancel_count")
 

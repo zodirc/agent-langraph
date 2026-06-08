@@ -1,5 +1,5 @@
 from app.runtime.state import create_initial_state, merge_state
-from app.runtime.router import route_after_planning
+from app.runtime.planning_gate_router import route_after_incremental_planning
 from app.services.memory_query import build_memory_search_query
 from app.services.writing_knowledge import (
     enrich_retrieval_query_for_writing,
@@ -30,7 +30,7 @@ def test_route_writing_goes_to_retrieval_when_not_skipped(base_state):
             "writing_intent": {"enabled": True, "action": "append_body"},
         },
     )
-    assert route_after_planning(state) == "retrieval"
+    assert route_after_incremental_planning(state) == "retrieval"
 
 
 def test_resolve_writing_guidelines_from_file():

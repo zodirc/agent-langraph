@@ -2,7 +2,7 @@
 _retry_failed_workers: 关键失败子任务补偿一次
 全失败 → degraded reasoning_result（无 LLM）
 否则 invoke_structured(REASONING_SYSTEM) + worker summaries fallback
-→ reasoning_result → route_after_policy_to_guard (supervisor_graph 共享收尾)
+→ reasoning_result → route_after_policy (supervisor_graph 共享收尾)
 
 supervisor_merge — synthesize worker outputs."""
 

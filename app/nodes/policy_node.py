@@ -1,7 +1,7 @@
 """策略节点
 
 Policy: score reasoning → CONTINUE | REVIEW | ESCALATE | REJECT.
-Route: route_after_policy_to_guard → output_guard | human_review | rejected."""
+Route: route_after_policy → output | human_review | rejected."""
 
 from __future__ import annotations
 

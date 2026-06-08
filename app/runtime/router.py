@@ -1,23 +1,11 @@
-"""主图条件路由：根据 status、plan、工具、writing_intent 选择下一节点。
-
-route_after_planning 主要分支：失败、mission 交接、ReAct、写作、检索、工具、reasoning。
-
-Main graph conditional edges; route_after_planning is the primary fork after planning.
-"""
+"""主图条件路由：retrieval / tool / policy 等分支（post-planning 见 planning_gate_router）。"""
 
 from __future__ import annotations
 
 from app.config.settings import settings
 from app.runtime.state import AgentState, TaskStatus
-from app.services.mission_schema import should_use_mission_runtime
-from app.services.retrieval_policy import (
-    needs_session_memory_retrieval,
-    should_route_to_retrieval_after_planning,
-)
+from app.services.mode_execution import mode_blocks_writing
 from app.services.route_audit.apply import writing_gate_allowed
-from app.services.mode_execution import mode_blocks_writing, should_route_mission_writing_mode
-from app.services.mode_resolution import should_route_engineering_execution
-from app.services.react_entry import should_enter_react_loop
 from app.services.turn_contract import (
     contract_blocks_writing,
     contract_requires_side_effects,
@@ -74,163 +62,27 @@ def route_after_retrieval(state: AgentState) -> str:
     if state.get("selected_tools"):
         return "tool_execution"
     if _writing_route_allowed(state):
-        return "writing"
-    if contract_requires_side_effects(payload, state=state) and contract_tool_names(
-        payload
-    ):
+        return "context_governance"
+    if contract_requires_side_effects(payload, state=state) and contract_tool_names(payload):
         return "tool_execution"
-    return "reasoning"
+    return "context_governance"
 
 
 def route_after_tool(state: AgentState) -> str:
     """Retry tool node or route to dead letter (architecture §22)."""
     status = str(state.get("status", ""))
     if status == TaskStatus.TOOL_FAILED.value:
-        # Non-retryable failures (e.g. missing artifact) must not loop tool_execution.
         if _is_non_retryable_tool_failure(state):
-            return "reasoning"
+            return "context_governance"
         if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
             return "dead_letter"
         return "tool_execution"
     payload = state.get("input_payload") or {}
     if _writing_route_allowed(state):
-        return "writing"
-    if contract_requires_side_effects(payload, state=state) and contract_tool_names(
-        payload
-    ):
+        return "context_governance"
+    if contract_requires_side_effects(payload, state=state) and contract_tool_names(payload):
         return "tool_execution"
-    return "reasoning"
-
-
-def route_after_writing(state: AgentState) -> str:
-    status = str(state.get("status", ""))
-    if status == TaskStatus.WRITING_FAILED.value:
-        if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
-            return "dead_letter"
-        return "writing"
-    return "reasoning"
-
-
-def route_after_planning(state: AgentState) -> str:
-    """planning 完成后的主分叉；与 retrieval/tool/writing/reasoning 形成 DAG。"""
-    status = str(state.get("status", ""))
-    if status == TaskStatus.FAILED.value:
-        return _failed_route(state, "planning")
-
-    # If the graph is re-invoked from a snapshot where the last node failed
-    # (e.g. tool execution exhausted retries), don't silently restart the normal
-    # planning route and mark the task as completed.
-    if (
-        status == TaskStatus.TOOL_FAILED.value
-        and str(state.get("current_node") or "") == "tool_execution"
-    ):
-        if _is_non_retryable_tool_failure(state):
-            return "reasoning"
-        if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
-            return "dead_letter"
-
-    payload = state.get("input_payload") or {}
-    # manuscript_mode contract: mission graph before engineering / single-turn branches.
-    if should_route_mission_writing_mode(state):
-        if int(state.get("mission_step") or 0) < 1:
-            return "end"
-
-    # Main graph stops at planning and hands off to mission_graph (mission_step < 1).
-    if should_use_mission_runtime(payload, str(state.get("execution_mode") or "")):
-        if int(state.get("mission_step") or 0) < 1:
-            return "end"
-
-    if should_enter_react_loop(state):
-        return "react_deliberate"
-
-    if should_route_engineering_execution(state):
-        return "engineering_execution"
-
-    plan = state.get("plan") or []
-    selected_tools = _effective_selected_tools(state)
-    intent = (state.get("input_payload") or {}).get("writing_intent") or {}
-
-    if (
-        _writing_route_allowed(state)
-        and not selected_tools
-        and state.get("skip_retrieval")
-    ):
-        return "writing"
-
-    if state.get("skip_retrieval") and not should_route_to_retrieval_after_planning(state):
-        if selected_tools:
-            return "tool_execution"
-        if _writing_route_allowed(state):
-            return "writing"
-        if contract_requires_side_effects(payload, state=state) and contract_tool_names(
-            payload
-        ):
-            return "tool_execution"
-        return "reasoning"
-    if (
-        needs_session_memory_retrieval(state)
-        and not selected_tools
-        and not intent.get("enabled")
-    ):
-        return "retrieval"
-
-    needs_retrieval = any(
-        "retrieve" in step.lower() or "search" in step.lower() for step in plan
-    )
-    if intent.get("enabled") and not state.get("skip_retrieval"):
-        needs_retrieval = True
-    if (
-        settings.SKIP_RETRIEVAL_WHEN_NO_TOOLS
-        and not selected_tools
-        and not needs_retrieval
-        and not intent.get("enabled")
-    ):
-        if _writing_route_allowed(state):
-            return "writing"
-        return "reasoning"
-
-    needs_tools = len(selected_tools) > 0
-
-    if needs_retrieval:
-        return "retrieval"
-    if needs_tools:
-        return "tool_execution"
-    if _writing_route_allowed(state):
-        return "writing"
-    if contract_requires_side_effects(payload, state=state) and contract_tool_names(
-        payload
-    ):
-        return "tool_execution"
-    return "reasoning"
-
-
-def should_reflect(state: AgentState) -> bool:
-    """Whether to run reflection before policy (Ch4)."""
-    if not getattr(settings, "REFLECTION_ENABLED", True):
-        return False
-    payload = state.get("input_payload") or {}
-    if should_use_mission_runtime(payload, str(state.get("execution_mode") or "")):
-        return False
-    if payload.get("reflection_enabled") is False:
-        return False
-    max_rounds = int(getattr(settings, "REFLECTION_MAX_ROUNDS", 2))
-    if int(state.get("reflection_count") or 0) >= max_rounds:
-        return False
-    if payload.get("reflection_enabled") is True:
-        return True
-    reasoning = state.get("reasoning_result") or {}
-    structured = reasoning.get("structured") or {}
-    if structured.get("fact_warnings"):
-        return True
-    if float(reasoning.get("confidence", 1.0)) < 0.6:
-        return True
-    audit = payload.get("route_audit") or {}
-    if getattr(settings, "REFLECTION_ROUTE_AUDIT_ON_MISROUTE", True) and audit.get("aligned") is False:
-        return True
-    if getattr(settings, "REFLECTION_WRITING_ONLY", True):
-        intent = payload.get("writing_intent") or {}
-        return bool(intent.get("enabled"))
-    return True
+    return "context_governance"
 
 
 def route_after_engineering(state: AgentState) -> str:
@@ -240,64 +92,9 @@ def route_after_engineering(state: AgentState) -> str:
     return "policy"
 
 
-def route_after_reasoning(state: AgentState) -> str:
-    status = str(state.get("status", ""))
-    if status in (TaskStatus.FAILED.value, TaskStatus.REASON_FAILED.value):
-        if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
-            return "dead_letter"
-        return "reasoning"
-    if should_reflect(state):
-        return "reflection"
-    return "policy"
-
-
-def route_after_reflection(state: AgentState) -> str:
-    """After critique: retry planning/reasoning or proceed to policy."""
-    from app.services.route_audit.config import load_route_audit_config
-
-    reflection = state.get("reflection_result") or {}
-    verdict = reflection.get("verdict") or {}
-    recommended = str(verdict.get("recommended_action") or "")
-    max_rounds = int(getattr(settings, "REFLECTION_MAX_ROUNDS", 2))
-    if int(state.get("reflection_count") or 0) >= max_rounds:
-        return "policy"
-
-    retry_planning = recommended == "replan" or bool(reflection.get("retry_planning"))
-    retry_reasoning = recommended == "retry_same_step" or bool(reflection.get("retry_reasoning"))
-
-    if retry_planning:
-        cfg = load_route_audit_config()
-        revisions = int(state.get("planning_revision_count") or 0)
-        if revisions < cfg.max_planning_revisions:
-            return "planning"
-    if retry_reasoning:
-        return "reasoning"
-    return "policy"
-
-
 def route_after_policy(state: AgentState) -> str:
     policy_result = state.get("policy_result") or "CONTINUE"
-
     if policy_result == "CONTINUE":
-        return "output"
-    if policy_result in ("REVIEW", "ESCALATE"):
-        return "human_review"
-    return "rejected"
-
-
-def route_after_output_guard(state: AgentState) -> str:
-    guard = state.get("output_guard_result") or {}
-    if guard.get("passed") is False:
-        return "rejected"
-    return "output"
-
-
-def route_after_policy_to_guard(state: AgentState) -> str:
-    """Policy routing with output_guard inserted before output."""
-    policy_result = state.get("policy_result") or "CONTINUE"
-    if policy_result == "CONTINUE":
-        if getattr(settings, "OUTPUT_GUARD_ENABLED", True):
-            return "output_guard"
         return "output"
     if policy_result in ("REVIEW", "ESCALATE"):
         return "human_review"
@@ -307,4 +104,4 @@ def route_after_policy_to_guard(state: AgentState) -> str:
 def route_on_error(state: AgentState) -> str:
     if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
         return "dead_letter"
-    return state.get("current_node", "planning")
+    return state.get("current_node", "incremental_planning")

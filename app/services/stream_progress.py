@@ -11,6 +11,7 @@ _trace_handler: Optional[Callable[[dict[str, Any]], None]] = None
 _answer_handler: Optional[Callable[[dict[str, Any]], None]] = None
 _thinking_handler: Optional[Callable[[dict[str, Any]], None]] = None
 _writing_handler: Optional[Callable[[dict[str, Any]], None]] = None
+_ack_handler: Optional[Callable[[dict[str, Any]], None]] = None
 
 
 def set_progress_handler(handler: Optional[Callable[[str], None]]) -> None:
@@ -36,6 +37,11 @@ def set_thinking_handler(handler: Optional[Callable[[dict[str, Any]], None]]) ->
 def set_writing_handler(handler: Optional[Callable[[dict[str, Any]], None]]) -> None:
     global _writing_handler
     _writing_handler = handler
+
+
+def set_ack_handler(handler: Optional[Callable[[dict[str, Any]], None]]) -> None:
+    global _ack_handler
+    _ack_handler = handler
 
 
 def set_stream_run_context(
@@ -71,6 +77,20 @@ def get_progress_handler() -> Optional[Callable[[str], None]]:
 def report_progress(message: str) -> None:
     if _handler:
         _handler(message)
+
+
+def report_ack(*, node: str, ack: dict[str, Any], task_id: str = "") -> None:
+    """Push structured foreground ACK to SSE (optimization WP-1.2)."""
+    if _ack_handler is None:
+        return
+    _ack_handler(
+        {
+            "node": node,
+            "task_id": task_id,
+            **ack,
+            **_stream_context_tags(),
+        }
+    )
 
 
 def report_trace(

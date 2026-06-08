@@ -18,7 +18,6 @@
 图选择 _invoke_graph_safe(execution_mode)：
   supervisor → run_supervisor_graph；exploration → run_exploration_graph
   mission → run_mission_graph
-  single 且 enable_planning_mission_handoff：先 stream_graph 至 planning，再切 mission_graph
   默认 single → run_graph（app.runtime.graph）
   失败时 handle_invoke_failure 可 checkpoint_reset 后按同 mode 重试
 
@@ -39,8 +38,8 @@ Streaming stream_task (POST /tasks/stream):
   side queues to SSE; worker thread runs stream_graph or stream_mission_graph.
 
 Graph selection _invoke_graph_safe(execution_mode):
-  supervisor/exploration/mission modes; optional planning→mission handoff on single;
-  default run_graph; handle_invoke_failure may reset checkpoint and retry.
+  supervisor/exploration/mission modes; default run_graph;
+  handle_invoke_failure may reset checkpoint and retry.
 
 Mission steer: steer_mission → queue_steer_message; paused applies immediately,
 running queues pending_user_message for consume_pending_steer at step boundary.
@@ -77,6 +76,7 @@ from app.services.reasoning_trace import (
 from app.services.writing_stream import writing_stream_enabled
 from app.services.stream_progress import (
     clear_stream_run_context,
+    set_ack_handler,
     set_answer_handler,
     set_progress_handler,
     set_stream_run_context,
@@ -142,6 +142,7 @@ def _prepare_mission_for_turn(
     Prepare mission state before graph invoke.
     First turn: init_mission_state; continuation with goal uses steer and optional grant.
     """
+    from app.runtime.state_field_access import mission_from_state
     from app.services.mission_orchestrator import orchestration_enabled, work_plan_completed
     from app.services.mission_steer import apply_steer_message, steer_requires_planning
 
@@ -149,7 +150,7 @@ def _prepare_mission_for_turn(
         return state
 
     goal = str(payload.get("goal") or "").strip()
-    if not created and state.get("mission"):
+    if not created and mission_from_state(state):
         payload_before = dict(state.get("input_payload") or {})
         if goal and not steer_requires_planning(payload_before):
             state = apply_steer_message(state, goal)
@@ -188,7 +189,7 @@ def _prepare_mission_for_turn(
                     input_payload=payload_after,
                     status=TaskStatus.MISSION_RUNNING.value,
                 )
-        mission = state.get("mission") or {}
+        mission = mission_from_state(state) or {}
         from app.services.mission_execution import has_execution_grant
 
         if orchestration_enabled(mission) and not work_plan_completed(state):
@@ -328,6 +329,12 @@ def _format_progress_event(
     )
 
 
+def _format_ack_event(task_id: str, payload: dict[str, Any]) -> str:
+    body = {k: v for k, v in payload.items() if k not in {"node"}}
+    body.setdefault("task_id", task_id)
+    return _format_stream_event("ack", body)
+
+
 def _format_trace_event(task_id: str, trace: dict[str, Any]) -> str:
     return _format_stream_event(
         "trace",
@@ -340,6 +347,25 @@ def _format_trace_event(task_id: str, trace: dict[str, Any]) -> str:
             "level": trace.get("level", "delta"),
         },
     )
+
+
+def _drain_ack_queue(
+    task_id: str,
+    ack_q: queue.SimpleQueue[dict[str, Any]],
+    *,
+    run_id: str = "",
+    foreground_epoch: int = 0,
+) -> Iterator[str]:
+    while True:
+        try:
+            item = ack_q.get_nowait()
+        except queue.Empty:
+            break
+        if run_id and not _accept_stream_side_event(
+            item, run_id=run_id, foreground_epoch=foreground_epoch
+        ):
+            continue
+        yield _format_ack_event(task_id, item)
 
 
 def _drain_trace_queue(
@@ -453,12 +479,17 @@ def _drain_sse_side_queues(
     answer_q: queue.SimpleQueue[dict[str, Any]],
     thinking_q: queue.SimpleQueue[dict[str, Any]] | None = None,
     writing_q: queue.SimpleQueue[dict[str, Any]] | None = None,
+    ack_q: queue.SimpleQueue[dict[str, Any]] | None = None,
     *,
     run_id: str = "",
     foreground_epoch: int = 0,
 ) -> Iterator[str]:
     if _sse_suppressed(task_id):
         return
+    if ack_q is not None:
+        yield from _drain_ack_queue(
+            task_id, ack_q, run_id=run_id, foreground_epoch=foreground_epoch
+        )
     if thinking_q is not None:
         yield from _drain_thinking_queue(
             task_id, thinking_q, run_id=run_id, foreground_epoch=foreground_epoch
@@ -510,6 +541,47 @@ _MISSION_QUIET_NODES = frozenset(
         "mission_eval",
     }
 )
+
+_FOREGROUND_RUNTIME_NODES = frozenset(
+    {
+        "event_classification",
+        "acknowledge",
+        "interrupt_control",
+        "incremental_planning",
+    }
+)
+_BACKGROUND_RUNTIME_NODES = frozenset(
+    {
+        "retrieval",
+        "tool_execution",
+        "engineering_execution",
+        "context_governance",
+        "reasoning_or_writing",
+        "verification",
+        "policy",
+        "output",
+        "memory_writeback",
+        "eval_capture",
+    }
+)
+
+
+def _apply_execution_phase_status(state: AgentState, node_name: str) -> AgentState:
+    """Stamp foreground/background phase for streaming observability (WP-1.5)."""
+    from app.services.runtime_loops import emit_process_events, stamp_runtime_loops
+
+    updated = stamp_runtime_loops(state, node_name)
+    events: list[tuple[str, dict]] = []
+
+    def _capture(kind: str, payload: dict) -> None:
+        events.append((kind, payload))
+
+    emit_process_events(node_name, updated, _capture)
+    bg = dict(updated.get("background_status") or {})
+    if events:
+        bg["last_process_event"] = events[-1][1]
+        updated = merge_state(updated, background_status=bg)
+    return updated
 
 
 def _should_emit_node_event(node_name: str, state: AgentState) -> bool:
@@ -587,9 +659,9 @@ class GraphRunner:
         mode: str,
     ) -> AgentState:
         """
-        按 execution_mode 选择 run_*_graph；handoff 时先 stream 主图 planning 再切 mission_graph。
+        按 execution_mode 选择 run_*_graph。
 
-        Select graph by execution_mode; optional stream main graph until planning then mission_graph.
+        Select graph by execution_mode.
         """
         try:
             if mode == "supervisor":
@@ -605,26 +677,7 @@ class GraphRunner:
                 return run_exploration_graph(state, thread_id=thread)
             if mode in ("mission", "mission_oma"):
                 return run_mission_graph(state, thread_id=thread)
-            from app.services.mission_handoff import (
-                complete_mission_handoff,
-                mission_handoff_needed,
-            )
-
-            latest: AgentState = state
-            for node_name, snapshot in stream_graph(state, thread_id=thread):
-                latest = snapshot
-                if node_name != "planning":
-                    continue
-                snap_payload = latest.get("input_payload") or {}
-                exec_mode = str(latest.get("execution_mode") or mode).lower()
-                if mission_handoff_needed(
-                    latest, snap_payload, execution_mode=exec_mode
-                ):
-                    mission_state = complete_mission_handoff(
-                        latest, snap_payload, source="invoke_graph_safe"
-                    )
-                    return run_mission_graph(mission_state, thread_id=thread)
-            return latest
+            return run_graph(state, thread_id=thread)
         except Exception as exc:
             handled = handle_invoke_failure(thread, exc, state=state)
             if handled and handled.get("status") == "checkpoint_reset":
@@ -690,7 +743,7 @@ class GraphRunner:
                 state = _prepare_mission_for_turn(state, payload, created=created)
             else:
                 mode = "single"
-                state = merge_state(state, execution_mode="single", mission=None)
+                state = merge_state(state, execution_mode="single")
         state = merge_state(state, execution_mode=mode)
         # Promote _skill_* to state.skill_runtime_policy for planning/tool nodes
         if payload.get("skill_id") or payload.get("_skill_policy"):
@@ -794,7 +847,7 @@ class GraphRunner:
                 state = _prepare_mission_for_turn(state, payload, created=created)
                 state = merge_state(state, execution_mode="mission")
             else:
-                state = merge_state(state, execution_mode="single", mission=None)
+                state = merge_state(state, execution_mode="single")
         elif mode == "exploration":
             state = merge_state(state, execution_mode="exploration")
             state = merge_state(state, execution_mode="exploration")
@@ -810,12 +863,11 @@ class GraphRunner:
 
     def _stream_single(self, state: AgentState, *, created: bool = True) -> Iterator[str]:
         """
-        单任务 SSE：主线程轮询 node_q 与侧信道队列，工作线程跑 stream_*_graph。
+        单任务 SSE：主线程轮询 node_q 与侧信道队列，工作线程跑 stream_graph。
 
         侧信道：progress_q、trace_q、answer_q、thinking_q、writing_q。
-        planning 后可 handoff 到 stream_mission_graph。
 
-        SSE pump: caller thread drains queues; worker runs stream_*_graph; optional mission handoff.
+        SSE pump: caller thread drains queues; worker runs stream_graph.
         """
         yield _format_stream_event(
             "task_created",
@@ -844,6 +896,7 @@ class GraphRunner:
         answer_q: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
         thinking_q: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
         writing_q: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
+        ack_q: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
         node_q: queue.SimpleQueue[tuple[str, AgentState] | None] = queue.SimpleQueue()
         stream_error: list[BaseException | None] = [None]
         last_event_at = started_at
@@ -863,49 +916,18 @@ class GraphRunner:
         def _capture_writing(delta: dict[str, Any]) -> None:
             writing_q.put(delta)
 
+        def _capture_ack(payload: dict[str, Any]) -> None:
+            ack_q.put(payload)
+
         exec_mode = str(state.get("execution_mode", "")).lower()
-        use_mission = exec_mode == "mission"
-        use_exploration = exec_mode == "exploration"
 
         def _run_graph() -> None:
             set_stream_run_context(run_id=run_id, foreground_epoch=stream_fg_epoch)
             try:
-                if use_exploration:
-                    stream_fn = stream_exploration_graph
-                    graphs = [(stream_fn, state)]
-                elif use_mission:
-                    stream_fn = stream_mission_graph
-                    graphs = [(stream_fn, state)]
-                else:
-                    graphs = [(stream_graph, state)]
-
-                for stream_fn, run_state in graphs:
-                    handoff_mission = False
-                    for node_name, snapshot in stream_fn(
-                        run_state, thread_id=graph_thread_id(run_state)
-                    ):
-                        node_q.put((node_name, snapshot))
-                        if stream_fn is stream_graph and node_name == "planning":
-                            from app.services.mission_handoff import (
-                                complete_mission_handoff,
-                                mission_handoff_needed,
-                            )
-
-                            snap_payload = snapshot.get("input_payload") or {}
-                            exec_mode = str(snapshot.get("execution_mode") or "")
-                            if mission_handoff_needed(
-                                snapshot, snap_payload, execution_mode=exec_mode
-                            ):
-                                mission_state = complete_mission_handoff(
-                                    snapshot,
-                                    snap_payload,
-                                    source="stream_single",
-                                )
-                                graphs.append((stream_mission_graph, mission_state))
-                                handoff_mission = True
-                                break
-                    if handoff_mission:
-                        continue
+                for node_name, snapshot in stream_graph(
+                    state, thread_id=graph_thread_id(state)
+                ):
+                    node_q.put((node_name, snapshot))
             except GeneratorExit:
                 raise
             except BaseException as exc:
@@ -921,6 +943,7 @@ class GraphRunner:
 
         set_progress_handler(_capture_progress)
         set_trace_handler(_capture_trace)
+        set_ack_handler(_capture_ack)
         set_answer_handler(_capture_answer if answer_stream_enabled() else None)
         set_thinking_handler(_capture_thinking if thinking_stream_enabled() else None)
         set_writing_handler(_capture_writing if writing_stream_enabled() else None)
@@ -935,6 +958,7 @@ class GraphRunner:
                     answer_q,
                     thinking_q,
                     writing_q,
+                    ack_q,
                     run_id=run_id,
                     foreground_epoch=stream_fg_epoch,
                 )
@@ -971,14 +995,28 @@ class GraphRunner:
                     item = node_q.get(timeout=0.08)
                 except queue.Empty:
                     yield from _drain_sse_side_queues(
-                        task_id, trace_q, answer_q, thinking_q, writing_q
+                        task_id,
+                        trace_q,
+                        answer_q,
+                        thinking_q,
+                        writing_q,
+                        ack_q,
+                        run_id=run_id,
+                        foreground_epoch=stream_fg_epoch,
                     )
                     continue
                 if item is None:
                     break
 
                 yield from _drain_sse_side_queues(
-                    task_id, trace_q, answer_q, thinking_q, writing_q
+                    task_id,
+                    trace_q,
+                    answer_q,
+                    thinking_q,
+                    writing_q,
+                    ack_q,
+                    run_id=run_id,
+                    foreground_epoch=stream_fg_epoch,
                 )
                 while True:
                     try:
@@ -991,7 +1029,7 @@ class GraphRunner:
                     last_event_at = time.monotonic()
 
                 node_name, snapshot = item
-                latest = snapshot
+                latest = _apply_execution_phase_status(snapshot, node_name)
                 touch_live(latest)
                 if trace_enabled():
                     trace_after_node(node_name, latest)
@@ -1011,7 +1049,12 @@ class GraphRunner:
                         "node",
                         _node_stream_payload(latest, node_name),
                     )
-                if node_name == "planning" and latest.get("plan"):
+                if node_name == "acknowledge":
+                    fg = latest.get("foreground_status") or {}
+                    last_ack = fg.get("last_ack") if isinstance(fg.get("last_ack"), dict) else {}
+                    if last_ack:
+                        yield _format_ack_event(task_id, {**last_ack, "task_id": task_id})
+                if node_name == "incremental_planning" and latest.get("plan"):
                     yield _format_stream_event(
                         "plan",
                         {
@@ -1024,17 +1067,6 @@ class GraphRunner:
                             ),
                         },
                     )
-                if node_name == "planning" and should_use_mission_runtime(
-                    latest.get("input_payload") or {},
-                    str(latest.get("execution_mode") or ""),
-                ):
-                    yield _format_progress_event(
-                        task_id,
-                        "检测到 mission 合同，转入长程执行循环…",
-                        started_at=started_at,
-                        phase="mission_handoff",
-                    )
-                last_event_at = time.monotonic()
                 if node_name == "tool_execution":
                     yield from _emit_tool_preview(latest)
                 if (
@@ -1056,6 +1088,21 @@ class GraphRunner:
                         )
                 if latest.get("policy_result") == "REVIEW" and node_name == "policy":
                     interrupted_for_review = True
+                if node_name in ("verification", "rejected"):
+                    from app.services.confirmation.stream_display import (
+                        rejection_detail,
+                        streamed_answer_revoked,
+                    )
+
+                    if streamed_answer_revoked(latest):
+                        yield _format_stream_event(
+                            "answer_revoked",
+                            {
+                                "task_id": task_id,
+                                "status": latest.get("status"),
+                                "reason": rejection_detail(latest),
+                            },
+                        )
 
             yield from _drain_sse_side_queues(
                 task_id,
@@ -1063,6 +1110,7 @@ class GraphRunner:
                 answer_q,
                 thinking_q,
                 writing_q,
+                ack_q,
                 run_id=run_id,
                 foreground_epoch=stream_fg_epoch,
             )
@@ -1081,6 +1129,7 @@ class GraphRunner:
         finally:
             set_progress_handler(None)
             set_trace_handler(None)
+            set_ack_handler(None)
             set_answer_handler(None)
             set_thinking_handler(None)
             set_writing_handler(None)
@@ -1263,25 +1312,29 @@ class GraphRunner:
         from app.services.confirmation.stream_display import (
             build_gate_sse_fields,
             client_final_answer,
+            rejection_detail,
+            streamed_answer_revoked,
         )
 
-        yield _format_stream_event(
-            "done",
-            {
-                "task_id": latest["task_id"],
-                "session_id": latest.get("session_id"),
-                "session_turn": latest.get("session_turn"),
-                "status": latest.get("status"),
-                "current_node": latest.get("current_node"),
-                "final_answer": client_final_answer(latest),
-                "structured_output": latest.get("structured_output"),
-                "review_required": latest.get("review_required"),
-                "worker_results": latest.get("worker_results"),
-                "subtasks": latest.get("subtasks"),
-                "steer_review_only": review_outline_requested(done_payload_lp),
-                **build_gate_sse_fields(latest["task_id"], latest),
-            },
-        )
+        revoked = streamed_answer_revoked(latest)
+        done_body: dict[str, Any] = {
+            "task_id": latest["task_id"],
+            "session_id": latest.get("session_id"),
+            "session_turn": latest.get("session_turn"),
+            "status": latest.get("status"),
+            "current_node": latest.get("current_node"),
+            "final_answer": client_final_answer(latest),
+            "structured_output": latest.get("structured_output"),
+            "review_required": latest.get("review_required"),
+            "worker_results": latest.get("worker_results"),
+            "subtasks": latest.get("subtasks"),
+            "steer_review_only": review_outline_requested(done_payload_lp),
+            **build_gate_sse_fields(latest["task_id"], latest),
+        }
+        if revoked:
+            done_body["answer_revoked"] = True
+            done_body["rejection_reason"] = rejection_detail(latest)
+        yield _format_stream_event("done", done_body)
 
     def steer_mission(
         self,

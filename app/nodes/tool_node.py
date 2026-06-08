@@ -148,7 +148,15 @@ def tool_execution_node(state: AgentState) -> AgentState:
             )
             return result
 
-        results = execute_tool_stages(state, stages, invoke_fn=_invoke)
+        results = execute_tool_stages(
+            state,
+            stages,
+            invoke_fn=_invoke,
+            execution_version=state.get("execution_version"),
+        )
+        from app.services.tool_commit_gate import merge_observations_to_tool_results
+
+        results = merge_observations_to_tool_results(state, results)
         if blocked_results:
             results = list(results or []) + blocked_results
 

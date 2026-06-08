@@ -13,6 +13,7 @@ from langgraph.graph import END, StateGraph
 
 from app.runtime.checkpointer import create_checkpointer
 from app.runtime.graph_cache import cached_graph_compiler
+from app.nodes.context_governance_node import context_governance_node
 from app.nodes.reasoning_node import reasoning_node
 from app.nodes.retrieval_node import retrieval_node
 from app.nodes.tool_node import tool_execution_node
@@ -25,6 +26,7 @@ def build_worker_graph() -> StateGraph:
     workflow = StateGraph(AgentState)
     workflow.add_node("retrieval", retrieval_node)
     workflow.add_node("tool_execution", tool_execution_node)
+    workflow.add_node("context_governance", context_governance_node)
     workflow.add_node("reasoning", reasoning_node)
     workflow.set_entry_point("retrieval")
     workflow.add_conditional_edges(
@@ -32,7 +34,9 @@ def build_worker_graph() -> StateGraph:
         route_after_retrieval,
         {
             "tool_execution": "tool_execution",
-            "reasoning": "reasoning",
+            "context_governance": "context_governance",
+            "retrieval": "retrieval",
+            "dead_letter": "reasoning",
         },
     )
     workflow.add_conditional_edges(
@@ -40,10 +44,11 @@ def build_worker_graph() -> StateGraph:
         route_after_tool,
         {
             "tool_execution": "tool_execution",
-            "reasoning": "reasoning",
+            "context_governance": "context_governance",
             "dead_letter": "reasoning",
         },
     )
+    workflow.add_edge("context_governance", "reasoning")
     workflow.add_edge("reasoning", END)
     return workflow
 

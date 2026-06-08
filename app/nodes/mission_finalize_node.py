@@ -5,7 +5,7 @@ route_mission_finalize: 无 reasoning 时回 mission_decide。
 
 mission_finalize — exit loop → user-facing reasoning.
   should_skip_llm_reasoning_on_finalize → build_mission_checkpoint_summary
-Then: policy → output_guard → output (shared with main graph tail)."""
+Then: policy → output (shared with main graph tail)."""
 
 from __future__ import annotations
 
