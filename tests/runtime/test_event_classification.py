@@ -101,6 +101,28 @@ def test_classify_user_event_matrix(payload, state_patch, expected):
     assert result.event_type in VALID_EVENT_TYPES
 
 
+def test_resend_beats_p0_heuristic_on_completed_mission(base_state):
+    """Explicit resend must win over P0 content-regex interrupt guess."""
+    from app.services.mission_schema import build_mission_dict
+
+    steer = "基于原电影编写，人物需要为原电影人物，只改动剧情走向"
+    mission = build_mission_dict(
+        base_state,
+        {"mission": {"kind": "writing"}},
+        kind="writing",
+    )
+    state = merge_state(
+        base_state,
+        status="COMPLETED",
+        mission=mission,
+        input_payload={"mission": mission, "goal": "写剧本"},
+    )
+    payload = {"goal": steer, "meta": {"resend": True}, "mission": mission}
+    result = classify_user_event(state, payload=payload)
+    assert result.event_type == "new_task"
+    assert result.source == "user_resend"
+
+
 def test_interrupt_preempts_redirect(base_state):
     from app.services.mission_schema import build_mission_dict
 

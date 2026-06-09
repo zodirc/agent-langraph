@@ -1853,6 +1853,15 @@ class GraphRunner:
         payload = dict(stored.get("input_payload") or {})
         if not routing_needs_replan(stored):
             raise ValueError(f"Task {task_id} has no pending supersede replan")
+        if status == TaskStatus.NEW.value:
+            # Completed-turn correction resets to NEW — fresh planning, not supersede.
+            prepared = merge_state(
+                stored,
+                execution_mode="single",
+                current_node="api",
+            )
+            get_state_store().save(prepared)
+            return prepared
         if status not in (
             TaskStatus.MISSION_PAUSED.value,
             TaskStatus.MISSION_RUNNING.value,
@@ -2036,6 +2045,11 @@ class GraphRunner:
                 )
                 return
         if routing_needs_replan(stored):
+            if str(stored.get("status") or "") == TaskStatus.NEW.value:
+                stream_state = merge_state(stored, execution_mode="single")
+                get_state_store().save(stream_state)
+                yield from self._stream_single(stream_state, created=False)
+                return
             yield from self.stream_supersede_mission(task_id, quiet=False)
             return
         yield _format_stream_event(

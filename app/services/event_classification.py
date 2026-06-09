@@ -260,11 +260,12 @@ def _is_constraint_supplement(
     return False
 
 
-def _interrupt_signals(
+def _explicit_interrupt(
     state: dict[str, Any],
     payload: dict[str, Any],
     goal: str,
 ) -> bool:
+    """Explicit control signals — stop/cancel, force, foreground preempt, interrupt_context."""
     steerable = _mission_steerable(state, payload)
     ip = state.get("input_payload") or {}
     if ip.get("foreground_preempt_pending"):
@@ -280,20 +281,30 @@ def _interrupt_signals(
         }:
             return True
     intervention = payload.get("intervention") if isinstance(payload.get("intervention"), dict) else {}
-    tier = classify_steer_interrupt(
-        goal,
-        intervention=intervention or None,
-        priority=int(payload.get("priority") or 0),
-        preempt=False,
-    )
-    if tier == INTERRUPT_P0 and steerable:
-        return True
     if intervention.get("force") and steerable:
         return True
     action = str(intervention.get("action") or "").lower()
     if action in {"stop", "cancel", "abort", "pause"}:
         return True
     return False
+
+
+def _heuristic_interrupt(
+    state: dict[str, Any],
+    payload: dict[str, Any],
+    goal: str,
+) -> bool:
+    """P0 content-regex steer — heuristic only; must not beat explicit resend."""
+    if not _mission_steerable(state, payload):
+        return False
+    intervention = payload.get("intervention") if isinstance(payload.get("intervention"), dict) else {}
+    tier = classify_steer_interrupt(
+        goal,
+        intervention=intervention or None,
+        priority=int(payload.get("priority") or 0),
+        preempt=False,
+    )
+    return tier == INTERRUPT_P0
 
 
 def _resume_signals(state: dict[str, Any], payload: dict[str, Any], goal: str) -> bool:
@@ -359,8 +370,8 @@ def classify_user_event(
     """
     Classify the current inbound user event.
 
-    Priority: explicit override → interrupt → resend → resume → status_query → confirm
-    → reject → redirect → clarification → new_task.
+    Priority: explicit override → explicit-interrupt → resend → heuristic-interrupt
+    → resume → status_query → confirm → reject → redirect → clarification → new_task.
     """
     payload = strip_client_routing_hints(dict(payload or state.get("input_payload") or {}))
     goal = _goal_text(payload)
@@ -375,12 +386,12 @@ def classify_user_event(
             reason=f"payload event_type={explicit}",
         )
 
-    if _interrupt_signals(state, payload, goal):
+    if _explicit_interrupt(state, payload, goal):
         return EventClassification(
             event_type="interrupt",
             event_id=event_id,
-            source="interrupt_signal",
-            reason="cancel/stop or P0 steer",
+            source="explicit_interrupt",
+            reason="stop/cancel/force or foreground preempt",
         )
 
     if _is_user_resend(payload):
@@ -389,6 +400,14 @@ def classify_user_event(
             event_id=event_id,
             source="user_resend",
             reason="user resend retry — not resume",
+        )
+
+    if _heuristic_interrupt(state, payload, goal):
+        return EventClassification(
+            event_type="interrupt",
+            event_id=event_id,
+            source="heuristic_interrupt",
+            reason="P0 steer content regex",
         )
 
     if _resume_signals(state, payload, goal):

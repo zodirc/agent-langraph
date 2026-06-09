@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any, Optional
 
-from app.runtime.state import AgentState, merge_state
+from app.runtime.state import AgentState, TaskStatus, merge_state
 from app.services.control_payload import merge_stripped_message_payload
 from app.services.event_classification import EventClassification, resolve_inbound_event
 from app.services.session_turn import build_inbound_merged_payload
@@ -38,6 +38,11 @@ def _stamp_applied(state: AgentState, client_message_id: Optional[str]) -> Agent
     payload = dict(state.get("input_payload") or {})
     payload["last_applied_message_id"] = str(client_message_id)
     return merge_state(state, input_payload=payload)
+
+
+def _completed_has_no_in_flight_work(state: AgentState) -> bool:
+    """COMPLETED tasks have nothing to preempt — correction is a fresh session turn."""
+    return str(state.get("status") or "") == TaskStatus.COMPLETED.value
 
 
 def _apply_fsm_dispatch_override(
@@ -145,15 +150,25 @@ class SessionController:
         inbound, event = _resolve_inbound_dispatch(stored, payload)
 
         if event.event_type in ("redirect", "interrupt"):
-            stored = RunController.cancel(stored, reason=f"user_{event.event_type}")
-            get_state_store().save(stored)
-            yield from self._dispatch_redirect(
-                task_id,
-                text,
-                intervention=intervention,
-                confirm=confirm,
-                priority=priority,
-            )
+            if _completed_has_no_in_flight_work(stored):
+                yield from self._dispatch_new_turn(
+                    task_id,
+                    text,
+                    payload=inbound,
+                    user_id=user_id,
+                    task_type=task_type,
+                    new_session=new_session,
+                )
+            else:
+                stored = RunController.cancel(stored, reason=f"user_{event.event_type}")
+                get_state_store().save(stored)
+                yield from self._dispatch_redirect(
+                    task_id,
+                    text,
+                    intervention=intervention,
+                    confirm=confirm,
+                    priority=priority,
+                )
         elif event.event_type == "resume":
             yield from self._runner.stream_resume_mission(task_id, confirm=confirm)
         elif event.event_type == "confirm":
