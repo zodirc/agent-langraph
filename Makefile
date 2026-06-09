@@ -16,8 +16,8 @@ up: ## 启动 HTTPS + 热更新 → https://localhost:8080/
 down: ## 停止
 	$(COMPOSE_DEV) down --remove-orphans
 
-restart: ## 重启 agent（改 config 后）
-	$(COMPOSE_DEV) restart agent
+restart: ## 重启 agent（改 .env / config 后，会重新注入环境变量）
+	$(COMPOSE_DEV) up -d --force-recreate agent
 
 logs: ## agent 日志
 	$(COMPOSE_DEV) logs -f agent

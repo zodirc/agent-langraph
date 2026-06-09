@@ -46,6 +46,12 @@ def can_finalize_turn(state: AgentState) -> tuple[bool, str]:
       - fsm=REPLANNING emit done/COMPLETED
       - contract requires side effects but none executed and not waiting
     """
+    from app.services.revision_done import is_revision_done, is_revision_turn
+
+    if is_revision_turn(state):
+        done, reason = is_revision_done(state)
+        if done:
+            return True, reason
     fsm = get_fsm_state(state)
     if fsm == FSM_REPLANNING:
         return False, "fsm_replanning"

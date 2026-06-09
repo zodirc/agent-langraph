@@ -510,6 +510,20 @@ def validate_turn_contract_execution(state: AgentState) -> list[str]:
             else:
                 issues.append("contract_batch_unit_no_review_executed")
 
+    if primary in _EXECUTION_PRIMARY_OPS and primary not in ("run_tools", "batch_unit_quality"):
+        actions = {str(a) for a in (facts.get("executed_actions") or [])}
+        obs = state.get("observation") or {}
+        if isinstance(obs, dict):
+            actions.update(str(a) for a in (obs.get("executed_actions") or []))
+        writing_needle = f"writing:{primary}"
+        writing_done = any(
+            a == writing_needle or a.endswith(f":{primary}") for a in actions
+        )
+        if primary == "edit_plot":
+            writing_done = writing_done or "edit_text_artifact" in executed
+        if not writing_done:
+            issues.append(f"contract_primary_op_unfulfilled:{primary}")
+
     return issues
 
 
@@ -525,6 +539,22 @@ _EXECUTION_PRIMARY_OPS = frozenset(
         "write_body",
     }
 )
+
+
+def revision_edit_plot_contract(
+    tools: list[str] | None = None,
+) -> dict[str, Any]:
+    """Thin revision fast path — scoped read + edit only (no mission_runtime)."""
+    scoped_tools = tools or ["read_text_artifact", "edit_text_artifact"]
+    return {
+        "intent_kind": "revision_scoped",
+        "primary_op": "edit_plot",
+        "ops": [{"contract": "edit_plot"}],
+        "tools": list(scoped_tools),
+        "forbid": ["append_body", "write_body", "mission_runtime"],
+        "override_step_policy": True,
+        "user_visible_reason": "revision_fast_path",
+    }
 
 
 def contract_requires_side_effects(
@@ -579,11 +609,43 @@ def record_contract_fulfilled(state: AgentState) -> None:
 def steer_replan_outline_plan(state: dict[str, Any], *, steer: str) -> dict[str, Any]:
     """
     Steer replan outline routing (step 3):
-    outline file exists → edit_plot; otherwise → full write_outline with steer constraints.
+    outline file exists → edit_plot or rewrite_outline by scope; missing → write_outline.
     """
     from app.services.artifact_resolver import outline_exists
+    from app.services.edit_scope import classify_edit_action
 
     steer = str(steer or "").strip()
+    if outline_exists(state) and classify_edit_action(steer, outline_exists=True) == "rewrite_outline":
+        return {
+            "plan": [
+                "rewrite outline per steer constraints",
+                "align written body if needed",
+            ],
+            "writing_intent": {
+                "enabled": True,
+                "action": "rewrite_outline",
+                "reason": steer[:240],
+            },
+            "mission_intervention": {
+                "action": "rewrite_outline",
+                "force": True,
+                "reason": steer[:240],
+                "intent_anchor": {
+                    "steer_correction": steer[-2000:],
+                    "target_hint": "outline",
+                },
+            },
+            "work_plan_patch": {
+                "cancel_kinds": ["append_body", "edit_plot"],
+                "prepend": [{"kind": "rewrite_outline", "title": "rewrite outline per steer"}],
+            },
+            "skip_retrieval": False,
+            "risk_level": "LOW",
+            "parser_fallback": True,
+            "fallback_reason": "steer_replan_rewrite_outline",
+            "steer_outline_route": "rewrite",
+        }
+
     if outline_exists(state):
         return {
             "plan": [
@@ -685,6 +747,51 @@ def apply_steer_replan_outline_route(
             out["selected_tools"] = []
             out.pop("tool_stages", None)
     return out
+
+
+def session_steer_correction_fallback_from_state(
+    state: dict[str, Any] | None,
+) -> Optional[dict[str, Any]]:
+    """
+    Session-graph safety net: COMPLETED-turn steer without steer_replan flags yet.
+
+    When turn_policy says supersede but ingress still runs stream_task, pick
+    edit_plot / rewrite_outline deterministically instead of write_outline LLM drift.
+    """
+    if not isinstance(state, dict):
+        return None
+
+    payload = dict(state.get("input_payload") or {})
+    from app.services.mission_steer import planning_steer_replan_active
+
+    if planning_steer_replan_active(payload, state):
+        return None
+
+    from app.runtime.state_field_access import mission_from_state
+
+    mission = mission_from_state(state) or payload.get("mission")
+    if not isinstance(mission, dict) or str(mission.get("kind") or "").lower() != "writing":
+        return None
+
+    from app.services.artifact_resolver import outline_exists
+
+    if not outline_exists(state):
+        return None
+
+    steer = str(payload.get("latest_steer_message") or "").strip()
+    goal = str(payload.get("goal") or "").strip()
+    text = steer or goal
+    if not text:
+        return None
+
+    from app.services.session.turn_policy import _goal_requires_steer_replan
+
+    decision = payload.get("turn_policy_decision") or {}
+    supersede = isinstance(decision, dict) and decision.get("intent") == "supersede_active_mission"
+    if not supersede and not _goal_requires_steer_replan(text):
+        return None
+
+    return steer_replan_outline_plan(state, steer=text)
 
 
 def steer_replan_planning_fallback_from_state(

@@ -53,6 +53,13 @@ def invalidate_turn_contract_payload(
     pass establishes a new contract.
     """
     out = dict(payload)
+    if (
+        reason != REASON_STEER
+        and out.get("steer_contract_pinned")
+        and out.get("steer_planning_done")
+        and reason not in (REASON_NON_RECOVERABLE_FAILURE,)
+    ):
+        return out
     had_contract = contract_from_payload(out) is not None
     for key in ("turn_contract", "selected_tools", "tool_params", "tool_stages"):
         out.pop(key, None)

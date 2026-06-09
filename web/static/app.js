@@ -436,10 +436,10 @@ function rebindStreamElementsFromDom() {
   thinkingStreamEl =
     thinkingPanelEl?.querySelector(".trace-thinking") ||
     outputEl.querySelector(".trace-thinking");
-  answerStreamEl = outputEl.querySelector(".answer-stream");
+  answerStreamEl = outputEl.querySelector(".file-panel:not(.turn-frozen) .answer-stream");
   tracePanelEl =
-    outputEl.querySelector(".trace-panel:not(.thinking-panel)") ||
-    outputEl.querySelector(".trace-panel");
+    outputEl.querySelector(".trace-panel:not(.turn-frozen):not(.thinking-panel)") ||
+    outputEl.querySelector(".trace-panel:not(.thinking-panel)");
   traceLineCount = tracePanelEl?.querySelectorAll(".line.trace").length || 0;
   writingWorkspaceHeaderEl = outputEl.querySelector(".writing-workspace-header");
   writingWorkspaceEl = outputEl.querySelector(".writing-workspace");
@@ -829,10 +829,35 @@ function stopDetachedBackendWatch() {
     clearInterval(detachedBackendWatchTimer);
     detachedBackendWatchTimer = null;
   }
-  backendExecutorActive = false;
+  if (!userStopPendingTaskId) {
+    backendExecutorActive = false;
+  }
   detachedPollLastNode = "";
   detachedPollLastStatus = "";
   detachedBackendWatchSeenActive = false;
+}
+
+function refreshStopPendingStatus() {
+  if (!runStatusEl) return false;
+  const tid = userStopPendingTaskId || activeTaskId || getSessionId();
+  if (userStopPendingTaskId && userStopPendingTaskId === tid && backendExecutorActive) {
+    runStatusEl.hidden = false;
+    runStatusEl.classList.add("is-busy");
+    runStatusEl.textContent = "停止中…";
+    return true;
+  }
+  return false;
+}
+
+function clearUserStopPending(taskId) {
+  const tid = String(taskId || "");
+  if (!userStopPendingTaskId || (tid && userStopPendingTaskId !== tid)) return;
+  userStopPendingTaskId = null;
+  if (runStatusEl && !running) {
+    runStatusEl.classList.remove("is-busy");
+    runStatusEl.hidden = true;
+    runStatusEl.textContent = "";
+  }
 }
 
 function announceDetachedBackendEnded(taskId, data, { allowOnPageLoad = false } = {}) {
@@ -875,11 +900,16 @@ async function syncBackendExecutionFromStatus(taskId) {
   const fsm = getFsmState(data);
   sessionMissionExecutorActive = fsm === "RUNNING" && executorActive;
   sessionHasInFlightMission = isTaskLiveOnServer(data, null);
-  if (!running && executorActive) {
-    setRunning(true, { preserveStreamUi: true });
+  const stopPending = userStopPendingTaskId === tid;
+  if (!running && executorActive && !stopPending) {
+    setRunning(true, { preserveStreamUi: true, preserveRunTimer: true });
     recordPolledFlowNode(tid, data);
+  } else if (!running && executorActive && stopPending) {
+    recordPolledFlowNode(tid, data);
+    refreshStopPendingStatus();
   } else if (!running && !executorActive) {
     recordPolledFlowNode(tid, data);
+    if (stopPending) clearUserStopPending(tid);
   }
   await refreshFlowPanel(tid);
   updateStopButtonState();
@@ -916,11 +946,15 @@ function startDetachedBackendWatch(taskId, { announce = false } = {}) {
       detachedBackendWatchSeenActive = true;
       return;
     }
+    const stopWasPending = userStopPendingTaskId === tid;
     stopDetachedBackendWatch();
     announceDetachedBackendEnded(tid, data);
     sessionHasInFlightMission = isTaskLiveOnServer(data, null);
+    clearUserStopPending(tid);
     updateStopButtonState();
-    void flushPendingStreamInputQueue();
+    if (!stopWasPending) {
+      void flushPendingStreamInputQueue();
+    }
   }, DETACHED_BACKEND_POLL_MS);
 }
 
@@ -1255,6 +1289,8 @@ let detachedBackendAnnouncedForTask = null;
 let detachedBackendEndAnnouncedForTask = null;
 /** Whether detached watch ever saw executor_active=true (only then announce "ended"). */
 let detachedBackendWatchSeenActive = false;
+/** Task id while user requested stop; suppresses detached-watch "running" UI until executor ends. */
+let userStopPendingTaskId = null;
 /** True while restoreSessionOnLoad is rehydrating UI — suppress internal ops noise. */
 let sessionRecoveringFromPageLoad = false;
 const DETACHED_BACKEND_POLL_MS = 2500;
@@ -1560,6 +1596,7 @@ function resetActiveSessionRuntime() {
   detachedBackendAnnouncedForTask = null;
   detachedBackendEndAnnouncedForTask = null;
   detachedBackendWatchSeenActive = false;
+  userStopPendingTaskId = null;
   backendExecutorActive = false;
   sessionMissionExecutorActive = false;
   sessionHasInFlightMission = false;
@@ -2838,6 +2875,16 @@ function detachTurnStreamRefs() {
   writingFileBlocks.clear();
 }
 
+function freezeAnswerStreamPanel() {
+  if (!answerStreamEl) return;
+  const panel = answerStreamEl.closest(".file-panel");
+  const header = panel?.previousElementSibling;
+  if (header?.classList?.contains("content-header")) {
+    header.classList.add("turn-frozen");
+  }
+  if (panel) panel.classList.add("turn-frozen");
+}
+
 /** Freeze current turn stream panels in DOM so the next turn gets its own panels. */
 function finalizeTurnStreamPanels() {
   if (thinkingHeaderEl) thinkingHeaderEl.classList.add("turn-frozen");
@@ -2849,13 +2896,11 @@ function finalizeTurnStreamPanels() {
     }
     tracePanelEl.classList.add("turn-frozen");
   }
-  if (answerStreamText) {
+  if (answerStreamEl) {
+    freezeAnswerStreamPanel();
+  } else if (answerStreamText) {
     appendCompletedAnswer(answerStreamText);
-  } else if (answerStreamEl) {
-    const text = String(answerStreamEl.textContent || "").trim();
-    if (text) appendCompletedAnswer(text);
   }
-  clearAnswerStream();
   detachTurnStreamRefs();
   tracePanelEl = null;
   traceLineCount = 0;
@@ -2874,6 +2919,7 @@ function writingFileStatusLabel(status, filename = "") {
   const outline = isOutlineArtifactFilename(filename);
   if (status === "stopped") return "已停止";
   if (status === "preview") return outline ? "待确认大纲节选" : "待确认节选";
+  if (status === "diff") return outline ? "大纲编辑 diff" : "编辑 diff";
   if (status === "done") return outline ? "大纲已写入" : "已追加";
   if (status === "writing") return outline ? "正在生成大纲" : "正在追加";
   return "等待";
@@ -3017,8 +3063,12 @@ function getOrCreateWritingFileBlock(filename, { reset = false, phase = "" } = {
     block.bodyEl.replaceChildren();
   } else if (phase === "done") {
     block.status = "done";
-  } else if (phase === "preview") {
-    block.status = "preview";
+  } else if (phase === "preview" || phase === "diff_preview") {
+    block.status = phase === "diff_preview" ? "diff" : "preview";
+    if (phase === "diff_preview") {
+      block.panelEl.classList.add("diff-preview-panel");
+      block.bodyEl.classList.add("diff-preview-content");
+    }
   } else if (block.status === "pending") {
     block.status = "writing";
   }
@@ -3216,6 +3266,11 @@ function appendWritingDelta(text, payload = {}) {
   if (!text) return;
   const fname = (payload.filename || "").trim();
   const phase = String(payload.phase || "");
+  if (phase === "diff_preview") {
+    appendToFileWorkspace(fname || "artifact", text, { replace: true, phase: "diff_preview", focus: true });
+    writingStreamCharsThisTurn += String(text).length;
+    return;
+  }
   if (
     payload.reset ||
     phase === "start" ||
@@ -3250,7 +3305,11 @@ function appendWritingDelta(text, payload = {}) {
 }
 
 function ensureAnswerStreamLine() {
-  if (answerStreamEl) return answerStreamEl;
+  if (answerStreamEl) {
+    if (!answerStreamEl.closest(".turn-frozen")) return answerStreamEl;
+    answerStreamEl = null;
+    answerStreamText = "";
+  }
   const block = createContentBlock({
     title: "── 回答（流式）──",
     panelClass: "file-panel",
@@ -3528,6 +3587,7 @@ async function sendMessage(taskId, text, opts = {}) {
   }
   turnDelivered = false;
   finalizeTurnStreamPanels();
+  clearUserStopPending(tid);
   setRunning(true);
   shownConfirmationKeys.clear();
   writingStreamCharsThisTurn = 0;
@@ -3604,6 +3664,8 @@ async function stopActiveMission() {
   const hadClientStream =
     Boolean(activeSseAbortController) || Boolean(activeResumeAbortController) || running;
   const taskId = activeTaskId || getSessionId();
+  userStopPendingTaskId = taskId;
+  pendingStreamInputQueue = [];
   if (activeResumeAbortController) {
     try {
       activeResumeAbortController.abort();
@@ -3626,9 +3688,7 @@ async function stopActiveMission() {
     markActiveWritingStreamStopped();
   }
   setRunning(false);
-  sessionHasInFlightMission = false;
-  backendExecutorActive = false;
-  sessionMissionExecutorActive = false;
+  refreshStopPendingStatus();
   updateStopButtonState();
 
   let res = await apiFetch(`/tasks/${taskId}/stop`, {
@@ -3637,7 +3697,8 @@ async function stopActiveMission() {
   });
   if (!res.ok && res.status === 404) {
     appendLine("任务不存在或已结束。", "system");
-    await afterClientStreamEnded(taskId, { detached: hadClientStream });
+    clearUserStopPending(taskId);
+    await afterClientStreamEnded(taskId, { detached: hadClientStream, reason: "user_stop" });
     return true;
   }
   if (!res.ok) {
@@ -3655,6 +3716,9 @@ async function stopActiveMission() {
     if (res.status !== 401) {
       appendLine(`stop failed: ${res.status} ${await res.text()}`, "error");
     }
+    await afterClientStreamEnded(taskId, { detached: hadClientStream, reason: "user_stop" });
+    refreshStopPendingStatus();
+    updateStopButtonState();
     return false;
   }
   const data = await res.json();
@@ -3668,9 +3732,14 @@ async function stopActiveMission() {
       "system"
     );
   }
-  await afterClientStreamEnded(taskId, { detached: hadClientStream });
+  await afterClientStreamEnded(taskId, { detached: hadClientStream, reason: "user_stop" });
   const refreshed = await fetchTaskStatus(taskId);
   if (refreshed) lastHydratedStatus = refreshed;
+  if (!refreshed?.executor_active) {
+    clearUserStopPending(taskId);
+  } else {
+    refreshStopPendingStatus();
+  }
   await refreshFlowPanel(taskId);
   updateStopButtonState();
   return true;
@@ -4235,14 +4304,23 @@ function handleStreamEvent(eventType, payload, taskIdRef, streamOpts = {}) {
         appendLine("任务未通过验证（REJECTED）", "error");
       }
     } else if (payload.final_answer && !gatePending) {
-      const finalText = String(payload.final_answer);
-      if (answerStreamEl && finalText.length >= answerStreamText.length) {
-        setAnswerStreamText(finalText);
-      } else if (!answerStreamEl) {
-        if (finalText.length >= FILE_PREVIEW_BOX_MIN_CHARS) {
-          appendFileContentBlock("── 回答 ──", finalText);
+      const finalText = String(payload.final_answer).trim();
+      if (finalText) {
+        if (answerStreamEl && finalText.length >= answerStreamText.length) {
+          setAnswerStreamText(finalText);
         } else {
-          appendLine(finalText, "result");
+          const frozenAnswer = outputEl?.querySelector(".file-panel.turn-frozen .answer-stream");
+          const frozenText = String(frozenAnswer?.textContent || "").trim();
+          if (frozenAnswer && finalText.length > frozenText.length) {
+            frozenAnswer.replaceChildren();
+            frozenAnswer.appendChild(document.createTextNode(finalText));
+          } else if (!answerVisibleInOutput()) {
+            if (finalText.length >= FILE_PREVIEW_BOX_MIN_CHARS) {
+              appendFileContentBlock("── 回答 ──", finalText);
+            } else {
+              appendLine(finalText, "result");
+            }
+          }
         }
       }
     } else if (!gatePending && !answerStreamEl) {
@@ -5234,7 +5312,7 @@ document.addEventListener("click", (ev) => {
 
 if (stopBtnEl) {
   stopBtnEl.addEventListener("click", async () => {
-    if (!(running || sessionHasInFlightMission)) return;
+    if (!canStopCurrentSession()) return;
     stopBtnEl.disabled = true;
     try {
       await stopActiveMission();

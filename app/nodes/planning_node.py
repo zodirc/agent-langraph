@@ -214,6 +214,118 @@ def planning_node(state: AgentState) -> AgentState:
             get_state_store().save(updated)
             return updated
 
+        from app.services.pre_planning import (
+            revision_thin_plan,
+            revision_thin_tool_stages,
+            revision_thin_tools,
+            should_skip_revision_planning_llm,
+        )
+
+        if should_skip_revision_planning_llm(state):
+            from app.domain.revision_intent import RevisionIntent
+            from app.domain.writing_intent_model import IntentAnchor, WritingIntentRecord
+            from app.services.task_drift import detect_task_drift
+
+            drift = detect_task_drift(state)
+            if drift.get("drift_type") == "mission_rebound":
+                from app.services.turn_event_log import record_turn_event
+
+                state = record_turn_event(
+                    state,
+                    "mission_rebound_detected",
+                    "planning",
+                    "revision_rebound",
+                    {
+                        "confirmed_goal": drift.get("confirmed_goal"),
+                        "current_planning_goal": drift.get("current_planning_goal"),
+                    },
+                )
+                mission_block = dict(state.get("mission") or payload.get("mission") or {})
+                rev = RevisionIntent.from_dict(
+                    (state.get("intent_observation") or {}).get("revision_intent")
+                    or payload.get("revision_intent")
+                )
+                if rev:
+                    mission_block["objective"] = rev.revision_summary
+                    payload["mission"] = mission_block
+                    state = merge_state(state, mission=mission_block, input_payload=payload)
+
+            intent_obs = state.get("intent_observation") or {}
+            rev_raw = intent_obs.get("revision_intent") or payload.get("revision_intent") or {}
+            rev = RevisionIntent.from_dict(rev_raw)
+            anchor = IntentAnchor(
+                target_hint=str(rev.artifact_role if rev else "outline"),  # type: ignore[arg-type]
+            )
+            if rev and rev.edits:
+                first = rev.edits[0]
+                anchor.old_text = first.old_text
+                anchor.new_text = first.new_text
+            writing_intent = WritingIntentRecord(
+                action="edit_plot",
+                anchor=anchor,
+                source="revision_thin_plan",
+                reason="revision_executable",
+            )
+            payload["writing_intent"] = writing_intent.to_dict()
+            payload["revision_intent"] = rev_raw
+            payload["thin_execution_profile"] = "revision_scoped"
+            from app.services.turn_contract import revision_edit_plot_contract
+
+            tools = revision_thin_tools()
+            stages = revision_thin_tool_stages()
+            payload["turn_contract"] = revision_edit_plot_contract(tools)
+            plan = revision_thin_plan()
+            report_plan_trace(
+                plan,
+                tools,
+                meta={
+                    "planning": "revision_thin_skip",
+                    "target_mode": payload.get("target_mode"),
+                    "is_revision": True,
+                    "skip_retrieval": True,
+                },
+            )
+            updated = merge_state(
+                state,
+                input_payload={**payload, "tool_stages": stages},
+                plan=plan,
+                selected_tools=tools,
+                manuscript=ms.to_dict(),
+                skip_retrieval=True,
+                review_required=False,
+                status=TaskStatus.PLANNED.value,
+                current_node="planning",
+                audit_log=append_audit(
+                    state,
+                    "planning",
+                    "revision_thin_skip",
+                    {
+                        "revision_scope": rev.revision_scope if rev else "",
+                        "planning_required_source": payload.get("planning_required_source"),
+                    },
+                ),
+            )
+            from app.services.route_audit.pipeline import run_route_audit_pipeline
+
+            updated = run_route_audit_pipeline(updated)
+            from app.services.confirmation.revision_boundary import (
+                maybe_apply_revision_clarification,
+                stream_revision_boundary,
+            )
+
+            if rev_raw:
+                stream_revision_boundary(
+                    task_id=task_id,
+                    revision_intent=rev_raw,
+                    node="planning",
+                )
+            updated = maybe_apply_revision_clarification(updated)
+            if (updated.get("input_payload") or {}).get("revision_clarification_pending"):
+                get_state_store().save(updated)
+                return updated
+            get_state_store().save(updated)
+            return updated
+
         if should_skip_planning_llm(state):
             intent = {
                 "enabled": False,
@@ -420,6 +532,7 @@ def planning_node(state: AgentState) -> AgentState:
             user_content = json.dumps(planning_payload, ensure_ascii=False)
         from app.services.turn_contract import (
             planning_fallback_from_state,
+            session_steer_correction_fallback_from_state,
             steer_replan_planning_fallback_from_state,
         )
         from app.services.turn_contract_lifecycle import contract_replan_required
@@ -437,38 +550,65 @@ def planning_node(state: AgentState) -> AgentState:
                 result = dict(fb)
 
         if result is None:
-            system_prompt = build_planning_system_prompt(state)
-            if trace_enabled():
-                raw = stream_llm_trace(
-                    stream_structured(
+            fb = session_steer_correction_fallback_from_state(plan_state)
+            if fb:
+                result = dict(fb)
+                payload["skip_planning_llm"] = True
+
+        from app.services.pre_planning import should_skip_edit_plot_planning_llm
+
+        if result is None and should_skip_edit_plot_planning_llm(state):
+            fb = steer_replan_planning_fallback_from_state(plan_state)
+            if fb:
+                result = dict(fb)
+                payload["skip_planning_llm"] = True
+
+        if result is None:
+            if steer_planning_active:
+                calls = int(payload.get("steer_planning_llm_calls") or 0)
+                max_calls = int(getattr(settings, "STEER_PLANNING_LLM_MAX_CALLS", 2))
+                if calls >= max_calls:
+                    fb = steer_replan_planning_fallback_from_state(plan_state)
+                    if fb:
+                        result = dict(fb)
+                        payload["skip_planning_llm"] = True
+            if result is None:
+                system_prompt = build_planning_system_prompt(state)
+                if trace_enabled():
+                    raw = stream_llm_trace(
+                        stream_structured(
+                            "planning",
+                            system_prompt,
+                            user_content,
+                            budget_ctx=budget_ctx,
+                            trace_state=state,
+                            stream_node="planning",
+                            stream_phase="planning_llm",
+                        ),
+                        node="planning",
+                        phase="planning_llm",
+                        field="plan",
+                        extra_fields=["risk_level"] if trace_verbose() else None,
+                    )
+                    result = extract_json_with_repair(
+                        "planning",
+                        raw,
+                        prefer_keys=("plan",),
+                        trace_state=state,
+                        budget_ctx=budget_ctx,
+                    )
+                else:
+                    result = invoke_structured(
                         "planning",
                         system_prompt,
                         user_content,
                         budget_ctx=budget_ctx,
                         trace_state=state,
-                        stream_node="planning",
-                        stream_phase="planning_llm",
-                    ),
-                    node="planning",
-                    phase="planning_llm",
-                    field="plan",
-                    extra_fields=["risk_level"] if trace_verbose() else None,
-                )
-                result = extract_json_with_repair(
-                    "planning",
-                    raw,
-                    prefer_keys=("plan",),
-                    trace_state=state,
-                    budget_ctx=budget_ctx,
-                )
-            else:
-                result = invoke_structured(
-                    "planning",
-                    system_prompt,
-                    user_content,
-                    budget_ctx=budget_ctx,
-                    trace_state=state,
-                )
+                    )
+                if steer_planning_active:
+                    payload["steer_planning_llm_calls"] = (
+                        int(payload.get("steer_planning_llm_calls") or 0) + 1
+                    )
 
         payload_patch = result.pop("_input_payload_patch", None)
         if payload_patch:
@@ -890,6 +1030,9 @@ def planning_node(state: AgentState) -> AgentState:
         from app.services.route_audit.pipeline import run_route_audit_pipeline
 
         updated = run_route_audit_pipeline(updated)
+        from app.services.planning_clarification import maybe_apply_steer_clarification
+
+        updated = maybe_apply_steer_clarification(updated)
         get_state_store().save(updated)
         return updated
     except BudgetExceededError as exc:
