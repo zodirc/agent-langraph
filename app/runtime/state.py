@@ -73,6 +73,10 @@ class AgentState(TypedDict):
     review_feedback: Optional[dict[str, Any]]
 
     final_answer: Optional[str]
+    streaming_answer_text: Optional[str]
+    streaming_answer_status: Optional[str]
+    streaming_thinking_text: Optional[str]
+    streaming_thinking_status: Optional[str]
     artifacts: Optional[list[dict[str, Any]]]
     structured_output: Optional[dict[str, Any]]
 
@@ -166,6 +170,10 @@ def create_initial_state(
             "review_required": False,
             "review_feedback": None,
             "final_answer": None,
+            "streaming_answer_text": None,
+            "streaming_answer_status": None,
+            "streaming_thinking_text": None,
+            "streaming_thinking_status": None,
             "artifacts": None,
             "structured_output": None,
             "memory_hits": None,

@@ -140,6 +140,8 @@ class SessionController:
             intervention=intervention,
             priority=priority,
         )
+        if client_message_id:
+            payload = {**payload, "client_message_id": str(client_message_id)}
         inbound, event = _resolve_inbound_dispatch(stored, payload)
 
         if event.event_type in ("redirect", "interrupt"):

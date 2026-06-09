@@ -20,10 +20,6 @@ def route_after_context_governance(state: AgentState) -> str:
 def route_after_verification(state: AgentState) -> str:
     decision = state.get("submission_decision") or {}
     action = str(decision.get("decision") or "submit")
-    if action == "retry_reasoning":
-        return "reasoning_or_writing"
-    if action == "retry_planning":
-        return "incremental_planning"
     if action == "reject":
         return "rejected"
     if action == "human_review":

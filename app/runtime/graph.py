@@ -3,7 +3,7 @@
 Frozen spine (optimization_execution_plan §2.1):
 event_classification → acknowledge → interrupt_control → incremental_planning
 → retrieval/tool/engineering → context_governance → reasoning_or_writing
-→ verification → policy → output → memory_writeback → eval_capture → END
+→ verification → policy → output → END (memory/eval async via close_turn_async)
 """
 
 from __future__ import annotations
@@ -18,12 +18,10 @@ from app.nodes.acknowledge_node import acknowledge_node
 from app.nodes.context_governance_node import context_governance_node
 from app.nodes.dead_letter_node import dead_letter_node
 from app.nodes.engineering_node import engineering_execution_node
-from app.nodes.eval_capture_node import eval_capture_node
 from app.nodes.event_classification_node import event_classification_node
 from app.nodes.human_review_node import human_review_node
 from app.nodes.incremental_planning_node import incremental_planning_node
 from app.nodes.interrupt_control_node import interrupt_control_node
-from app.nodes.memory_writeback_node import memory_writeback_node
 from app.nodes.output_node import output_node
 from app.nodes.policy_node import policy_node
 from app.nodes.reasoning_or_writing_node import (
@@ -77,8 +75,6 @@ def build_agent_graph() -> StateGraph:
     workflow.add_node("rejected", rejected_node)
     workflow.add_node("dead_letter", dead_letter_node)
     workflow.add_node("output", output_node)
-    workflow.add_node("memory_writeback", memory_writeback_node)
-    workflow.add_node("eval_capture", eval_capture_node)
 
     workflow.set_entry_point("event_classification")
 
@@ -139,6 +135,7 @@ def build_agent_graph() -> StateGraph:
         {
             "tool_execution": "tool_execution",
             "context_governance": "context_governance",
+            "incremental_planning": "incremental_planning",
             "dead_letter": "dead_letter",
         },
     )
@@ -153,6 +150,7 @@ def build_agent_graph() -> StateGraph:
         {
             "reasoning_or_writing": "reasoning_or_writing",
             "verification": "verification",
+            "rejected": "rejected",
             "dead_letter": "dead_letter",
         },
     )
@@ -163,8 +161,6 @@ def build_agent_graph() -> StateGraph:
             "policy": "policy",
             "human_review": "human_review",
             "rejected": "rejected",
-            "incremental_planning": "incremental_planning",
-            "reasoning_or_writing": "reasoning_or_writing",
         },
     )
     workflow.add_conditional_edges(
@@ -179,9 +175,7 @@ def build_agent_graph() -> StateGraph:
     workflow.add_edge("rejected", END)
     workflow.add_edge("dead_letter", END)
     workflow.add_edge("human_review", "verification")
-    workflow.add_edge("output", "memory_writeback")
-    workflow.add_edge("memory_writeback", "eval_capture")
-    workflow.add_edge("eval_capture", END)
+    workflow.add_edge("output", END)
 
     return workflow
 

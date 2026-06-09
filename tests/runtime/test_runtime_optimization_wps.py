@@ -105,14 +105,15 @@ def test_compression_class_mapping():
 
 
 # --- WP-3.1 verification ---
-def test_verification_submission_decision_retry():
+def test_verification_submission_decision_submit_without_reflection_routes():
     from app.nodes.verification_node import _submission_decision
 
     state = merge_state(
         create_initial_state(),
         reflection_result={"route": "retry_reasoning"},
+        status=TaskStatus.REASONED.value,
     )
-    assert _submission_decision(state)["decision"] == "retry_reasoning"
+    assert _submission_decision(state)["decision"] == "submit"
 
 
 # --- WP-3.2 eval capture ---
@@ -213,6 +214,9 @@ def test_graph_spine_includes_core_nodes():
         "context_governance",
         "reasoning_or_writing",
         "verification",
-        "eval_capture",
+        "output",
     ):
         assert name in nodes
+    assert any(
+        edge.source == "output" and edge.target == "__end__" for edge in graph.edges
+    )

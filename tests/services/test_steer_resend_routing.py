@@ -66,6 +66,45 @@ def test_turn_policy_steer_correction_is_supersede(base_state):
     assert decision.intent == "supersede_active_mission"
 
 
+def test_turn_policy_steer_correction_with_inherited_mission_payload(base_state):
+    """Merged input_payload carries mission block — must not classify as resume."""
+    from app.services.control_payload import merge_stripped_message_payload
+
+    mission = {"kind": "writing", "objective": "写暗战同人", "total_target_chars": 400000}
+    goal = "我认为，该电影不应该出现架空人物，即人物主角以黑客帝国3里出现过的人物为准"
+    state = merge_state(
+        base_state,
+        mission=mission,
+        session_turn=2,
+        status="MISSION_RUNNING",
+        input_payload={"goal": "写暗战同人", "mission": mission},
+    )
+    payload = merge_stripped_message_payload(state.get("input_payload"), text=goal)
+    decision = resolve_session_turn(state, payload, goal, incoming=payload)
+    assert decision.intent == "supersede_active_mission"
+    assert decision.source == "steer_correction"
+
+
+def test_inbound_steer_correction_classifies_redirect_not_resume(base_state):
+    from app.services.session_controller import _resolve_inbound_dispatch
+    from app.services.control_payload import merge_stripped_message_payload
+
+    mission = {"kind": "writing", "objective": "写暗战同人", "total_target_chars": 400000}
+    goal = "我认为，该电影不应该出现架空人物，即人物主角以黑客帝国3里出现过的人物为准"
+    state = merge_state(
+        base_state,
+        mission=mission,
+        session_turn=2,
+        status="MISSION_RUNNING",
+        fsm_state="RUNNING",
+        input_payload={"goal": "写暗战同人", "mission": mission},
+    )
+    payload = merge_stripped_message_payload(state.get("input_payload"), text=goal)
+    _inbound, event = _resolve_inbound_dispatch(state, payload)
+    assert event.event_type == "redirect"
+    assert event.event_type != "resume"
+
+
 def test_steer_requires_planning_after_session_steer_apply(base_state):
     from app.services.mission_steer import apply_steer_message
 

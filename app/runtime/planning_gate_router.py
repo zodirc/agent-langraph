@@ -24,6 +24,19 @@ from app.services.turn_contract import contract_requires_side_effects, contract_
 
 def route_after_incremental_planning(state: AgentState) -> str:
     """Post-incremental_planning fork: retrieval / tools / engineering / generation prep."""
+    from app.services.planning_retry_signals import (
+        apply_planning_replan_signal,
+        can_planning_replan_again,
+        planning_replan_needed,
+    )
+
+    if planning_replan_needed(state) and can_planning_replan_again(state):
+        replanned = apply_planning_replan_signal(state)
+        from app.services.state_store import get_state_store
+
+        get_state_store().save(replanned)
+        return "incremental_planning"
+
     if graph_turn_had_fatal_error(state):
         return _failed_route(state, "incremental_planning")
 

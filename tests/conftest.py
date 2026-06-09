@@ -268,6 +268,12 @@ def _reset_service_singletons() -> None:
     schedule_mod._store = None
     tq_mod._store = None
     pack_mod._store = None
+    import app.services.chat_message_store as chat_msg_store_mod
+    import app.services.chat_message_service as chat_msg_svc_mod
+
+    chat_msg_store_mod._store = None
+    chat_msg_store_mod._stores = {}
+    chat_msg_svc_mod._service = None
     bootstrap_mod.reset_tool_bootstrap()
     graph_module.get_compiled_graph.cache_clear()
     mission_graph_module.get_compiled_mission_graph.cache_clear()
@@ -287,6 +293,9 @@ def isolated_stores(test_settings: Settings, monkeypatch: pytest.MonkeyPatch) ->
     audit_store = AuditStore(test_settings.SQLITE_PATH)
     llm_interaction_store = LlmInteractionStore(test_settings.SQLITE_PATH)
     knowledge_store = KnowledgeStore(test_settings.SQLITE_PATH)
+    from app.services.chat_message_store import ChatMessageStore
+
+    chat_message_store = ChatMessageStore(test_settings.SQLITE_PATH)
     registry = ToolRegistry()
 
     monkeypatch.setattr("app.services.state_store.get_state_store", lambda: state_store)
@@ -297,6 +306,29 @@ def isolated_stores(test_settings: Settings, monkeypatch: pytest.MonkeyPatch) ->
         lambda: llm_interaction_store,
     )
     monkeypatch.setattr("app.services.knowledge_store.get_knowledge_store", lambda: knowledge_store)
+    monkeypatch.setattr(
+        "app.services.chat_message_store.get_chat_message_store",
+        lambda: chat_message_store,
+    )
+    monkeypatch.setattr(
+        "app.services.chat_message_service.get_chat_message_store",
+        lambda: chat_message_store,
+    )
+    import app.services.chat_message_service as chat_msg_svc_mod
+
+    chat_msg_svc_mod._service = None
+    _chat_svc_holder: list = []
+
+    def _chat_message_service() -> chat_msg_svc_mod.ChatMessageService:
+        if not _chat_svc_holder:
+            _chat_svc_holder.append(chat_msg_svc_mod.ChatMessageService())
+        return _chat_svc_holder[0]
+
+    monkeypatch.setattr(chat_msg_svc_mod, "get_chat_message_service", _chat_message_service)
+    monkeypatch.setattr(
+        "app.services.chat_message_service.get_chat_message_service",
+        _chat_message_service,
+    )
     dlq_store = __import__(
         "app.services.dead_letter_store", fromlist=["DeadLetterStore"]
     ).DeadLetterStore(test_settings.SQLITE_PATH)

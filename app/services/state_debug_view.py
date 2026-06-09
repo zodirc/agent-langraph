@@ -25,6 +25,7 @@ _LIST_ITEM_LIMITS: dict[str, int] = {
 # Max string length for large prose fields.
 _STRING_CHAR_LIMITS: dict[str, int] = {
     "final_answer": 12000,
+    "streaming_answer_text": 12000,
 }
 
 

@@ -207,7 +207,9 @@ def test_task_control_endpoints(isolated_stores, monkeypatch):
 
     snap = client.get(f"/tasks/{state['task_id']}/control")
     assert snap.status_code == 200
-    assert snap.json()["pause_requested"] is True
+    assert snap.json()["pause_requested"] is False
+    paused = store.load(state["task_id"])
+    assert paused["status"] == "MISSION_PAUSED"
 
     stream = client.post(f"/tasks/{state['task_id']}/interrupt-stream")
     assert stream.status_code == 200
@@ -216,3 +218,5 @@ def test_task_control_endpoints(isolated_stores, monkeypatch):
     cancel = client.post(f"/tasks/{state['task_id']}/cancel")
     assert cancel.status_code == 200
     assert cancel.json()["control_action"] == "cancel_task"
+    cancelled = store.load(state["task_id"])
+    assert cancelled["status"] == "CANCELLED"

@@ -55,8 +55,7 @@ def build_supervisor_graph() -> StateGraph:
     )
     workflow.add_edge("rejected", END)
     workflow.add_edge("human_review", "output")
-    workflow.add_edge("output", "memory_writeback")
-    workflow.add_edge("memory_writeback", END)
+    workflow.add_edge("output", END)
 
     return workflow
 

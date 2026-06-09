@@ -74,6 +74,28 @@ def route_after_retrieval(state: AgentState) -> str:
 
 def route_after_tool(state: AgentState) -> str:
     """Retry tool node or route to dead letter (architecture §22)."""
+    from app.services.planning_retry_signals import (
+        apply_planning_replan_signal,
+        can_planning_replan_again,
+        execution_contract_replan_needed,
+    )
+
+    if (
+        not graph_last_tool_failed(state)
+        and execution_contract_replan_needed(state)
+        and can_planning_replan_again(state)
+    ):
+        from app.services.turn_contract import validate_turn_contract_execution
+
+        replanned = apply_planning_replan_signal(
+            state,
+            issues=validate_turn_contract_execution(state),
+        )
+        from app.services.state_store import get_state_store
+
+        get_state_store().save(replanned)
+        return "incremental_planning"
+
     if graph_last_tool_failed(state):
         if _is_non_retryable_tool_failure(state):
             return "context_governance"

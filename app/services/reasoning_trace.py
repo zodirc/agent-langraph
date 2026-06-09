@@ -173,6 +173,16 @@ def emit_field_deltas(
     if field in ("summary", "artifact_code") and answer_stream_enabled():
         if field == "artifact_code" and not stream_artifact_code_enabled():
             return new_len
+        if field == "summary":
+            from app.services.stream_output_guard import (
+                is_stream_output_blocked,
+                scan_summary_before_emit,
+            )
+
+            if is_stream_output_blocked():
+                return seen_len
+            if scan_summary_before_emit(text):
+                return seen_len
         report_answer_delta(node=node, phase=phase, text=chunk, field=field)
         return new_len
     if not trace_enabled():
@@ -223,6 +233,11 @@ def stream_llm_trace(
 ) -> str:
     if not trace_enabled() and not answer_stream_enabled():
         return "".join(chunks)
+
+    if answer_stream_enabled():
+        from app.services.stream_output_guard import reset_stream_output_guard
+
+        reset_stream_output_guard()
 
     accumulated = ""
     seen: dict[str, int] = {field: 0}

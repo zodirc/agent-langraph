@@ -162,6 +162,8 @@ def _reset_execution_fields(state: AgentState, payload: dict[str, Any]) -> Agent
         review_required=False,
         review_feedback=None,
         final_answer=None,
+        streaming_answer_text=None,
+        streaming_answer_status=None,
         structured_output=None,
         errors=[],
         retry_count=0,

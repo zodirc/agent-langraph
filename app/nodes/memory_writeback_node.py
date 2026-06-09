@@ -1,7 +1,4 @@
-"""记忆写回
-主图固定边 Fixed edge: output → memory_writeback → END.
-
-Persist turn episode + session summary to long-term memory (graph terminal)."""
+"""记忆写回 — invoked by close_turn_async after delivered (no longer on graph spine)."""
 
 from __future__ import annotations
 

@@ -92,6 +92,7 @@ def purge_task_remains(task_id: str, *, session_turn_hint: int = 1) -> dict[str,
     session_id is the same as task_id in this runtime.
     """
     from app.services.audit_store import get_audit_store
+    from app.services.chat_message_store import get_chat_message_store
     from app.services.llm_interaction_store import get_llm_interaction_store
     from app.services.memory_store import get_memory_store
 
@@ -100,6 +101,7 @@ def purge_task_remains(task_id: str, *, session_turn_hint: int = 1) -> dict[str,
         "audit_events_removed": get_audit_store().delete_events_for_task(task_id),
         "llm_interactions_removed": get_llm_interaction_store().delete_for_task(task_id),
         "memories_removed": get_memory_store().delete_for_session(task_id),
+        "chat_messages_removed": get_chat_message_store().delete_for_task(task_id),
         "checkpoint_threads_removed": delete_checkpoints_for_task(
             task_id, max_turn_hint=session_turn_hint
         ),

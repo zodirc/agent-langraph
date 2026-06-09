@@ -131,6 +131,12 @@ performance:
   fast_reasoning_enabled: false
   skip_retrieval_when_no_tools: true
   stream_save_every_node: false
+  stream_draft_persist_enabled: true   # 流式 answer_delta 增量落库，刷新后可恢复已生成文本
+  stream_draft_save_interval_sec: 2.0
+  stream_draft_save_min_chars: 80
+  chat_message_persist_enabled: true      # Phase 2: message table + structured_blocks
+  chat_message_flush_interval_sec: 2.0
+  chat_message_flush_min_events: 4
   reasoning_trace_enabled: true
   reasoning_trace_verbose: true    # 节点上下文、检索/工具详情、更小流式增量
   reasoning_trace_max_chars: 48000

@@ -298,7 +298,11 @@ def finalize_turn_history(state: AgentState) -> AgentState:
     updated = apply_conversation_history(state, history)
     if answer and not str(updated.get("final_answer") or "").strip():
         updated = merge_state(updated, final_answer=answer)
-    return write_turn_memories(updated)
+    if should_persist_assistant_turn(state, answer) or str(updated.get("final_answer") or "").strip():
+        from app.services.streaming_draft import clear_streaming_draft
+
+        updated = clear_streaming_draft(updated)
+    return updated
 
 
 def write_turn_memories(state: AgentState) -> AgentState:

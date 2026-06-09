@@ -78,6 +78,10 @@ class AgentStateModel(BaseModel):
     review_required: bool = False
     review_feedback: Optional[dict[str, Any]] = None
     final_answer: Optional[str] = None
+    streaming_answer_text: Optional[str] = None
+    streaming_answer_status: Optional[str] = None
+    streaming_thinking_text: Optional[str] = None
+    streaming_thinking_status: Optional[str] = None
     artifacts: Optional[list[dict[str, Any]]] = None
     structured_output: Optional[dict[str, Any]] = None
     memory_hits: Optional[list[dict[str, Any]]] = None

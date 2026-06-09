@@ -2,7 +2,7 @@
  * Web CLI（/chat）：消费 graph_runner 的 SSE。
  *
  * 请求链：handleCommand → sendMessage → POST /tasks/{id}/message/stream → consumeSseStream → handleStreamEvent。
- * 事件：task_created、progress、trace、node、plan、writing_delta、answer_delta、done 等。
+ * 事件：task_created、progress、trace、node、plan、writing_delta、answer_delta、delivered、done 等。
  * Steer：/append、/confirm、/resume、/stop；Skill 经 buildTaskRequestBody 与 URL 参数注入。
  *
  * Web CLI SSE client for graph_runner.stream_task.
@@ -50,6 +50,8 @@ const interactionModeSelectEl = document.getElementById("interaction-mode-select
 const commandSlashMenuEl = document.getElementById("command-slash-menu");
 
 let running = false;
+/** True after SSE `delivered`: input unlocked while stream may still finish. */
+let turnDelivered = false;
 let activeTaskId = null;
 let runTimer = null;
 let runStartedAt = 0;
@@ -189,9 +191,118 @@ if (outputEl) {
 }
 
 function isTerminalTaskStatus(status) {
-  const st = String(status || "");
-  return st === "COMPLETED" || st === "FAILED" || st === "DEAD_LETTER" || st === "WRITING_FAILED" || st === "REJECTED";
+  return [
+    "COMPLETED",
+    "REJECTED",
+    "FAILED",
+    "DEAD_LETTER",
+    "CANCELLED",
+    "ABANDONED",
+    "WAITING_REVIEW",
+    "REVIEW_RESOLVED",
+    "WRITING_FAILED",
+  ].includes(String(status || ""));
 }
+
+/** True only when the server still has an active graph/stream for this task. */
+function isTaskLiveOnServer(statusData, messageView) {
+  if (!statusData || isTerminalTaskStatus(statusData.status)) return false;
+  return Boolean(
+    statusData.live_running ||
+      statusData.streaming_answer_active ||
+      statusData.executor_active ||
+      messageView?.live_running ||
+      messageView?.streaming_answer_active
+  );
+}
+
+/** Whether the terminal header should show the running indicator after hydrate/resume. */
+function shouldShowRunningUi(statusData, messageView) {
+  if (isTaskLiveOnServer(statusData, messageView)) return true;
+  if (!statusData || isTerminalTaskStatus(statusData.status)) return false;
+  return Boolean(messageView?.streaming_answer_active || messageView?.streaming_message_id);
+}
+
+function applyHydratedRunningState(
+  statusData,
+  messageView,
+  { preserveStreamUi = true, elapsedSec, phaseMessage, deferTimer = false } = {}
+) {
+  if (statusData) lastHydratedStatus = statusData;
+  const show = shouldShowRunningUi(statusData, messageView);
+  sessionHasInFlightMission = show;
+  backendExecutorActive = Boolean(statusData?.executor_active);
+  if (show) {
+    if (deferTimer) {
+      running = true;
+      updateStopButtonState();
+    } else {
+      setRunning(true, { preserveStreamUi, elapsedSec, phaseMessage });
+    }
+    const tid = String(statusData?.task_id || activeTaskId || getSessionId() || "");
+    if (tid && statusData && !isTerminalTaskStatus(statusData.status)) {
+      if (statusData.executor_active) {
+        startDetachedBackendWatch(tid, { announce: false });
+      }
+      ensureFlowAutoRefresh();
+    }
+  } else {
+    setRunning(false);
+    if (!statusData?.executor_active) stopDetachedBackendWatch();
+  }
+  updateStopButtonState();
+}
+
+function extractLastProgressFromEvents(events) {
+  let last = null;
+  for (const ev of sortEventsBySeq(events || [])) {
+    if (String(ev?.event_type || "") === "ui_progress") last = ev;
+  }
+  if (!last) return null;
+  const meta = last.meta && typeof last.meta === "object" ? last.meta : {};
+  const message = String(last.delta || "").trim();
+  return {
+    elapsedSec: Math.max(0, Number(meta.elapsed_sec) || 0),
+    message,
+    phase: String(meta.phase || "working"),
+  };
+}
+
+function reanchorRunTimer(elapsedSec, phaseMessage) {
+  if (!Number.isFinite(elapsedSec) || elapsedSec < 0) return;
+  runStartedAt = Date.now() - Math.floor(elapsedSec) * 1000;
+  const msg = String(phaseMessage || "").trim();
+  if (msg) {
+    lastPhaseMessage = msg.length > 48 ? `${msg.slice(0, 48)}…` : msg;
+  }
+  refreshRunStatusDisplay();
+}
+
+function syncRunTimerFromProgressPayload(payload) {
+  if (!payload || typeof payload.elapsed_sec !== "number") return;
+  reanchorRunTimer(payload.elapsed_sec, payload.message);
+}
+
+function refreshRunStatusDisplay() {
+  if (!runStatusEl || !running || !runStartedAt) return;
+  const sec = Math.max(0, Math.floor((Date.now() - runStartedAt) / 1000));
+  runStatusEl.hidden = false;
+  runStatusEl.classList.add("is-busy");
+  runStatusEl.textContent = `运行中 ${sec}s · ${lastPhaseMessage || "处理中"}`;
+}
+
+function restoreLastProgressFromEvents(events) {
+  const progress = extractLastProgressFromEvents(events);
+  if (!progress) return null;
+  updateProgressLine({
+    message: progress.message,
+    phase: progress.phase,
+    elapsed_sec: progress.elapsedSec,
+  });
+  return progress;
+}
+
+let hydrateSessionSeq = 0;
 
 function formatFlowAt(raw) {
   if (!raw) return "-";
@@ -233,6 +344,160 @@ function mergeFlowHistories(...lists) {
 }
 
 const FLOW_HISTORY_STORAGE_PREFIX = "agent_flow_history:";
+const UI_SNAPSHOT_PREFIX = "agent_ui_snapshot:";
+const UI_SNAPSHOT_MAX_HTML_CHARS = 1_500_000;
+const UI_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+let uiSnapshotPersistTimer = null;
+let uiSnapshotIntervalTimer = null;
+
+function uiSnapshotKey(taskId) {
+  return UI_SNAPSHOT_PREFIX + String(taskId || "").trim();
+}
+
+function captureUiSnapshot(taskId) {
+  const tid = String(taskId || activeTaskId || getSessionId() || "").trim();
+  if (!tid || !outputEl) return null;
+  let html = outputEl.innerHTML;
+  if (html.length > UI_SNAPSHOT_MAX_HTML_CHARS) {
+    html = html.slice(html.length - UI_SNAPSHOT_MAX_HTML_CHARS);
+  }
+  return {
+    v: 1,
+    taskId: tid,
+    savedAt: Date.now(),
+    html,
+    answerStreamText,
+    thinkingStreamText,
+    writingStreamText: String(writingStreamText || ""),
+    lastEventSeq: loadResumeSeq(tid),
+    running: Boolean(running),
+    runStartedAt: runStartedAt || 0,
+  };
+}
+
+function persistUiSnapshot(taskId) {
+  const snap = captureUiSnapshot(taskId);
+  if (!snap) return;
+  try {
+    sessionStorage.setItem(uiSnapshotKey(snap.taskId), JSON.stringify(snap));
+  } catch {
+    /* quota — best-effort */
+  }
+}
+
+function schedulePersistUiSnapshot(taskId) {
+  const tid = String(taskId || activeTaskId || getSessionId() || "").trim();
+  if (!tid) return;
+  if (uiSnapshotPersistTimer) clearTimeout(uiSnapshotPersistTimer);
+  uiSnapshotPersistTimer = setTimeout(() => {
+    uiSnapshotPersistTimer = null;
+    persistUiSnapshot(tid);
+  }, 600);
+}
+
+function clearUiSnapshot(taskId) {
+  const tid = String(taskId || activeTaskId || getSessionId() || "").trim();
+  if (!tid) return;
+  try {
+    sessionStorage.removeItem(uiSnapshotKey(tid));
+  } catch {
+    /* ignore */
+  }
+}
+
+function readUiSnapshotThinking(taskId) {
+  const tid = String(taskId || "").trim();
+  if (!tid) return "";
+  try {
+    const raw = sessionStorage.getItem(uiSnapshotKey(tid));
+    if (!raw) return "";
+    const snap = JSON.parse(raw);
+    if (!snap || snap.taskId !== tid) return "";
+    if (Date.now() - Number(snap.savedAt || 0) > UI_SNAPSHOT_MAX_AGE_MS) return "";
+    return String(snap.thinkingStreamText || "");
+  } catch {
+    return "";
+  }
+}
+
+function ensureUiSnapshotInterval() {
+  if (uiSnapshotIntervalTimer) return;
+  uiSnapshotIntervalTimer = setInterval(() => {
+    if (!running && !activeResumeAbortController) return;
+    persistUiSnapshot(activeTaskId || getSessionId());
+  }, 3000);
+}
+
+function rebindStreamElementsFromDom() {
+  if (!outputEl) return;
+  progressLineEl = outputEl.querySelector(".line.progress");
+  thinkingHeaderEl = outputEl.querySelector(".thinking-header");
+  thinkingPanelEl = outputEl.querySelector(".thinking-panel");
+  thinkingStreamEl =
+    thinkingPanelEl?.querySelector(".trace-thinking") ||
+    outputEl.querySelector(".trace-thinking");
+  answerStreamEl = outputEl.querySelector(".answer-stream");
+  tracePanelEl =
+    outputEl.querySelector(".trace-panel:not(.thinking-panel)") ||
+    outputEl.querySelector(".trace-panel");
+  traceLineCount = tracePanelEl?.querySelectorAll(".line.trace").length || 0;
+  writingWorkspaceHeaderEl = outputEl.querySelector(".writing-workspace-header");
+  writingWorkspaceEl = outputEl.querySelector(".writing-workspace");
+  writingFileBlocks.clear();
+  activeWritingBlock = null;
+  for (const section of outputEl.querySelectorAll(".file-stream-block[data-filename]")) {
+    const fname = String(section.getAttribute("data-filename") || section.dataset.filename || "").trim();
+    const panelEl = section.querySelector(".file-stream-body");
+    const bodyEl = section.querySelector(".file-stream-content");
+    const toggleEl = section.querySelector(".file-stream-toggle");
+    if (!bodyEl || !panelEl) continue;
+    const block = {
+      toggleEl,
+      panelEl,
+      bodyEl,
+      filename: fname || "artifact",
+      status: "writing",
+      collapsed: panelEl.hidden || section.classList.contains("collapsed"),
+    };
+    writingFileBlocks.set(block.filename, block);
+    activeWritingBlock = block;
+    writingStreamEl = bodyEl;
+    writingPanelEl = panelEl;
+    writingHeaderEl = toggleEl;
+  }
+}
+
+function tryRestoreUiSnapshot(taskId) {
+  const tid = String(taskId || "").trim();
+  if (!tid || !outputEl) return null;
+  try {
+    const raw = sessionStorage.getItem(uiSnapshotKey(tid));
+    if (!raw) return null;
+    const snap = JSON.parse(raw);
+    if (!snap || snap.taskId !== tid || !snap.html) return null;
+    if (Date.now() - Number(snap.savedAt || 0) > UI_SNAPSHOT_MAX_AGE_MS) {
+      clearUiSnapshot(tid);
+      return null;
+    }
+    outputEl.innerHTML = snap.html;
+    outputAutoFollow = true;
+    answerStreamText = String(snap.answerStreamText || "");
+    thinkingStreamText = String(snap.thinkingStreamText || "");
+    writingStreamText = Number(snap.writingStreamText) || String(snap.writingStreamText || "").length || 0;
+    thinkingPendingText = "";
+    writingPendingText = "";
+    rebindStreamElementsFromDom();
+    ensureUiSnapshotInterval();
+    return {
+      restored: true,
+      lastEventSeq: Number(snap.lastEventSeq || loadResumeSeq(tid)) || 0,
+      snapshotRunning: Boolean(snap.running),
+      runStartedAt: Number(snap.runStartedAt || 0),
+    };
+  } catch {
+    return null;
+  }
+}
 
 function persistFlowHistoryToStorage(taskId) {
   const tid = String(taskId || "").trim();
@@ -567,6 +832,18 @@ function stopDetachedBackendWatch() {
   backendExecutorActive = false;
   detachedPollLastNode = "";
   detachedPollLastStatus = "";
+  detachedBackendWatchSeenActive = false;
+}
+
+function announceDetachedBackendEnded(taskId, data, { allowOnPageLoad = false } = {}) {
+  const tid = String(taskId || "");
+  if (!tid || detachedBackendEndAnnouncedForTask === tid) return;
+  if (sessionRecoveringFromPageLoad && !allowOnPageLoad) return;
+  if (!detachedBackendWatchSeenActive) return;
+  detachedBackendEndAnnouncedForTask = tid;
+  const st = String(data?.status || "");
+  const node = String(data?.current_node || "?");
+  appendLine(`后台执行已结束（${st} · ${node}）`, "system");
 }
 
 function recordPolledFlowNode(taskId, data) {
@@ -597,9 +874,11 @@ async function syncBackendExecutionFromStatus(taskId) {
   backendExecutorActive = executorActive;
   const fsm = getFsmState(data);
   sessionMissionExecutorActive = fsm === "RUNNING" && executorActive;
-  sessionHasInFlightMission =
-    executorActive || fsm === "RUNNING" || fsm === "REPLANNING" || fsm === "WAITING_USER";
+  sessionHasInFlightMission = isTaskLiveOnServer(data, null);
   if (!running && executorActive) {
+    setRunning(true, { preserveStreamUi: true });
+    recordPolledFlowNode(tid, data);
+  } else if (!running && !executorActive) {
     recordPolledFlowNode(tid, data);
   }
   await refreshFlowPanel(tid);
@@ -621,21 +900,27 @@ function startDetachedBackendWatch(taskId, { announce = false } = {}) {
   const tid = taskId || activeTaskId || getSessionId();
   if (!tid) return;
   stopDetachedBackendWatch();
+  detachedBackendWatchSeenActive = Boolean(backendExecutorActive);
   if (announce) announceDetachedBackend(tid);
-  void syncBackendExecutionFromStatus(tid);
+  void syncBackendExecutionFromStatus(tid).then((data) => {
+    if (data?.executor_active) {
+      detachedBackendWatchSeenActive = true;
+    } else if (!data?.executor_active && !detachedBackendWatchSeenActive) {
+      stopDetachedBackendWatch();
+    }
+  });
   detachedBackendWatchTimer = setInterval(async () => {
     const data = await syncBackendExecutionFromStatus(tid);
     if (!data) return;
-    if (!data.executor_active) {
-      stopDetachedBackendWatch();
-      const st = String(data.status || "");
-      const node = String(data.current_node || "?");
-      const fsm = getFsmState(data);
-      appendLine(`后台执行已结束（${st} · ${node}）`, "system");
-      sessionHasInFlightMission =
-        fsm === "RUNNING" || fsm === "REPLANNING" || fsm === "WAITING_USER";
-      updateStopButtonState();
+    if (data.executor_active) {
+      detachedBackendWatchSeenActive = true;
+      return;
     }
+    stopDetachedBackendWatch();
+    announceDetachedBackendEnded(tid, data);
+    sessionHasInFlightMission = isTaskLiveOnServer(data, null);
+    updateStopButtonState();
+    void flushPendingStreamInputQueue();
   }, DETACHED_BACKEND_POLL_MS);
 }
 
@@ -688,10 +973,24 @@ function enqueuePendingStreamInput(text) {
 }
 
 async function flushPendingStreamInputQueue() {
-  if (!pendingStreamInputQueue.length || running) return;
+  if (!pendingStreamInputQueue.length || (running && !turnDelivered)) return;
   const merged = pendingStreamInputQueue.join("\n\n");
   pendingStreamInputQueue = [];
-  await handleCommand(merged);
+  const taskId = activeTaskId || getSessionId();
+  if (isMissionStatusQuery(merged)) {
+    await handleMissionStatusInquiry(merged, { suppressUserEcho: true });
+    return;
+  }
+  appendLine("（正在发送排队纠偏，将开启可见重规划流…）", "system");
+  const ok = await sendMessage(taskId, merged, { suppressUserEcho: true });
+  if (ok) sessionHasInFlightMission = true;
+  updateStopButtonState();
+}
+
+function shouldQueueInboundWhileExecuting(statusData) {
+  if ((running && !turnDelivered) || (activeSseAbortController && !turnDelivered)) return true;
+  if (Boolean(statusData?.executor_active)) return true;
+  return backendExecutorActive;
 }
 
 function stopFlowAutoRefresh() {
@@ -880,9 +1179,17 @@ function closeStateDebugModal() {
   stopStateDebugAutoRefresh();
 }
 
+function canStopCurrentSession() {
+  if (running || sessionHasInFlightMission || backendExecutorActive || activeResumeAbortController) {
+    return true;
+  }
+  if (!lastHydratedStatus || isTerminalTaskStatus(lastHydratedStatus.status)) return false;
+  return !isTaskLiveOnServer(lastHydratedStatus, null);
+}
+
 function updateStopButtonState() {
   if (!stopBtnEl) return;
-  stopBtnEl.disabled = !(running || sessionHasInFlightMission || backendExecutorActive);
+  stopBtnEl.disabled = !canStopCurrentSession();
 }
 /** Mission control-loop nodes — hidden from chat; use progress/trace for long runs. */
 const MISSION_LOOP_NODES = new Set([
@@ -935,6 +1242,8 @@ const VALID_INTERACTION_MODES = new Set(["auto", "chat", "engineering", "writing
 /** Next stream submit uses new_session=true once (after /new). */
 let pendingNewSession = false;
 let sessionHasInFlightMission = false;
+/** Last status payload from hydrateSessionContent (enables Stop on orphan non-terminal tasks). */
+let lastHydratedStatus = null;
 /** True when this process is executing the mission graph (SSE may be disconnected). */
 let sessionMissionExecutorActive = false;
 /** Backend graph still running after client SSE disconnected (interrupt-stream / stop). */
@@ -943,6 +1252,11 @@ let detachedBackendWatchTimer = null;
 let detachedPollLastNode = "";
 let detachedPollLastStatus = "";
 let detachedBackendAnnouncedForTask = null;
+let detachedBackendEndAnnouncedForTask = null;
+/** Whether detached watch ever saw executor_active=true (only then announce "ended"). */
+let detachedBackendWatchSeenActive = false;
+/** True while restoreSessionOnLoad is rehydrating UI — suppress internal ops noise. */
+let sessionRecoveringFromPageLoad = false;
 const DETACHED_BACKEND_POLL_MS = 2500;
 /** QA stream: queue follow-up inputs until current SSE turn finishes. */
 let pendingStreamInputQueue = [];
@@ -1072,15 +1386,17 @@ function applyTheme(theme) {
 }
 
 function requestNewSession(sourceLabel) {
-  if (running && activeTaskId) {
+  if (running || activeResumeAbortController || sessionHasInFlightMission || backendExecutorActive) {
     appendLine("当前有任务运行中，无法新建会话。请先 Stop 或 /stop。", "error");
     return null;
   }
-  sessionHasInFlightMission = false;
   return startNewSession(sourceLabel);
 }
 
 function startNewSession(sourceLabel) {
+  hydrateSessionSeq += 1;
+  resetActiveSessionRuntime();
+  sessionHasInFlightMission = false;
   const id = newSessionId();
   localStorage.setItem(SESSION_KEY, id);
   pendingNewSession = true;
@@ -1115,6 +1431,15 @@ function attachSessionFlags(body) {
 }
 
 function clearScreen() {
+  clearUiSnapshot(activeTaskId || getSessionId());
+  resetOutputForRestore();
+  shownConfirmationKeys.clear();
+  writingStreamCharsThisTurn = 0;
+}
+
+/** Reset terminal output before a deterministic server restore (no snapshot side effects). */
+function resetOutputForRestore() {
+  if (!outputEl) return;
   outputEl.replaceChildren();
   outputAutoFollow = true;
   progressLineEl = null;
@@ -1122,9 +1447,12 @@ function clearScreen() {
   resetAnswerStream();
   resetThinkingStream();
   resetWritingStream();
+  detachTurnStreamRefs();
   contentBlockSeq = 0;
-  shownConfirmationKeys.clear();
-  writingStreamCharsThisTurn = 0;
+}
+
+function shouldPersistUiSnapshot() {
+  return Boolean(running || activeResumeAbortController);
 }
 
 function getAuthHeaders() {
@@ -1218,24 +1546,53 @@ function escapeAttr(value) {
   return escapeHtml(value).replaceAll('"', "&quot;");
 }
 
-function selectHistorySession(taskId) {
+function resetActiveSessionRuntime() {
+  if (activeResumeAbortController) {
+    try {
+      activeResumeAbortController.abort();
+    } catch {
+      /* ignore */
+    }
+    activeResumeAbortController = null;
+  }
+  abortActiveSseStream("session_switch");
+  stopDetachedBackendWatch();
+  detachedBackendAnnouncedForTask = null;
+  detachedBackendEndAnnouncedForTask = null;
+  detachedBackendWatchSeenActive = false;
+  backendExecutorActive = false;
+  sessionMissionExecutorActive = false;
+  sessionHasInFlightMission = false;
+  lastHydratedStatus = null;
+  if (running) {
+    setRunning(false);
+  } else {
+    stopRunTimer();
+  }
+  stopFlowAutoRefresh();
+  updateStopButtonState();
+}
+
+async function selectHistorySession(taskId) {
   if (!taskId) return;
   if (getSessionId() === taskId) {
     requestNewSession("再次点击当前会话");
     return;
   }
-  if (running && activeTaskId && activeTaskId !== taskId) {
-    appendLine("当前有任务运行中，无法切换会话。请先 /stop。", "error");
-    return;
+  if (running || activeResumeAbortController || sessionHasInFlightMission || backendExecutorActive) {
+    if (activeTaskId && activeTaskId !== taskId) {
+      appendLine("当前有任务运行中，无法切换会话。请先 /stop。", "error");
+      return;
+    }
   }
+  hydrateSessionSeq += 1;
+  resetActiveSessionRuntime();
   localStorage.setItem(SESSION_KEY, taskId);
   sessionFilesCurrentPath = ".";
   updateSessionBadge(taskId);
-  activeTaskId = null;
   sessionHasInFlightMission = false;
   clearScreen();
-  appendLine(`switched session: ${taskId.slice(0, 8)}…`, "system");
-  refreshFlowPanel(taskId);
+  await hydrateSessionContent(taskId);
   refreshHistorySidebar();
   refreshSessionFilesPane();
 }
@@ -2356,6 +2713,7 @@ function appendLine(text, className = "system") {
   line.textContent = text;
   outputEl.appendChild(line);
   scrollOutputIfPinned();
+  schedulePersistUiSnapshot();
 }
 
 function isThinkingSpam(message) {
@@ -2389,19 +2747,25 @@ function updateProgressLine(payload) {
   scrollOutputIfPinned();
 }
 
-function startRunTimer() {
-  runStartedAt = Date.now();
-  lastPhaseMessage = "处理中";
+function startRunTimer({ elapsedSec, phaseMessage, preserveStartedAt = false } = {}) {
+  if (typeof elapsedSec === "number" && elapsedSec >= 0) {
+    runStartedAt = Date.now() - Math.floor(elapsedSec) * 1000;
+  } else if (!preserveStartedAt || !runStartedAt) {
+    runStartedAt = Date.now();
+  }
+  const msg = String(phaseMessage || "").trim();
+  if (msg) {
+    lastPhaseMessage = msg.length > 48 ? `${msg.slice(0, 48)}…` : msg;
+  } else if (!lastPhaseMessage) {
+    lastPhaseMessage = "处理中";
+  }
   if (runTimer) clearInterval(runTimer);
   if (runStatusEl) {
     runStatusEl.hidden = false;
     runStatusEl.classList.add("is-busy");
   }
-  runTimer = setInterval(() => {
-    const sec = Math.floor((Date.now() - runStartedAt) / 1000);
-    const phase = lastPhaseMessage || "处理中";
-    if (runStatusEl) runStatusEl.textContent = `运行中 ${sec}s · ${phase}`;
-  }, 1000);
+  refreshRunStatusDisplay();
+  runTimer = setInterval(refreshRunStatusDisplay, 1000);
 }
 
 function stopRunTimer() {
@@ -2452,6 +2816,53 @@ function resetWritingStream() {
   writingWorkspaceEl = null;
   writingWorkspaceHeaderEl = null;
   writingStreamCharsThisTurn = 0;
+}
+
+/** Detach live-stream DOM refs so the next block renders in its own panel (history restore). */
+function detachTurnStreamRefs() {
+  thinkingHeaderEl = null;
+  thinkingPanelEl = null;
+  thinkingStreamEl = null;
+  thinkingStreamText = "";
+  thinkingPendingText = "";
+  thinkingFlushScheduled = false;
+  answerStreamEl = null;
+  answerStreamText = "";
+  writingHeaderEl = null;
+  writingPanelEl = null;
+  writingStreamEl = null;
+  writingStreamText = "";
+  writingPendingText = "";
+  writingFlushScheduled = false;
+  activeWritingBlock = null;
+  writingFileBlocks.clear();
+}
+
+/** Freeze current turn stream panels in DOM so the next turn gets its own panels. */
+function finalizeTurnStreamPanels() {
+  if (thinkingHeaderEl) thinkingHeaderEl.classList.add("turn-frozen");
+  if (thinkingPanelEl) thinkingPanelEl.classList.add("turn-frozen");
+  if (tracePanelEl) {
+    const header = tracePanelEl.previousElementSibling;
+    if (header?.classList?.contains("trace-header")) {
+      header.classList.add("turn-frozen");
+    }
+    tracePanelEl.classList.add("turn-frozen");
+  }
+  if (answerStreamText) {
+    appendCompletedAnswer(answerStreamText);
+  } else if (answerStreamEl) {
+    const text = String(answerStreamEl.textContent || "").trim();
+    if (text) appendCompletedAnswer(text);
+  }
+  clearAnswerStream();
+  detachTurnStreamRefs();
+  tracePanelEl = null;
+  traceLineCount = 0;
+  if (progressLineEl) {
+    progressLineEl.classList.add("turn-frozen");
+    progressLineEl = null;
+  }
 }
 
 function isOutlineArtifactFilename(filename) {
@@ -2703,6 +3114,13 @@ function appendFileContentBlock(title, text, opts = {}) {
 
 /** Create thinking UI early so SSE thinking_delta has a visible target (above trace panel). */
 function prepareThinkingStreamUi() {
+  if (!thinkingPanelEl && outputEl) {
+    thinkingHeaderEl = outputEl.querySelector(".thinking-header:not(.turn-frozen)");
+    thinkingPanelEl = outputEl.querySelector(".thinking-panel:not(.turn-frozen)");
+    thinkingStreamEl =
+      thinkingPanelEl?.querySelector(".trace-thinking") ||
+      outputEl.querySelector(".trace-thinking:not(.turn-frozen .trace-thinking)");
+  }
   if (thinkingPanelEl) return thinkingPanelEl;
   thinkingHeaderEl = document.createElement("p");
   thinkingHeaderEl.className = "line trace-header thinking-header";
@@ -2730,6 +3148,7 @@ function flushThinkingPending() {
   thinkingStreamText += chunk;
   scrollToBottomIfPinned(thinkingPanelEl);
   scrollOutputIfPinned();
+  schedulePersistUiSnapshot();
 }
 
 function scheduleThinkingFlush() {
@@ -2867,6 +3286,16 @@ function clearAnswerStream() {
   answerStreamEl = null;
 }
 
+function appendCompletedAnswer(text) {
+  const body = String(text || "").trim();
+  if (!body) return;
+  if (body.length >= FILE_PREVIEW_BOX_MIN_CHARS) {
+    appendFileContentBlock("── 回答 ──", body);
+  } else {
+    appendLine(body, "result");
+  }
+}
+
 function ensureTracePanel() {
   if (tracePanelEl) return tracePanelEl;
   const header = document.createElement("p");
@@ -2901,19 +3330,27 @@ function appendTraceLine(text, payload = {}) {
   scrollOutputIfPinned();
 }
 
-function setRunning(value) {
+function setRunning(value, opts = {}) {
   running = value;
+  const preserveStreamUi = Boolean(opts.preserveStreamUi);
   if (value) {
     pendingStreamInputQueue = [];
     stopDetachedBackendWatch();
     detachedBackendAnnouncedForTask = null;
-    resetTraceBlock();
-    resetAnswerStream();
-    resetThinkingStream();
-    resetWritingStream();
-    prepareThinkingStreamUi();
-    startRunTimer();
+    if (!preserveStreamUi) {
+      resetTraceBlock();
+      resetAnswerStream();
+      resetThinkingStream();
+      resetWritingStream();
+      prepareThinkingStreamUi();
+    }
+    startRunTimer({
+      elapsedSec: opts.elapsedSec,
+      phaseMessage: opts.phaseMessage,
+      preserveStartedAt: Boolean(opts.preserveRunTimer),
+    });
     ensureFlowAutoRefresh();
+    ensureUiSnapshotInterval();
   } else {
     stopRunTimer();
     if (!activeTaskId && !backendExecutorActive) stopFlowAutoRefresh();
@@ -3089,6 +3526,8 @@ async function sendMessage(taskId, text, opts = {}) {
     abortActiveSseStream(opts.interruptReason || "user_message");
     markActiveWritingStreamStopped();
   }
+  turnDelivered = false;
+  finalizeTurnStreamPanels();
   setRunning(true);
   shownConfirmationKeys.clear();
   writingStreamCharsThisTurn = 0;
@@ -3150,6 +3589,7 @@ async function sendMessage(taskId, text, opts = {}) {
     if (activeSseAbortController === sseAbort) {
       activeSseAbortController = null;
     }
+    turnDelivered = false;
     setRunning(false);
     const endedTaskId = taskIdRef?.id || tid || activeTaskId;
     const wasDetached = Boolean(sseAbort?.signal?.aborted);
@@ -3161,8 +3601,17 @@ async function sendMessage(taskId, text, opts = {}) {
 }
 
 async function stopActiveMission() {
-  const hadClientStream = Boolean(activeSseAbortController) || running;
+  const hadClientStream =
+    Boolean(activeSseAbortController) || Boolean(activeResumeAbortController) || running;
   const taskId = activeTaskId || getSessionId();
+  if (activeResumeAbortController) {
+    try {
+      activeResumeAbortController.abort();
+    } catch {
+      /* ignore */
+    }
+    activeResumeAbortController = null;
+  }
   if (hadClientStream) {
     try {
       await apiFetch(`/tasks/${taskId}/interrupt-stream`, {
@@ -3175,15 +3624,33 @@ async function stopActiveMission() {
     }
     abortActiveSseStream("user_stop");
     markActiveWritingStreamStopped();
-    if (running) {
-      setRunning(false);
+  }
+  setRunning(false);
+  sessionHasInFlightMission = false;
+  backendExecutorActive = false;
+  sessionMissionExecutorActive = false;
+  updateStopButtonState();
+
+  let res = await apiFetch(`/tasks/${taskId}/stop`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok && res.status === 404) {
+    appendLine("任务不存在或已结束。", "system");
+    await afterClientStreamEnded(taskId, { detached: hadClientStream });
+    return true;
+  }
+  if (!res.ok) {
+    try {
+      res = await apiFetch(`/tasks/${taskId}/cancel`, {
+        method: "POST",
+        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "user_requested", requested_by: "web" }),
+      });
+    } catch {
+      /* best-effort */
     }
   }
-  const res = await apiFetch(`/tasks/${taskId}/pause`, {
-    method: "POST",
-    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ reason: "user_requested", requested_by: "web" }),
-  });
   if (!res.ok) {
     if (res.status !== 401) {
       appendLine(`stop failed: ${res.status} ${await res.text()}`, "error");
@@ -3196,12 +3663,16 @@ async function stopActiveMission() {
   if (!display.system_lines?.length) {
     appendLine(
       hadClientStream
-        ? "已停止接收流式输出；任务将在当前步骤安全点暂停…"
-        : "pause requested, waiting current step to yield…",
+        ? "已请求停止；流式输出已断开，任务将在当前步骤安全点暂停。"
+        : "已请求停止任务。",
       "system"
     );
   }
   await afterClientStreamEnded(taskId, { detached: hadClientStream });
+  const refreshed = await fetchTaskStatus(taskId);
+  if (refreshed) lastHydratedStatus = refreshed;
+  await refreshFlowPanel(taskId);
+  updateStopButtonState();
   return true;
 }
 
@@ -3479,8 +3950,22 @@ function handleStreamEvent(eventType, payload, taskIdRef, streamOpts = {}) {
     activeTaskId = payload.task_id;
     ensureFlowAutoRefresh();
   }
+  if (payload.seq != null && payload.task_id) {
+    saveResumeSeq(payload.task_id, payload.seq);
+  }
 
-  if (eventType === "task_created") {
+  if (eventType === "stream_resume") {
+    if (!streamOpts.silentResume && !streamOpts.silentSteerUi) {
+      appendLine(`续播自 seq ${payload.after_seq ?? 0}`, "system");
+    }
+  } else if (eventType === "stream_resume_done") {
+    if (payload.last_event_seq != null) {
+      saveResumeSeq(payload.task_id || taskIdRef.id, payload.last_event_seq);
+    }
+    if (shouldPersistUiSnapshot()) {
+      schedulePersistUiSnapshot(payload.task_id || taskIdRef.id);
+    }
+  } else if (eventType === "task_created") {
     if (payload.task_id) {
       flowLiveHistoryByTask.set(payload.task_id, []);
     }
@@ -3509,6 +3994,16 @@ function handleStreamEvent(eventType, payload, taskIdRef, streamOpts = {}) {
     }
   } else if (eventType === "worker") {
     appendLine(`  worker ${payload.domain}: ${payload.status} — ${payload.summary || ""}`, "node");
+  } else if (eventType === "steer_queued") {
+    appendLine("纠偏已入队，将在当前输出步骤结束后自动重规划。", "system");
+    sessionHasInFlightMission = true;
+    updateStopButtonState();
+    refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
+  } else if (eventType === "steer_applied") {
+    appendLine("纠偏已应用，准备重规划…", "system");
+    sessionHasInFlightMission = true;
+    updateStopButtonState();
+    refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
   } else if (eventType === "stream_open") {
     updateProgressLine({
       message: payload.message || "已连接服务端…",
@@ -3546,6 +4041,7 @@ function handleStreamEvent(eventType, payload, taskIdRef, streamOpts = {}) {
     if (msg) appendLine(msg, "system");
     updateProgressLine({ ...payload, message: msg || "已受理", phase: "ack" });
   } else if (eventType === "progress") {
+    syncRunTimerFromProgressPayload(payload);
     if (payload.phase === "mission_handoff") {
       sessionHasInFlightMission = true;
       updateStopButtonState();
@@ -3586,7 +4082,21 @@ function handleStreamEvent(eventType, payload, taskIdRef, streamOpts = {}) {
     } else {
       appendLine(`  tool ${tool}`, "node");
     }
+  } else if (eventType === "thinking_snapshot") {
+    restoreThinkingText(String(payload.text || ""));
+    repositionThinkingPanelAfterUserMessage();
   } else if (eventType === "thinking_delta") {
+    if (streamOpts.restoreReplay) {
+      const incoming = String(payload.text || "");
+      if (!incoming) return;
+      const current = String(thinkingStreamText || "");
+      if (current.endsWith(incoming)) return;
+      if (incoming.length > current.length && incoming.startsWith(current)) {
+        restoreThinkingText(incoming);
+        return;
+      }
+      if (current.includes(incoming) && incoming.length <= current.length) return;
+    }
     appendThinkingDelta(payload.text || "");
   } else if (eventType === "writing_delta") {
     if (silentSteer || replanObserve) return;
@@ -3606,8 +4116,19 @@ function handleStreamEvent(eventType, payload, taskIdRef, streamOpts = {}) {
     appendWritingDelta(payload.text || "", payload);
     maybeRefreshOpenFileViewer(payload.filename || "");
   } else if (eventType === "answer_delta") {
+    if (streamOpts.restoreReplay) {
+      const incoming = String(payload.text || "");
+      const current = String(answerStreamText || "");
+      if (incoming && current.endsWith(incoming)) return;
+      if (incoming && current.includes(incoming) && incoming.length <= current.length) return;
+    }
     appendAnswerDelta(payload.text || "");
   } else if (eventType === "answer_preview") {
+    if (streamOpts.restoreReplay) {
+      const incoming = String(payload.text || "").trim();
+      const current = String(answerStreamText || "").trim();
+      if (current.length >= incoming.length) return;
+    }
     setAnswerStreamText(payload.text || "");
   } else if (eventType === "answer_revoked") {
     clearAnswerStream();
@@ -3659,7 +4180,28 @@ function handleStreamEvent(eventType, payload, taskIdRef, streamOpts = {}) {
     }
   } else if (eventType === "error") {
     appendLine(payload.detail, "error");
+  } else if (eventType === "delivered") {
+    turnDelivered = true;
+    finalizeTurnStreamPanels();
+    setRunning(false);
+    refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
+    void flushPendingStreamInputQueue();
   } else if (eventType === "done") {
+    if (payload.last_event_seq != null) {
+      saveResumeSeq(payload.task_id || taskIdRef.id, payload.last_event_seq);
+    }
+    const doneTaskId = payload.task_id || taskIdRef.id;
+    const doneStatus = String(payload.status || "");
+    const terminalDone =
+      !gatePendingOnPayload(payload) &&
+      ["COMPLETED", "REJECTED", "FAILED", "DEAD_LETTER", "CANCELLED", "ABANDONED"].includes(
+        doneStatus
+      );
+    if (terminalDone) {
+      clearUiSnapshot(doneTaskId);
+    } else if (shouldPersistUiSnapshot()) {
+      persistUiSnapshot(doneTaskId);
+    }
     stopDetachedBackendWatch();
     const gatePending = gatePendingOnPayload(payload);
     if (replanObserve) {
@@ -3888,6 +4430,7 @@ async function consumeSseStream(res, taskIdRef, streamOpts = {}) {
       if (!dataLine) continue;
       try {
         handleStreamEvent(eventType, JSON.parse(dataLine), taskIdRef, streamOpts);
+        schedulePersistUiSnapshot(taskIdRef.id);
       } catch {
         /* skip malformed chunk */
       }
@@ -4263,6 +4806,8 @@ async function runTaskStream(
       ...opts,
     });
   }
+  turnDelivered = false;
+  finalizeTurnStreamPanels();
   setRunning(true);
   shownConfirmationKeys.clear();
   writingStreamCharsThisTurn = 0;
@@ -4601,26 +5146,25 @@ formEl.addEventListener("submit", async (event) => {
   inputEl.value = "";
   resetCommandInputHeight();
   if (!value) return;
-  if (running) {
-    // Keep slash commands operational while stream is running (e.g. /stop, /stop-all).
+  const taskId = activeTaskId || getSessionId();
+  const statusData = await fetchTaskStatus(taskId);
+  const st = String(statusData?.status || "");
+  if (isTerminalTaskStatus(st)) {
+    setRunning(false);
+    await handleCommand(value);
+    return;
+  }
+  if (shouldQueueInboundWhileExecuting(statusData)) {
+    // Keep slash commands operational while stream/backend execution is active.
     if (value.startsWith("/")) {
       await handleCommand(value);
       return;
     }
-    const taskId = activeTaskId || getSessionId();
-    const statusData = await fetchTaskStatus(taskId);
-    const st = String(statusData?.status || "");
-    if (isTerminalTaskStatus(st)) {
-      setRunning(false);
-      await handleCommand(value);
-      return;
-    }
-    // Unified ingress: interrupt current stream and let backend classify (no frontend steer heuristics).
     if (isMissionStatusQuery(value)) {
       await handleMissionStatusInquiry(value, { suppressUserEcho: true });
       return;
     }
-    await sendMessage(taskId, value, { suppressUserEcho: true });
+    enqueuePendingStreamInput(value);
     return;
   }
   await handleCommand(value);
@@ -4862,102 +5406,834 @@ if (themeSelectEl) {
   });
 }
 
-async function restoreSessionConversation(taskId) {
+const SESSION_RESUME_SEQ_KEY = "agent_session_resume_seq:";
+
+function loadResumeSeq(taskId) {
   try {
-    const res = await apiFetch(`/tasks/${taskId}/conversation`, {
-      headers: getAuthHeaders(),
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    const history = Array.isArray(data.conversation_history) ? data.conversation_history : [];
-    if (!history.length) return;
-    appendLine(
-      `── 会话已恢复（turn ${data.session_turn || "?"}）──`,
-      "system"
-    );
-    for (const msg of history.slice(-8)) {
-      const role = String(msg.role || "");
-      const content = String(msg.content || "").trim();
-      if (!content) continue;
-      if (role === "user") {
-        appendLine(`> ${content}`, "user");
-      } else if (role === "assistant") {
-        const preview =
-          content.length > 600 ? `${content.slice(0, 600)}…` : content;
-        appendLine(preview, "result");
-      }
-    }
+    return Number(sessionStorage.getItem(SESSION_RESUME_SEQ_KEY + taskId) || 0);
   } catch {
-    /* best-effort */
+    return 0;
   }
 }
 
-async function restoreSessionOnLoad() {
-  const taskId = getSessionId();
-  activeTaskId = taskId;
-  const storedFlow = loadFlowHistoryFromStorage(taskId);
-  if (storedFlow.length) {
-    flowLiveHistoryByTask.set(taskId, storedFlow);
+function saveResumeSeq(taskId, seq) {
+  if (!taskId || seq == null) return;
+  try {
+    sessionStorage.setItem(SESSION_RESUME_SEQ_KEY + taskId, String(seq));
+  } catch {
+    /* ignore */
   }
-  const data = await fetchTaskStatus(taskId);
-  if (!data) {
-    await refreshFlowPanel(taskId);
+}
+
+function restoreThinkingText(text, { forceNewPanel = false } = {}) {
+  const body = String(text || "");
+  if (!body) return;
+  if (forceNewPanel && thinkingPanelEl) {
+    thinkingHeaderEl = null;
+    thinkingPanelEl = null;
+    thinkingStreamEl = null;
+    thinkingStreamText = "";
+  }
+  ensureThinkingPanel();
+  thinkingStreamText = body;
+  thinkingPendingText = "";
+  thinkingStreamEl.replaceChildren();
+  thinkingStreamEl.appendChild(document.createTextNode(body));
+}
+
+/** Move thinking panel to sit directly after the latest user message (live order). */
+function repositionThinkingPanelAfterUserMessage() {
+  if (!outputEl || !thinkingHeaderEl) return;
+  const users = outputEl.querySelectorAll(".user-bubble-wrap, .line.user");
+  const anchor = users.length ? users[users.length - 1] : null;
+  if (!anchor) return;
+  const insertBefore = anchor.nextSibling;
+  if (thinkingHeaderEl !== insertBefore) {
+    outputEl.insertBefore(thinkingHeaderEl, insertBefore);
+  }
+  if (thinkingPanelEl && thinkingPanelEl.previousElementSibling !== thinkingHeaderEl) {
+    outputEl.insertBefore(thinkingPanelEl, thinkingHeaderEl.nextSibling);
+  }
+}
+
+function restoreWritingBlock(block) {
+  const fname = String(block.filename || "").trim();
+  const text = String(block.text || "");
+  openWritingContentBlock(fname, { reset: true });
+  writingStreamText = text.length;
+  writingPendingText = "";
+  if (writingStreamEl) {
+    writingStreamEl.replaceChildren();
+    if (text) writingStreamEl.appendChild(document.createTextNode(text));
+  }
+}
+
+function renderStructuredBlock(block, { streaming = false, restoreMode = false } = {}) {
+  if (!block || typeof block !== "object") return;
+  const type = String(block.type || "");
+  if (type === "thinking") {
+    restoreThinkingText(block.text || "", {
+      forceNewPanel: restoreMode && Boolean(thinkingStreamText),
+    });
     return;
   }
+  if (type === "writing") {
+    restoreWritingBlock(block);
+    return;
+  }
+  if (type === "answer") {
+    const text = String(block.text || "").trim();
+    if (!text) return;
+    if (streaming || block.status === "streaming") {
+      setAnswerStreamText(text);
+    } else {
+      appendCompletedAnswer(text);
+    }
+    return;
+  }
+  if (type === "trace") {
+    appendTraceLine(String(block.text || ""), {
+      node: block.node,
+      phase: block.phase,
+      level: block.level || "delta",
+    });
+    return;
+  }
+  if (type === "tool_preview") {
+    const snippet = String(block.snippet || "").trim();
+    const tool = String(block.tool || "tool");
+    if (snippet.length >= FILE_PREVIEW_BOX_MIN_CHARS) {
+      appendFileContentBlock(`── 工具输出 · ${tool} ──`, snippet);
+    } else if (snippet) {
+      appendLine(`  tool ${tool}: ${snippet}`, "node");
+    }
+    return;
+  }
+  if (type === "answer_revoked") {
+    clearAnswerStream();
+    appendLine(`回答已撤回：${String(block.reason || "验证未通过")}`, "error");
+  }
+}
+
+const TELEMETRY_EVENT_TYPES = new Set([
+  "ui_task_created",
+  "ui_progress",
+  "ui_node",
+  "ui_plan",
+  "ui_ack",
+]);
+
+/** Telemetry restored on reload — node/plan details live in trace blocks. */
+const TELEMETRY_RESTORE_TYPES = new Set(["ui_task_created", "ui_progress", "ui_ack"]);
+
+const EVENT_REPLAY_TIER = {
+  thinking_delta: 0,
+  ui_task_created: 10,
+  ui_progress: 10,
+  ui_ack: 10,
+  ui_plan: 10,
+  ui_node: 10,
+  trace: 20,
+  writing_delta: 30,
+  tool_preview: 35,
+  answer_delta: 40,
+  answer_preview: 40,
+  answer_revoked: 50,
+};
+
+const BLOCK_DISPLAY_ORDER = {
+  thinking: 0,
+  trace: 1,
+  writing: 2,
+  tool_preview: 3,
+  answer: 4,
+  answer_revoked: 5,
+};
+
+function isTelemetryEventType(eventType) {
+  return TELEMETRY_EVENT_TYPES.has(String(eventType || ""));
+}
+
+function isTelemetryRestoreType(eventType) {
+  return TELEMETRY_RESTORE_TYPES.has(String(eventType || ""));
+}
+
+function mergeThinkingBlocks(blocks) {
+  const out = [];
+  let thinkingText = "";
+  let thinkingStatus = "completed";
+  for (const block of blocks) {
+    if (block && block.type === "thinking") {
+      thinkingText += String(block.text || "");
+      if (block.status === "streaming") thinkingStatus = "streaming";
+    } else {
+      if (thinkingText) {
+        out.push({ type: "thinking", text: thinkingText, status: thinkingStatus });
+        thinkingText = "";
+        thinkingStatus = "completed";
+      }
+      out.push(block);
+    }
+  }
+  if (thinkingText) {
+    out.push({ type: "thinking", text: thinkingText, status: thinkingStatus });
+  }
+  return out;
+}
+
+function sortEventsForReplay(events) {
+  return [...events].sort((a, b) => {
+    const ta = EVENT_REPLAY_TIER[a?.event_type] ?? 25;
+    const tb = EVENT_REPLAY_TIER[b?.event_type] ?? 25;
+    if (ta !== tb) return ta - tb;
+    return (Number(a?.seq) || 0) - (Number(b?.seq) || 0);
+  });
+}
+
+function sortStructuredBlocksForDisplay(blocks) {
+  return blocks
+    .map((block, i) => ({ block, i }))
+    .sort((a, b) => {
+      const oa = BLOCK_DISPLAY_ORDER[a.block?.type] ?? 99;
+      const ob = BLOCK_DISPLAY_ORDER[b.block?.type] ?? 99;
+      return oa !== ob ? oa - ob : a.i - b.i;
+    })
+    .map(({ block }) => block);
+}
+
+function resolveAssistantAnswerText(msg) {
+  const blocks = Array.isArray(msg?.structured_blocks) ? msg.structured_blocks : [];
+  const answerBlock = blocks.find((b) => b && b.type === "answer");
+  const blockText = String(answerBlock?.text || "").trim();
+  const contentText = String(msg?.content || "").trim();
+  if (!blockText && !contentText) return { text: "", answerBlock };
+  const text = blockText.length >= contentText.length ? blockText : contentText;
+  return { text, answerBlock };
+}
+
+function renderAssistantMessage(msg, { streaming = false } = {}) {
+  finalizeTurnStreamPanels();
+  const rawBlocks = Array.isArray(msg.structured_blocks) ? msg.structured_blocks : [];
+  const blocks = sortStructuredBlocksForDisplay(mergeThinkingBlocks(rawBlocks));
+  const isStreaming = streaming || msg.status === "streaming";
+  const enriched = { ...msg, content: String(msg.content || "").trim() };
+  const { text: answerText, answerBlock } = resolveAssistantAnswerText(enriched);
+  let answerRendered = false;
+
+  for (const block of blocks) {
+    if (block && block.type === "answer") {
+      if (answerText) {
+        if (isStreaming || answerBlock?.status === "streaming") {
+          setAnswerStreamText(answerText);
+        } else {
+          appendCompletedAnswer(answerText);
+        }
+        answerRendered = true;
+      }
+      continue;
+    }
+    renderStructuredBlock(block, { streaming: isStreaming, restoreMode: true });
+  }
+
+  if (answerText && !answerRendered) {
+    if (isStreaming) {
+      setAnswerStreamText(answerText);
+    } else {
+      appendCompletedAnswer(answerText);
+    }
+  }
+}
+
+async function fetchSessionMessages(taskId) {
+  try {
+    const res = await apiFetch(`/tasks/${taskId}/messages`, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchAllSessionEvents(taskId) {
+  const all = [];
+  let afterSeq = 0;
+  for (let page = 0; page < 20; page += 1) {
+    try {
+      const res = await apiFetch(
+        `/tasks/${taskId}/messages/events?after_seq=${afterSeq}&limit=5000`,
+        { headers: getAuthHeaders() }
+      );
+      if (!res.ok) break;
+      const data = await res.json();
+      const events = Array.isArray(data?.events) ? data.events : [];
+      all.push(...events);
+      if (!data?.has_more || !events.length) break;
+      afterSeq = Number(data.last_event_seq || afterSeq);
+    } catch {
+      break;
+    }
+  }
+  return all;
+}
+
+function replayPersistedEvent(event, taskId, taskIdRef) {
+  const et = String(event?.event_type || "");
+  const meta = event?.meta && typeof event.meta === "object" ? event.meta : {};
+  const delta = String(event?.delta || "");
+  let eventType = et;
+  let payload = {
+    task_id: taskId,
+    seq: event?.seq,
+    resume: true,
+  };
+  if (et === "ui_task_created") {
+    eventType = "task_created";
+    payload = { ...payload, ...meta };
+  } else if (et === "ui_progress") {
+    eventType = "progress";
+    payload = {
+      ...payload,
+      message: delta,
+      phase: meta.phase || "working",
+      elapsed_sec: meta.elapsed_sec || 0,
+    };
+  } else if (et === "ui_node") {
+    eventType = "node";
+    payload = { ...payload, ...meta };
+  } else if (et === "ui_plan") {
+    eventType = "plan";
+    payload = { ...payload, ...meta };
+  } else if (et === "ui_ack") {
+    eventType = "ack";
+    payload = { ...payload, ...meta };
+  } else if (et === "thinking_snapshot") {
+    eventType = "thinking_snapshot";
+    payload = { ...payload, node: meta.node, phase: meta.phase, text: delta };
+  } else if (et === "thinking_delta") {
+    payload = { ...payload, node: meta.node, phase: meta.phase, text: delta };
+  } else if (et === "writing_delta") {
+    payload = {
+      ...payload,
+      node: meta.node,
+      phase: meta.phase,
+      filename: meta.filename || "",
+      text: delta,
+      reset: Boolean(meta.reset),
+    };
+  } else if (et === "answer_delta" || et === "answer_preview") {
+    eventType = et;
+    payload = {
+      ...payload,
+      node: meta.node,
+      phase: meta.phase,
+      field: meta.field || "summary",
+      text: delta,
+    };
+  } else if (et === "trace") {
+    payload = {
+      ...payload,
+      node: meta.node,
+      phase: meta.phase,
+      field: meta.field,
+      text: delta,
+      level: meta.level || "delta",
+    };
+  } else if (et === "tool_preview") {
+    payload = {
+      ...payload,
+      tool: meta.tool,
+      status: meta.status,
+      snippet: delta || meta.snippet,
+    };
+  } else if (et === "answer_revoked") {
+    payload = { ...payload, reason: delta || meta.reason };
+  } else {
+    return;
+  }
+  handleStreamEvent(eventType, payload, taskIdRef, {
+    silentResume: true,
+    restoreReplay: true,
+  });
+}
+
+function sortEventsBySeq(events) {
+  return [...events].sort(
+    (a, b) => (Number(a?.seq) || 0) - (Number(b?.seq) || 0)
+  );
+}
+
+function answerVisibleInOutput() {
+  if (String(answerStreamText || "").trim()) return true;
+  if (!outputEl) return false;
+  return Boolean(
+    outputEl.querySelector(".answer-stream") ||
+    outputEl.querySelector(".line.result") ||
+    outputEl.querySelector(".content-fallback-panel")
+  );
+}
+
+/** Patch final answer after event replay without duplicating visible output. */
+function ensureFinalAnswerVisible(finalAnswer) {
+  const text = String(finalAnswer || "").trim();
+  if (!text) return;
+  const streamed = String(answerStreamText || "").trim();
+  if (streamed.length >= text.length) return;
+  if (!streamed && answerVisibleInOutput()) {
+    const resultEl = outputEl?.querySelector(".line.result");
+    const existing = String(resultEl?.textContent || "").trim();
+    if (existing.length >= text.length) return;
+  }
+  if (streamed) clearAnswerStream();
+  appendCompletedAnswer(text);
+}
+
+function thinkingTextFromMessage(msg) {
+  const blocks = mergeThinkingBlocks(
+    Array.isArray(msg?.structured_blocks) ? msg.structured_blocks : []
+  );
+  const thinkingBlock = blocks.find((b) => b && b.type === "thinking");
+  return String(thinkingBlock?.text || "");
+}
+
+function aggregateThinkingFromEvents(events) {
+  let deltaText = "";
+  let snapshotText = "";
+  for (const ev of sortEventsBySeq(events || [])) {
+    const et = String(ev?.event_type || "");
+    if (et === "thinking_snapshot") {
+      const body = String(ev?.delta || "");
+      if (body.length >= snapshotText.length) snapshotText = body;
+    } else if (et === "thinking_delta") {
+      deltaText += String(ev?.delta || "");
+    }
+  }
+  if (snapshotText.length >= deltaText.length) return snapshotText;
+  return deltaText;
+}
+
+function resolveThinkingTextFromTurn(msg, evs, extras = {}) {
+  const fromBlocks = thinkingTextFromMessage(msg);
+  const fromEvents = aggregateThinkingFromEvents(evs);
+  const fromTaskEvents = aggregateThinkingFromEvents(extras.taskEvents || []);
+  const fromDraft = String(msg?.streaming_thinking_text || extras.statusThinking || "");
+  const fromSnapshot = String(extras.snapshotThinking || "");
+  const candidates = [fromBlocks, fromEvents, fromTaskEvents, fromDraft, fromSnapshot].filter(Boolean);
+  if (!candidates.length) return "";
+  return candidates.reduce((best, cur) => (cur.length > best.length ? cur : best), "");
+}
+
+function applyRestoredThinkingText(text) {
+  const body = String(text || "");
+  if (!body) return;
+  const current = String(thinkingStreamText || "").trim();
+  if (current.length >= body.length) return;
+  prepareThinkingStreamUi();
+  restoreThinkingText(body);
+  repositionThinkingPanelAfterUserMessage();
+}
+
+function restoreAssistantTurn(taskId, msg, messageView, eventsByMessage, taskIdRef, opts = {}) {
+  const evs = eventsByMessage.get(String(msg.message_id || "")) || [];
+  const taskTerminal = Boolean(
+    opts.taskTerminal ?? isTerminalTaskStatus(opts.taskStatus ?? messageView?.task_status)
+  );
+  const isStreamingTurn =
+    !taskTerminal &&
+    (String(msg.status || "") === "streaming" ||
+      String(messageView?.streaming_message_id || "") === String(msg.message_id || ""));
+  finalizeTurnStreamPanels();
+  const finalAnswer = String(
+    opts.finalAnswer ?? messageView?.final_answer ?? msg.content ?? ""
+  ).trim();
+  const thinkingExtras = {
+    taskEvents: opts.taskEvents || [],
+    snapshotThinking: opts.snapshotThinking || "",
+    statusThinking: opts.statusThinking || "",
+  };
+  const thinkingText = resolveThinkingTextFromTurn(msg, evs, thinkingExtras);
+
+  if (thinkingText || isStreamingTurn) {
+    prepareThinkingStreamUi();
+  }
+
+  if (evs.length) {
+    const contentEvents = evs.filter(
+      (e) => !["thinking_delta", "thinking_snapshot"].includes(String(e?.event_type || ""))
+    );
+    for (const ev of sortEventsBySeq(contentEvents)) {
+      replayPersistedEvent(ev, taskId, taskIdRef);
+    }
+    applyRestoredThinkingText(thinkingText);
+    if (taskTerminal) {
+      ensureFinalAnswerVisible(finalAnswer);
+    }
+    return;
+  }
+
+  const enriched = { ...msg };
+  if (finalAnswer) enriched.content = finalAnswer;
+  renderAssistantMessage(enriched, { streaming: !taskTerminal });
+  if (taskTerminal) ensureFinalAnswerVisible(finalAnswer);
+}
+
+let activeResumeAbortController = null;
+
+async function resumeMessageStream(taskId, { afterSeq = 0, tail = false, silent = false } = {}) {
+  if (activeResumeAbortController) {
+    activeResumeAbortController.abort();
+  }
+  activeResumeAbortController = new AbortController();
+  const taskIdRef = { id: taskId };
+  if (tail && !running) {
+    setRunning(true, { preserveStreamUi: true });
+  } else if (tail && running && runStartedAt) {
+    startRunTimer({ preserveStartedAt: true });
+  }
+  try {
+    const qs = new URLSearchParams({
+      after_seq: String(Math.max(0, Number(afterSeq) || 0)),
+      tail: tail ? "true" : "false",
+    });
+    const res = await apiFetch(`/tasks/${taskId}/messages/stream?${qs}`, {
+      headers: getAuthHeaders(),
+      signal: activeResumeAbortController.signal,
+    });
+    if (!res.ok) return;
+    ensureUiSnapshotInterval();
+    await consumeSseStream(res, taskIdRef, {
+      signal: activeResumeAbortController.signal,
+      resumeReplay: true,
+      silentResume: silent,
+    });
+  } catch (err) {
+    if (!silent && err?.name !== "AbortError") {
+      appendLine("流式续播连接已结束或失败", "system");
+    }
+  } finally {
+    if (activeResumeAbortController?.signal?.aborted) {
+      activeResumeAbortController = null;
+    }
+    if (shouldPersistUiSnapshot()) {
+      persistUiSnapshot(taskId);
+    }
+  }
+}
+
+async function restoreSessionConversation(
+  taskId,
+  {
+    silent = false,
+    skipServerMessages = false,
+    executorActive = false,
+    liveTail = false,
+    taskStatus = "",
+    finalAnswer = "",
+    taskTerminal = false,
+    snapshotThinking = "",
+    statusThinking = "",
+  } = {}
+) {
+  let lastMessageView = null;
+  let runProgress = null;
+  try {
+    resetOutputForRestore();
+    if (!skipServerMessages) {
+      const messageView = await fetchSessionMessages(taskId);
+      lastMessageView = messageView;
+      const messages = messageView && Array.isArray(messageView.messages) ? messageView.messages : [];
+      if (messages.length) {
+        const terminal = Boolean(
+          taskTerminal ||
+            messageView.task_terminal ||
+            isTerminalTaskStatus(taskStatus || messageView.task_status)
+        );
+        if (!silent) {
+          appendLine(
+            `── 会话已恢复（${messages.length} 条消息 · turn ${messages[messages.length - 1]?.session_turn || "?"}）──`,
+            "system"
+          );
+        }
+        const allEvents = await fetchAllSessionEvents(taskId);
+        runProgress = restoreLastProgressFromEvents(allEvents);
+        const eventsByMessage = new Map();
+        for (const ev of allEvents) {
+          const mid = String(ev.message_id || "");
+          if (!eventsByMessage.has(mid)) eventsByMessage.set(mid, []);
+          eventsByMessage.get(mid).push(ev);
+        }
+        const taskIdRef = { id: taskId };
+        const restoreOpts = {
+          executorActive,
+          liveTail: !terminal && (liveTail || Boolean(messageView.streaming_answer_active || messageView.live_running)),
+          taskStatus: taskStatus || messageView.task_status || "",
+          finalAnswer: finalAnswer || messageView.final_answer || "",
+          taskTerminal: terminal,
+          taskEvents: allEvents,
+          snapshotThinking,
+          statusThinking,
+        };
+        for (const msg of messages) {
+          const role = String(msg.role || "");
+          if (role === "user") {
+            const content = String(msg.content || "").trim();
+            if (content) appendLine(`> ${content}`, "user");
+          } else if (role === "assistant") {
+            restoreAssistantTurn(taskId, msg, messageView, eventsByMessage, taskIdRef, {
+              ...restoreOpts,
+              isLastAssistant:
+                String(msg.message_id || "") ===
+                String(
+                  [...messages].reverse().find((m) => String(m?.role || "") === "assistant")
+                    ?.message_id || ""
+                ),
+            });
+          }
+        }
+        const lastAssistant = [...messages].reverse().find((m) => String(m?.role || "") === "assistant");
+        const thinkingRestoreMsg = lastAssistant || {
+          structured_blocks: [],
+          streaming_thinking_text: statusThinking,
+        };
+        const thinkingEvs = lastAssistant
+          ? eventsByMessage.get(String(lastAssistant.message_id || "")) || []
+          : [];
+        applyRestoredThinkingText(
+          resolveThinkingTextFromTurn(thinkingRestoreMsg, thinkingEvs, {
+            taskEvents: allEvents,
+            snapshotThinking,
+            statusThinking,
+          })
+        );
+        const lastSeq = Number(messageView.last_event_seq || 0);
+        if (lastSeq > 0) saveResumeSeq(taskId, lastSeq);
+        const shouldTail =
+          !terminal &&
+          (liveTail ||
+            executorActive ||
+            Boolean(messageView.streaming_answer_active || messageView.live_running));
+        if (shouldTail) {
+          await resumeMessageStream(taskId, {
+            afterSeq: lastSeq,
+            tail: true,
+            silent: true,
+          });
+          const refreshed = await fetchSessionMessages(taskId);
+          const assistant = (refreshed?.messages || []).find(
+            (m) => String(m?.role || "") === "assistant"
+          );
+          if (assistant) {
+            const freshEvents = await fetchAllSessionEvents(taskId);
+            const statusRefresh = await fetchTaskStatus(taskId);
+            const freshThinking = resolveThinkingTextFromTurn(
+              assistant,
+              freshEvents.filter(
+                (e) => String(e.message_id || "") === String(assistant.message_id || "")
+              ),
+              {
+                taskEvents: freshEvents,
+                snapshotThinking,
+                statusThinking: String(statusRefresh?.streaming_thinking_text || statusThinking || ""),
+              }
+            );
+            applyRestoredThinkingText(freshThinking);
+            if (terminal) ensureFinalAnswerVisible(
+              String(refreshed?.final_answer || finalAnswer || assistant.content || "").trim()
+            );
+          }
+        }
+        return { messageView: lastMessageView, shouldTail, runProgress };
+      }
+    }
+
+    const res = await apiFetch(`/tasks/${taskId}/conversation`, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) return { messageView: null, shouldTail: false, runProgress: null };
+    const data = await res.json();
+    const history = Array.isArray(data.conversation_history) ? data.conversation_history : [];
+    const streamingActive = Boolean(data.streaming_answer_active);
+    const streamingText = String(data.streaming_answer_text || "").trim();
+    if (!history.length && !streamingText) return { messageView: null, shouldTail: false, runProgress: null };
+    if (!silent) {
+      appendLine(
+        `── 会话已恢复（turn ${data.session_turn || "?"}）──`,
+        "system"
+      );
+    }
+    for (const msg of history) {
+      const role = String(msg.role || "");
+      if (role === "user") {
+        const content = String(msg.content || "").trim();
+        if (content) appendLine(`> ${content}`, "user");
+      } else if (role === "assistant") {
+        renderAssistantMessage(
+          {
+            ...msg,
+            structured_blocks: Array.isArray(msg.structured_blocks) ? msg.structured_blocks : [],
+            status: streamingActive ? "streaming" : "completed",
+          },
+          { streaming: streamingActive }
+        );
+      }
+    }
+    if (streamingActive && streamingText) {
+      detachTurnStreamRefs();
+      setAnswerStreamText(streamingText);
+    } else if (!streamingActive && streamingText) {
+      detachTurnStreamRefs();
+      appendCompletedAnswer(streamingText);
+    }
+    return {
+      messageView: streamingActive ? { streaming_answer_active: true } : null,
+      shouldTail: streamingActive,
+      runProgress: null,
+    };
+  } catch {
+    /* best-effort */
+  }
+  return { messageView: lastMessageView, shouldTail: false, runProgress: null };
+}
+
+function applySessionRunningState(snapshotResult, data) {
+  if (isTerminalTaskStatus(data?.status)) return;
+  const executorActive = Boolean(data?.executor_active);
+  const liveTail =
+    Boolean(data?.live_running) ||
+    Boolean(data?.streaming_answer_active) ||
+    executorActive;
+  if (!liveTail) return;
+  setRunning(true, { preserveStreamUi: Boolean(snapshotResult?.restored) });
+  if (snapshotResult?.runStartedAt) {
+    runStartedAt = snapshotResult.runStartedAt;
+  }
+}
+
+async function hydrateSessionContent(taskId, { fromPageLoad = false } = {}) {
+  const seq = ++hydrateSessionSeq;
+  if (fromPageLoad) sessionRecoveringFromPageLoad = true;
+  const tid = String(taskId || getSessionId() || "").trim();
+  if (!tid) {
+    if (fromPageLoad) sessionRecoveringFromPageLoad = false;
+    return false;
+  }
+  activeTaskId = tid;
+
+  const storedFlow = loadFlowHistoryFromStorage(tid);
+  if (storedFlow.length) {
+    flowLiveHistoryByTask.set(tid, storedFlow);
+  }
+  const data = await fetchTaskStatus(tid);
+  if (!data) {
+    lastHydratedStatus = null;
+    await refreshFlowPanel(tid);
+    if (fromPageLoad) sessionRecoveringFromPageLoad = false;
+    return false;
+  }
+  lastHydratedStatus = data;
   const mergedFlow = mergeFlowHistories(data.node_history, storedFlow);
   if (mergedFlow.length) {
-    flowLiveHistoryByTask.set(taskId, mergedFlow);
-    persistFlowHistoryToStorage(taskId);
+    flowLiveHistoryByTask.set(tid, mergedFlow);
+    persistFlowHistoryToStorage(tid);
   }
   const st = String(data.status || "");
   const pauseReason = String(data.pause_reason || "");
   const executorActive = Boolean(data.executor_active);
   const fsm = getFsmState(data);
   sessionMissionExecutorActive = fsm === "RUNNING" && executorActive;
-  sessionHasInFlightMission =
-    executorActive || fsm === "RUNNING" || fsm === "REPLANNING" || fsm === "WAITING_USER";
-  await refreshFlowPanel(taskId);
-  const hasMission =
-    executorActive ||
-    st === "MISSION_RUNNING" ||
-    st === "MISSION_PAUSED" ||
-    mergedFlow.length > 0 ||
-    (data.node_history && data.node_history.length > 0);
-  if (hasMission) {
-    await restoreSessionConversation(taskId);
-    if (data.latest_steer_message) {
+  sessionHasInFlightMission = isTaskLiveOnServer(data, null);
+  applyHydratedRunningState(data, null, { preserveStreamUi: true, deferTimer: true });
+  await refreshFlowPanel(tid);
+  if (seq !== hydrateSessionSeq) {
+    if (fromPageLoad) sessionRecoveringFromPageLoad = false;
+    return false;
+  }
+
+  const liveTail =
+    Boolean(data.live_running) || Boolean(data.streaming_answer_active) || executorActive;
+  const taskTerminal = isTerminalTaskStatus(st);
+
+  const snapshotThinking = readUiSnapshotThinking(tid);
+  clearUiSnapshot(tid);
+  const restoreResult = await restoreSessionConversation(tid, {
+    silent: true,
+    executorActive,
+    liveTail,
+    taskStatus: st,
+    finalAnswer: String(data.final_answer || "").trim(),
+    taskTerminal,
+    snapshotThinking,
+    statusThinking: String(data.streaming_thinking_text || ""),
+  });
+  if (seq !== hydrateSessionSeq || (getSessionId() !== tid && activeTaskId !== tid)) {
+    if (fromPageLoad) sessionRecoveringFromPageLoad = false;
+    return false;
+  }
+  const [freshStatus, freshMessages] = await Promise.all([
+    fetchTaskStatus(tid),
+    fetchSessionMessages(tid),
+  ]);
+  if (seq !== hydrateSessionSeq) {
+    if (fromPageLoad) sessionRecoveringFromPageLoad = false;
+    return false;
+  }
+  applyHydratedRunningState(
+    freshStatus || data,
+    freshMessages || restoreResult?.messageView || null,
+    {
+      preserveStreamUi: true,
+      elapsedSec: restoreResult?.runProgress?.elapsedSec,
+      phaseMessage: restoreResult?.runProgress?.message,
+    }
+  );
+
+  const resolvedStatus = freshStatus || data;
+  const resolvedSt = String(resolvedStatus.status || "");
+  const resolvedPauseReason = String(resolvedStatus.pause_reason || "");
+  const resolvedExecutorActive = Boolean(resolvedStatus.executor_active);
+
+  if (fromPageLoad) {
+    const hasMission =
+      resolvedExecutorActive ||
+      resolvedSt === "MISSION_RUNNING" ||
+      resolvedSt === "MISSION_PAUSED" ||
+      mergedFlow.length > 0 ||
+      (resolvedStatus.node_history && resolvedStatus.node_history.length > 0);
+    if (hasMission && resolvedStatus.latest_steer_message) {
       appendLine(
-        `最近纠偏: ${String(data.latest_steer_message).slice(0, 200)}`,
+        `最近纠偏: ${String(resolvedStatus.latest_steer_message).slice(0, 200)}`,
         "system"
       );
     }
-    appendLine(
-      `当前任务: ${st} · 节点 ${data.current_node || "?"}${executorActive ? " · 后台执行中" : ""}`,
-      "system"
-    );
   }
-  if (executorActive) {
-    appendLine("检测到后台仍在执行，流程面板将自动更新。", "system");
-    startDetachedBackendWatch(taskId, { announce: false });
-  } else if (st === "MISSION_PAUSED") {
-    if (pauseReason === "worker_lost") {
+
+  if (resolvedSt === "MISSION_PAUSED" && fromPageLoad) {
+    const hasMission =
+      mergedFlow.length > 0 ||
+      (resolvedStatus.node_history && resolvedStatus.node_history.length > 0);
+    if (resolvedPauseReason === "worker_lost") {
       appendLine(
-        `Note: session ${taskId.slice(0, 8)}… 执行已中断 (worker_lost, node ${data.current_node})。` +
+        `Note: session ${tid.slice(0, 8)}… 执行已中断 (worker_lost, node ${resolvedStatus.current_node})。` +
           " 直接输入为插入/纠偏（已写入状态）；不会自动续跑，请 /resume 或「继续写作」。",
         "system"
       );
     } else if (hasMission) {
       appendLine(
-        `Note: session ${taskId.slice(0, 8)}… is MISSION_PAUSED (node ${data.current_node}). ` +
+        `Note: session ${tid.slice(0, 8)}… is MISSION_PAUSED (node ${resolvedStatus.current_node}). ` +
           "直接输入「继续写作」等即可，由规划/会话策略理解意图；待确认时用 /confirm，不必先 /resume。",
         "system"
       );
     }
   }
-  if (executorActive || sessionHasInFlightMission) {
-    ensureFlowAutoRefresh();
-  }
-  updateStopButtonState();
+
+  if (fromPageLoad) sessionRecoveringFromPageLoad = false;
+  const hasVisibleContent = Boolean(outputEl && outputEl.childElementCount > 0);
+  return hasVisibleContent;
+}
+
+async function restoreSessionOnLoad() {
+  return hydrateSessionContent(getSessionId(), { fromPageLoad: true });
 }
 
 window.AgentChatRuntime = {
@@ -4970,14 +6246,31 @@ loadCommandInputHistory();
 updateSessionBadge(getSessionId());
 syncInteractionModeUi(getInteractionMode());
 applyTheme(localStorage.getItem(THEME_KEY) || "dark");
-appendLine("Agent LangGraph Web CLI ready. Type /help for commands.", "system");
-appendLine(
-  `交互模式: ${INTERACTION_MODE_META[getInteractionMode()].label}（顶栏可切换；工程交付仅在沙箱内编译）`,
-  "system"
-);
 refreshCommandSuggestions("");
 updateStopButtonState();
-restoreSessionOnLoad();
+void restoreSessionOnLoad().then((hadContent) => {
+  if (!hadContent) {
+    appendLine("Agent LangGraph Web CLI ready. Type /help for commands.", "system");
+    appendLine(
+      `交互模式: ${INTERACTION_MODE_META[getInteractionMode()].label}（顶栏可切换；工程交付仅在沙箱内编译）`,
+      "system"
+    );
+  }
+});
+window.addEventListener("pagehide", () => {
+  const tid = activeTaskId || getSessionId();
+  if (shouldPersistUiSnapshot() || String(thinkingStreamText || "").trim()) {
+    persistUiSnapshot(tid);
+  }
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    const tid = activeTaskId || getSessionId();
+    if (shouldPersistUiSnapshot() || String(thinkingStreamText || "").trim()) {
+      persistUiSnapshot(tid);
+    }
+  }
+});
 fetchHealth();
 refreshHistorySidebar();
 refreshSessionFilesPane();

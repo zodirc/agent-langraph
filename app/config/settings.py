@@ -139,6 +139,24 @@ class Settings:
         self.STREAM_SAVE_EVERY_NODE = _coerce_bool(
             performance.get("stream_save_every_node", False)
         )
+        self.STREAM_DRAFT_PERSIST_ENABLED = _coerce_bool(
+            performance.get("stream_draft_persist_enabled", True)
+        )
+        self.STREAM_DRAFT_SAVE_INTERVAL_SEC = float(
+            performance.get("stream_draft_save_interval_sec", 2.0)
+        )
+        self.STREAM_DRAFT_SAVE_MIN_CHARS = int(
+            performance.get("stream_draft_save_min_chars", 80)
+        )
+        self.CHAT_MESSAGE_PERSIST_ENABLED = _coerce_bool(
+            performance.get("chat_message_persist_enabled", True)
+        )
+        self.CHAT_MESSAGE_FLUSH_INTERVAL_SEC = float(
+            performance.get("chat_message_flush_interval_sec", 2.0)
+        )
+        self.CHAT_MESSAGE_FLUSH_MIN_EVENTS = int(
+            performance.get("chat_message_flush_min_events", 4)
+        )
         self.REASONING_TRACE_ENABLED = _coerce_bool(
             performance.get("reasoning_trace_enabled", True)
         )

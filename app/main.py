@@ -36,6 +36,7 @@ from app.api.review_api import router as review_router
 from app.api.schedule_api import router as schedule_router
 from app.api.tenant_api import router as tenant_router
 from app.api.task_api import router as task_router
+from app.api.sessions_api import router as sessions_router
 from app.api.skills_api import router as skills_router
 from app.api.skills_manage_api import router as skills_manage_router
 from app.api.skills_governance_api import router as skills_governance_router
@@ -115,6 +116,7 @@ app = FastAPI(
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(task_router)
+app.include_router(sessions_router)
 app.include_router(artifacts_router)
 app.include_router(review_router)
 app.include_router(knowledge_router)

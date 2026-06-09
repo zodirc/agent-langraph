@@ -26,6 +26,9 @@ def context_governance_node(state: AgentState) -> AgentState:
         payload, _envelope = prepare_governed_payload(updated, purpose=purpose, payload=payload)
 
     buckets = updated.get("context_budget_buckets") or {}
+    from app.services.thinking_retry_signals import apply_thinking_retry_feedback
+
+    updated = apply_thinking_retry_feedback(updated)
     report_progress("上下文预算治理完成，准备生成…")
 
     updated = merge_state(

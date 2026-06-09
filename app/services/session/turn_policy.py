@@ -109,6 +109,37 @@ def _goal_requires_steer_replan(goal: str) -> bool:
     return bool(correction_cues.search(text))
 
 
+def _active_mission_block(
+    state: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve non-suspended mission from session state or merged payload."""
+    mission = state.get("mission")
+    if not isinstance(mission, dict) or not mission:
+        mission = payload.get("mission") or (state.get("input_payload") or {}).get("mission")
+    if not isinstance(mission, dict) or not mission:
+        return None
+    if payload.get("mission_suspended"):
+        return None
+    return mission
+
+
+def _mission_session_ongoing(state: dict[str, Any]) -> bool:
+    """True when a mission turn is already in flight (not a fresh explicit contract)."""
+    if int(state.get("session_turn") or 0) > 1:
+        return True
+    status = str(state.get("status") or "")
+    return status in (
+        "MISSION_RUNNING",
+        "MISSION_PAUSED",
+        "PLANNED",
+        "POLICY_CHECKED",
+        "REASONED",
+        "WAITING_REVIEW",
+        "WRITING",
+    )
+
+
 def _evaluate_active_mission_turn(
     goal: str,
     *,
@@ -250,6 +281,19 @@ def resolve_session_turn(
             intent="isolate_qa",
             source="already_suspended",
             reason="mission already suspended for this turn",
+        )
+
+    mission = _active_mission_block(state, payload)
+    if mission is not None and _mission_session_ongoing(state) and (goal or "").strip():
+        eval_state = state if isinstance(state.get("mission"), dict) and state.get("mission") else {
+            **state,
+            "mission": mission,
+        }
+        return _evaluate_active_mission_turn(
+            goal,
+            state=eval_state,
+            turn_cfg=turn_cfg,
+            route_cfg=route_cfg,
         )
 
     if explicit_mission_requested(req, str(req.get("execution_mode") or "")):

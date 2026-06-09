@@ -93,6 +93,37 @@ CREATE TABLE IF NOT EXISTS knowledge_docs (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS chat_messages (
+    message_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    session_turn INTEGER NOT NULL DEFAULT 0,
+    role TEXT NOT NULL,
+    status TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    structured_blocks_json TEXT NOT NULL DEFAULT '[]',
+    client_message_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_task_turn ON chat_messages (task_id, session_turn, created_at);
+
+CREATE TABLE IF NOT EXISTS chat_message_events (
+    id BIGSERIAL PRIMARY KEY,
+    message_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    delta TEXT NOT NULL DEFAULT '',
+    meta_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE (task_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_message_events_task_seq ON chat_message_events (task_id, seq);
+CREATE INDEX IF NOT EXISTS idx_chat_message_events_message ON chat_message_events (message_id, seq);
+
 """ + EMBEDDING_META_TABLE_SQL.strip() + ";\n"
 
 

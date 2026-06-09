@@ -75,6 +75,11 @@ class TaskStatusResponse(BaseModel):
     turn_contract_primary_op: Optional[str] = None
     fsm_state: Optional[str] = None
     session_mode: Optional[str] = None
+    streaming_answer_text: Optional[str] = None
+    streaming_answer_active: bool = False
+    streaming_thinking_text: Optional[str] = None
+    live_running: bool = False
+    final_answer: Optional[str] = None
 
 
 class TaskResultResponse(BaseModel):
@@ -723,15 +728,21 @@ def get_task_status(
     from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
 
     from app.services.graph_run_registry import executor_active_for_state
+    from app.services.live_task_state import get_live
     from app.services.mission_steer import pending_steer_is_set
     from app.services.mission_worker_lost import reconcile_worker_lost
     from app.services.session_fsm import get_fsm_state, session_mode, sync_fsm_state
+    from app.services.state_debug_view import build_merged_debug_state
+    from app.services.streaming_draft import resolve_streaming_draft, resolve_thinking_text_for_restore
 
     state = get_state_store().load(task_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
     state = reconcile_worker_lost(state)
     state = sync_fsm_state(state)
+    live_entry = get_live(task_id)
+    if live_entry is not None:
+        state = build_merged_debug_state(state, live_entry.state)
     fsm = get_fsm_state(state)
     mode = session_mode(state)
     state = enrich_agent_state_manuscript(state)
@@ -755,6 +766,9 @@ def get_task_status(
     fg_op = ctx.get("foreground_operation") if isinstance(ctx, dict) else None
     contract = payload.get("turn_contract") if isinstance(payload.get("turn_contract"), dict) else {}
     latest_steer = str(payload.get("latest_steer_message") or "").strip() or None
+    streaming = resolve_streaming_draft(state)
+    from app.services.confirmation.stream_display import client_final_answer
+
     return TaskStatusResponse(
         task_id=task_id,
         status=str(state["status"]),
@@ -772,6 +786,11 @@ def get_task_status(
         turn_contract_primary_op=str(contract.get("primary_op") or "") or None,
         fsm_state=fsm,
         session_mode=mode,
+        streaming_answer_text=streaming.get("text") if streaming else None,
+        streaming_answer_active=bool(streaming and streaming.get("active")),
+        streaming_thinking_text=resolve_thinking_text_for_restore(state),
+        live_running=bool(live_entry and live_entry.running),
+        final_answer=client_final_answer(state),
     )
 
 
@@ -809,15 +828,91 @@ def get_task_conversation(
     _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> dict[str, Any]:
     """Return multi-turn conversation stored on the task (session window)."""
+    from app.services.live_task_state import get_live
+    from app.services.state_debug_view import build_merged_debug_state
+    from app.services.streaming_draft import resolve_streaming_draft
+
     state = get_state_store().load(task_id, read_only=True)
     if not state:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    live_entry = get_live(task_id)
+    if live_entry is not None:
+        state = build_merged_debug_state(state, live_entry.state)
+    streaming = resolve_streaming_draft(state)
     return {
         "task_id": task_id,
         "session_id": state.get("session_id"),
         "session_turn": state.get("session_turn"),
         "conversation_history": state.get("conversation_history") or [],
+        "streaming_answer_text": streaming.get("text") if streaming else None,
+        "streaming_answer_active": bool(streaming and streaming.get("active")),
     }
+
+
+@router.get("/{task_id}/messages")
+def get_task_messages(
+    task_id: str,
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> dict[str, Any]:
+    """Message-centric session view (Phase 2 read model)."""
+    from app.services.chat_message_service import get_chat_message_service
+    from app.services.live_task_state import get_live
+    from app.services.state_debug_view import build_merged_debug_state
+
+    state = get_state_store().load(task_id, read_only=True)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    live_entry = get_live(task_id)
+    if live_entry is not None:
+        state = build_merged_debug_state(state, live_entry.state)
+    view = get_chat_message_service().build_session_view(task_id, task_state=state)
+    view["live_running"] = bool(get_live(task_id) and get_live(task_id).running)
+    return view
+
+
+@router.get("/{task_id}/messages/events")
+def get_task_message_events(
+    task_id: str,
+    after_seq: int = Query(0, ge=0),
+    limit: int = Query(2000, ge=1, le=5000),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> dict[str, Any]:
+    """Event log for stream resume (Phase 3)."""
+    from app.services.stream_event_resume import list_events_json
+
+    state = get_state_store().load(task_id, read_only=True)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    return list_events_json(task_id, after_seq=after_seq, limit=limit)
+
+
+@router.get("/{task_id}/messages/stream")
+def stream_task_message_events(
+    task_id: str,
+    after_seq: int = Query(0, ge=0),
+    tail: bool = Query(False, description="Poll for new events while task is live-running"),
+    _principal: AuthPrincipal = Depends(require_task_access_dep),
+) -> StreamingResponse:
+    """Replay persisted stream events as SSE; optional live tail for断线续播."""
+    from app.services.stream_event_resume import iter_resumed_sse
+
+    state = get_state_store().load(task_id, read_only=True)
+    live = get_live(task_id)
+    if not state and not live:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+
+    def generator():
+        yield from iter_resumed_sse(task_id, after_seq=after_seq, tail_live=tail)
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/{task_id}/audit")

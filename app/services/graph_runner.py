@@ -65,6 +65,21 @@ from app.runtime.state import AgentState, TaskStatus, create_initial_state, merg
 from app.services.audit_store import get_audit_store
 from app.services.metrics_service import get_metrics_service
 from app.services.conversation_context import persist_turn_draft_answer
+from app.services.streaming_draft import (
+    AnswerDraftPersistCtx,
+    ThinkingDraftPersistCtx,
+    absorb_thinking_delta,
+    apply_streaming_draft,
+    apply_streaming_thinking,
+    clear_streaming_draft,
+    force_persist_thinking_draft,
+)
+from app.services.chat_message_service import (
+    StreamMessagePersistCtx,
+    get_chat_message_service,
+    user_text_from_state,
+)
+from app.services.chat_message_store import get_chat_message_store
 from app.services.session_turn import finalize_turn_history, graph_thread_id, prepare_session_turn
 from app.services.reasoning_trace import (
     answer_stream_enabled,
@@ -333,6 +348,41 @@ def _format_progress_event(
     )
 
 
+def _record_ui_telemetry(
+    msg_ctx: StreamMessagePersistCtx | None,
+    event_type: str,
+    *,
+    delta: str = "",
+    meta: dict[str, Any] | None = None,
+) -> None:
+    if msg_ctx is None:
+        return
+    get_chat_message_service().record_stream_event(
+        msg_ctx,
+        event_type=event_type,
+        delta=delta,
+        meta=dict(meta or {}),
+    )
+
+
+def _emit_progress(
+    task_id: str,
+    message: str,
+    *,
+    started_at: float,
+    phase: str = "working",
+    msg_ctx: StreamMessagePersistCtx | None = None,
+) -> Iterator[str]:
+    elapsed = max(0, int(time.monotonic() - started_at))
+    _record_ui_telemetry(
+        msg_ctx,
+        "ui_progress",
+        delta=message,
+        meta={"phase": phase, "elapsed_sec": elapsed},
+    )
+    yield _format_progress_event(task_id, message, started_at=started_at, phase=phase)
+
+
 def _format_ack_event(task_id: str, payload: dict[str, Any]) -> str:
     body = {k: v for k, v in payload.items() if k not in {"node"}}
     body.setdefault("task_id", task_id)
@@ -359,6 +409,7 @@ def _drain_ack_queue(
     *,
     run_id: str = "",
     foreground_epoch: int = 0,
+    msg_ctx: StreamMessagePersistCtx | None = None,
 ) -> Iterator[str]:
     while True:
         try:
@@ -369,6 +420,10 @@ def _drain_ack_queue(
             item, run_id=run_id, foreground_epoch=foreground_epoch
         ):
             continue
+        if msg_ctx is not None:
+            body = {k: v for k, v in item.items() if k != "node"}
+            body.setdefault("task_id", task_id)
+            _record_ui_telemetry(msg_ctx, "ui_ack", meta=body)
         yield _format_ack_event(task_id, item)
 
 
@@ -378,7 +433,9 @@ def _drain_trace_queue(
     *,
     run_id: str = "",
     foreground_epoch: int = 0,
+    msg_ctx: StreamMessagePersistCtx | None = None,
 ) -> Iterator[str]:
+    svc = get_chat_message_service()
     while True:
         try:
             trace = trace_q.get_nowait()
@@ -388,6 +445,18 @@ def _drain_trace_queue(
             trace, run_id=run_id, foreground_epoch=foreground_epoch
         ):
             continue
+        if msg_ctx is not None:
+            svc.record_stream_event(
+                msg_ctx,
+                event_type="trace",
+                delta=str(trace.get("text") or ""),
+                meta={
+                    "node": trace.get("node"),
+                    "phase": trace.get("phase"),
+                    "field": trace.get("field"),
+                    "level": trace.get("level", "delta"),
+                },
+            )
         yield _format_trace_event(task_id, trace)
 
 
@@ -404,12 +473,34 @@ def _format_answer_delta_event(task_id: str, payload: dict[str, Any]) -> str:
     )
 
 
-def _drain_answer_queue(task_id: str, answer_q: queue.SimpleQueue[dict[str, Any]]) -> Iterator[str]:
+def _drain_answer_queue(
+    task_id: str,
+    answer_q: queue.SimpleQueue[dict[str, Any]],
+    *,
+    draft_ctx: AnswerDraftPersistCtx | None = None,
+    msg_ctx: StreamMessagePersistCtx | None = None,
+) -> Iterator[str]:
+    from app.services.streaming_draft import absorb_answer_delta
+
+    svc = get_chat_message_service()
     while True:
         try:
             item = answer_q.get_nowait()
         except queue.Empty:
             break
+        if draft_ctx is not None:
+            absorb_answer_delta(draft_ctx, item)
+        if msg_ctx is not None:
+            svc.record_stream_event(
+                msg_ctx,
+                event_type="answer_delta",
+                delta=str(item.get("text") or ""),
+                meta={
+                    "node": item.get("node"),
+                    "phase": item.get("phase"),
+                    "field": item.get("field", "summary"),
+                },
+            )
         yield _format_answer_delta_event(task_id, item)
 
 
@@ -425,6 +516,31 @@ def _format_thinking_delta_event(task_id: str, payload: dict[str, Any]) -> str:
     )
 
 
+def _persist_thinking_side_event(
+    item: dict[str, Any],
+    *,
+    run_id: str,
+    foreground_epoch: int,
+    thinking_draft_ctx: ThinkingDraftPersistCtx | None,
+    msg_ctx: StreamMessagePersistCtx | None,
+) -> bool:
+    """Persist thinking immediately (survives SSE client disconnect / page refresh)."""
+    if run_id and not _accept_stream_side_event(
+        item, run_id=run_id, foreground_epoch=foreground_epoch
+    ):
+        return False
+    if thinking_draft_ctx is not None:
+        absorb_thinking_delta(thinking_draft_ctx, item)
+    if msg_ctx is not None:
+        get_chat_message_service().record_stream_event(
+            msg_ctx,
+            event_type="thinking_delta",
+            delta=str(item.get("text") or ""),
+            meta={"node": item.get("node"), "phase": item.get("phase")},
+        )
+    return True
+
+
 def _drain_thinking_queue(
     task_id: str,
     thinking_q: queue.SimpleQueue[dict[str, Any]],
@@ -432,6 +548,7 @@ def _drain_thinking_queue(
     run_id: str = "",
     foreground_epoch: int = 0,
 ) -> Iterator[str]:
+    """Drain thinking queue for SSE only (persistence happens in capture handler)."""
     while True:
         try:
             item = thinking_q.get_nowait()
@@ -464,7 +581,9 @@ def _drain_writing_queue(
     *,
     run_id: str = "",
     foreground_epoch: int = 0,
+    msg_ctx: StreamMessagePersistCtx | None = None,
 ) -> Iterator[str]:
+    svc = get_chat_message_service()
     while True:
         try:
             item = writing_q.get_nowait()
@@ -474,6 +593,18 @@ def _drain_writing_queue(
             item, run_id=run_id, foreground_epoch=foreground_epoch
         ):
             continue
+        if msg_ctx is not None:
+            svc.record_stream_event(
+                msg_ctx,
+                event_type="writing_delta",
+                delta=str(item.get("text") or ""),
+                meta={
+                    "node": item.get("node"),
+                    "phase": item.get("phase"),
+                    "filename": item.get("filename", ""),
+                    "reset": bool(item.get("reset")),
+                },
+            )
         yield _format_writing_delta_event(task_id, item)
 
 
@@ -487,24 +618,42 @@ def _drain_sse_side_queues(
     *,
     run_id: str = "",
     foreground_epoch: int = 0,
+    draft_ctx: AnswerDraftPersistCtx | None = None,
+    thinking_draft_ctx: ThinkingDraftPersistCtx | None = None,
+    msg_ctx: StreamMessagePersistCtx | None = None,
 ) -> Iterator[str]:
     if _sse_suppressed(task_id):
         return
     if ack_q is not None:
         yield from _drain_ack_queue(
-            task_id, ack_q, run_id=run_id, foreground_epoch=foreground_epoch
+            task_id,
+            ack_q,
+            run_id=run_id,
+            foreground_epoch=foreground_epoch,
+            msg_ctx=msg_ctx,
         )
     if thinking_q is not None:
         yield from _drain_thinking_queue(
-            task_id, thinking_q, run_id=run_id, foreground_epoch=foreground_epoch
+            task_id,
+            thinking_q,
+            run_id=run_id,
+            foreground_epoch=foreground_epoch,
         )
     if writing_q is not None:
         yield from _drain_writing_queue(
-            task_id, writing_q, run_id=run_id, foreground_epoch=foreground_epoch
+            task_id,
+            writing_q,
+            run_id=run_id,
+            foreground_epoch=foreground_epoch,
+            msg_ctx=msg_ctx,
         )
-    yield from _drain_answer_queue(task_id, answer_q)
+    yield from _drain_answer_queue(task_id, answer_q, draft_ctx=draft_ctx, msg_ctx=msg_ctx)
     yield from _drain_trace_queue(
-        task_id, trace_q, run_id=run_id, foreground_epoch=foreground_epoch
+        task_id,
+        trace_q,
+        run_id=run_id,
+        foreground_epoch=foreground_epoch,
+        msg_ctx=msg_ctx,
     )
 
 
@@ -518,7 +667,12 @@ def _maybe_pause_for_review(state: AgentState) -> AgentState:
     return state
 
 
-def _emit_tool_preview(state: AgentState) -> Iterator[str]:
+def _emit_tool_preview(
+    state: AgentState,
+    *,
+    msg_ctx: StreamMessagePersistCtx | None = None,
+) -> Iterator[str]:
+    svc = get_chat_message_service()
     for item in state.get("tool_results") or []:
         result = item.get("result") if isinstance(item.get("result"), dict) else {}
         preview: dict[str, Any] = {"tool": item.get("tool"), "status": item.get("status")}
@@ -530,6 +684,13 @@ def _emit_tool_preview(state: AgentState) -> Iterator[str]:
             preview["snippet"] = str(result.get("path"))
         elif result.get("summary"):
             preview["snippet"] = str(result.get("summary"))[:200]
+        if msg_ctx is not None:
+            svc.record_stream_event(
+                msg_ctx,
+                event_type="tool_preview",
+                delta=str(preview.get("snippet") or ""),
+                meta=preview,
+            )
         yield _format_stream_event(
             "tool_preview",
             {"task_id": state["task_id"], **preview},
@@ -588,9 +749,28 @@ def _apply_execution_phase_status(state: AgentState, node_name: str) -> AgentSta
     return updated
 
 
+_POST_DELIVERY_QUIET_NODES = frozenset({"memory_writeback", "eval_capture"})
+
+
 def _should_emit_node_event(node_name: str, state: AgentState) -> bool:
-    """Emit all node events so UI flow graph works for all execution modes."""
-    return True
+    """Hide async post-delivery nodes from main chat; flow/debug panels keep history."""
+    return node_name not in _POST_DELIVERY_QUIET_NODES
+
+
+def _format_delivered_event(state: AgentState) -> str:
+    from app.services.confirmation.stream_display import client_final_answer
+
+    return _format_stream_event(
+        "delivered",
+        {
+            "task_id": state["task_id"],
+            "session_id": state.get("session_id"),
+            "session_turn": state.get("session_turn"),
+            "status": state.get("status"),
+            "final_answer": client_final_answer(state),
+            "structured_output": state.get("structured_output"),
+        },
+    )
 
 
 def _node_stream_payload(state: AgentState, node_name: str) -> dict[str, Any]:
@@ -716,6 +896,9 @@ class GraphRunner:
                 state = set_fsm_state(state, FSM_REPLANNING)
                 if str(state.get("status") or "") == TaskStatus.COMPLETED.value:
                     state = merge_state(state, status=TaskStatus.MISSION_PAUSED.value)
+        from app.services.close_turn_async import close_turn_async
+
+        close_turn_async(state)
         # Graph worker already ended (_end_task_graph_run); persist orphan MISSION_RUNNING as PAUSED.
         return reconcile_worker_lost(state, persist=False)
 
@@ -905,6 +1088,35 @@ class GraphRunner:
         stream_fg_epoch = get_foreground_epoch(state)
         get_state_store().save(state)
         register_live(state, run_id=run_id)
+        draft_ctx = AnswerDraftPersistCtx(state=state)
+        thinking_draft_ctx = ThinkingDraftPersistCtx(state=state)
+        payload_lp = state.get("input_payload") or {}
+        client_message_id = str(payload_lp.get("client_message_id") or "") or None
+        msg_svc = get_chat_message_service()
+        user_message_id = msg_svc.record_user_message(
+            state,
+            text=user_text_from_state(state),
+            client_message_id=client_message_id,
+        )
+        msg_ctx = StreamMessagePersistCtx(
+            task_id=str(task_id),
+            session_id=str(state.get("session_id") or task_id),
+            session_turn=int(state.get("session_turn") or 0),
+            user_message_id=user_message_id,
+            next_seq=get_chat_message_store().next_event_seq(str(task_id)),
+        )
+        _record_ui_telemetry(
+            msg_ctx,
+            "ui_task_created",
+            meta={
+                "task_id": str(task_id),
+                "session_id": str(state.get("session_id") or task_id),
+                "session_turn": state.get("session_turn"),
+                "status": state["status"],
+                "message": "Task created" if created else "Session turn continued",
+                "continued": not created,
+            },
+        )
         progress_q: queue.SimpleQueue[str] = queue.SimpleQueue()
         trace_q: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
         answer_q: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
@@ -914,6 +1126,7 @@ class GraphRunner:
         node_q: queue.SimpleQueue[tuple[str, AgentState] | None] = queue.SimpleQueue()
         stream_error: list[BaseException | None] = [None]
         last_event_at = started_at
+        delivered_emitted = False
 
         def _capture_progress(message: str) -> None:
             progress_q.put(message)
@@ -925,6 +1138,13 @@ class GraphRunner:
             answer_q.put(delta)
 
         def _capture_thinking(delta: dict[str, Any]) -> None:
+            _persist_thinking_side_event(
+                delta,
+                run_id=run_id,
+                foreground_epoch=stream_fg_epoch,
+                thinking_draft_ctx=thinking_draft_ctx,
+                msg_ctx=msg_ctx,
+            )
             thinking_q.put(delta)
 
         def _capture_writing(delta: dict[str, Any]) -> None:
@@ -951,8 +1171,12 @@ class GraphRunner:
                 node_q.put(None)
                 _end_task_graph_run(task_id, run_id)
 
-        yield _format_progress_event(
-            task_id, "任务已开始，Agent 正在处理…", started_at=started_at, phase="started"
+        yield from _emit_progress(
+            task_id,
+            "任务已开始，Agent 正在处理…",
+            started_at=started_at,
+            phase="started",
+            msg_ctx=msg_ctx,
         )
 
         set_progress_handler(_capture_progress)
@@ -975,14 +1199,21 @@ class GraphRunner:
                     ack_q,
                     run_id=run_id,
                     foreground_epoch=stream_fg_epoch,
+                    draft_ctx=draft_ctx,
+                    thinking_draft_ctx=thinking_draft_ctx,
+                    msg_ctx=msg_ctx,
                 )
                 while True:
                     try:
                         msg = progress_q.get_nowait()
                     except queue.Empty:
                         break
-                    yield _format_progress_event(
-                        task_id, msg, started_at=started_at, phase="working"
+                    yield from _emit_progress(
+                        task_id,
+                        msg,
+                        started_at=started_at,
+                        phase="working",
+                        msg_ctx=msg_ctx,
                     )
                     last_event_at = time.monotonic()
 
@@ -996,12 +1227,13 @@ class GraphRunner:
                         active_step_id=live_entry.active_step_id if live_entry else None,
                     )
 
-                if now - last_event_at >= 8.0 and worker.is_alive():
-                    yield _format_progress_event(
+                if now - last_event_at >= 8.0 and worker.is_alive() and not delivered_emitted:
+                    yield from _emit_progress(
                         task_id,
                         "仍在处理中…",
                         started_at=started_at,
                         phase="heartbeat",
+                        msg_ctx=msg_ctx,
                     )
                     last_event_at = now
 
@@ -1017,6 +1249,9 @@ class GraphRunner:
                         ack_q,
                         run_id=run_id,
                         foreground_epoch=stream_fg_epoch,
+                        draft_ctx=draft_ctx,
+                        thinking_draft_ctx=thinking_draft_ctx,
+                        msg_ctx=msg_ctx,
                     )
                     continue
                 if item is None:
@@ -1031,19 +1266,44 @@ class GraphRunner:
                     ack_q,
                     run_id=run_id,
                     foreground_epoch=stream_fg_epoch,
+                    draft_ctx=draft_ctx,
+                    thinking_draft_ctx=thinking_draft_ctx,
+                    msg_ctx=msg_ctx,
                 )
                 while True:
                     try:
                         msg = progress_q.get_nowait()
                     except queue.Empty:
                         break
-                    yield _format_progress_event(
-                        task_id, msg, started_at=started_at, phase="working"
+                    yield from _emit_progress(
+                        task_id,
+                        msg,
+                        started_at=started_at,
+                        phase="working",
+                        msg_ctx=msg_ctx,
                     )
                     last_event_at = time.monotonic()
 
                 node_name, snapshot = item
                 latest = _apply_execution_phase_status(snapshot, node_name)
+                if draft_ctx.accumulated:
+                    latest = apply_streaming_draft(latest, draft_ctx.accumulated)
+                if thinking_draft_ctx.accumulated:
+                    latest = apply_streaming_thinking(latest, thinking_draft_ctx.accumulated)
+                if node_name == "reasoning" and thinking_draft_ctx.accumulated:
+                    latest, thinking_draft_ctx = force_persist_thinking_draft(
+                        thinking_draft_ctx,
+                        latest,
+                        completed=True,
+                    )
+                    if msg_ctx is not None:
+                        get_chat_message_service().sync_thinking_text(
+                            msg_ctx,
+                            thinking_draft_ctx.accumulated,
+                            persist_snapshot_event=True,
+                        )
+                draft_ctx.state = latest
+                thinking_draft_ctx.state = latest
                 touch_live(latest)
                 if trace_enabled():
                     trace_after_node(node_name, latest)
@@ -1059,30 +1319,33 @@ class GraphRunner:
                 if settings.STREAM_SAVE_EVERY_NODE:
                     get_state_store().save(latest)
                 if _should_emit_node_event(node_name, latest):
-                    yield _format_stream_event(
-                        "node",
-                        _node_stream_payload(latest, node_name),
-                    )
+                    node_payload = _node_stream_payload(latest, node_name)
+                    _record_ui_telemetry(msg_ctx, "ui_node", meta=node_payload)
+                    yield _format_stream_event("node", node_payload)
+                if node_name == "output" and not delivered_emitted:
+                    delivered_emitted = True
+                    yield _format_delivered_event(latest)
                 if node_name == "acknowledge":
                     fg = latest.get("foreground_status") or {}
                     last_ack = fg.get("last_ack") if isinstance(fg.get("last_ack"), dict) else {}
                     if last_ack:
-                        yield _format_ack_event(task_id, {**last_ack, "task_id": task_id})
+                        ack_body = {**last_ack, "task_id": task_id}
+                        _record_ui_telemetry(msg_ctx, "ui_ack", meta=ack_body)
+                        yield _format_ack_event(task_id, ack_body)
                 if node_name == "incremental_planning" and latest.get("plan"):
-                    yield _format_stream_event(
-                        "plan",
-                        {
-                            "task_id": latest["task_id"],
-                            "plan": latest.get("plan", []),
-                            "selected_tools": latest.get("selected_tools", []),
-                            "mission": (latest.get("input_payload") or {}).get("mission"),
-                            "writing_intent": (latest.get("input_payload") or {}).get(
-                                "writing_intent"
-                            ),
-                        },
-                    )
+                    plan_payload = {
+                        "task_id": latest["task_id"],
+                        "plan": latest.get("plan", []),
+                        "selected_tools": latest.get("selected_tools", []),
+                        "mission": (latest.get("input_payload") or {}).get("mission"),
+                        "writing_intent": (latest.get("input_payload") or {}).get(
+                            "writing_intent"
+                        ),
+                    }
+                    _record_ui_telemetry(msg_ctx, "ui_plan", meta=plan_payload)
+                    yield _format_stream_event("plan", plan_payload)
                 if node_name == "tool_execution":
-                    yield from _emit_tool_preview(latest)
+                    yield from _emit_tool_preview(latest, msg_ctx=msg_ctx)
                 if (
                     node_name == "reasoning"
                     and latest.get("reasoning_result")
@@ -1096,6 +1359,13 @@ class GraphRunner:
                         str(rr.get("summary") or ""), structured
                     )
                     if summary:
+                        if msg_ctx is not None:
+                            get_chat_message_service().record_stream_event(
+                                msg_ctx,
+                                event_type="answer_preview",
+                                delta=summary,
+                                meta={"node": node_name},
+                            )
                         yield _format_stream_event(
                             "answer_preview",
                             {"task_id": latest["task_id"], "text": summary},
@@ -1109,6 +1379,13 @@ class GraphRunner:
                     )
 
                     if streamed_answer_revoked(latest):
+                        if msg_ctx is not None:
+                            get_chat_message_service().record_stream_event(
+                                msg_ctx,
+                                event_type="answer_revoked",
+                                delta=rejection_detail(latest),
+                                meta={"reason": rejection_detail(latest)},
+                            )
                         yield _format_stream_event(
                             "answer_revoked",
                             {
@@ -1127,15 +1404,37 @@ class GraphRunner:
                 ack_q,
                 run_id=run_id,
                 foreground_epoch=stream_fg_epoch,
+                draft_ctx=draft_ctx,
+                thinking_draft_ctx=thinking_draft_ctx,
+                msg_ctx=msg_ctx,
             )
             while True:
                 try:
                     msg = progress_q.get_nowait()
                 except queue.Empty:
                     break
-                yield _format_progress_event(
-                    task_id, msg, started_at=started_at, phase="working"
+                yield from _emit_progress(
+                    task_id,
+                    msg,
+                    started_at=started_at,
+                    phase="working",
+                    msg_ctx=msg_ctx,
                 )
+
+            if draft_ctx.accumulated:
+                latest = apply_streaming_draft(latest, draft_ctx.accumulated)
+            if thinking_draft_ctx.accumulated:
+                latest = apply_streaming_thinking(latest, thinking_draft_ctx.accumulated)
+                latest, thinking_draft_ctx = force_persist_thinking_draft(
+                    thinking_draft_ctx,
+                    latest,
+                    completed=True,
+                )
+            if draft_ctx.accumulated or thinking_draft_ctx.accumulated:
+                latest = get_state_store().save(latest)
+                touch_live(latest)
+                draft_ctx.state = latest
+                thinking_draft_ctx.state = latest
 
             if stream_error[0] is not None:
                 yield from self._stream_error(latest, stream_error[0])
@@ -1149,10 +1448,10 @@ class GraphRunner:
             set_writing_handler(None)
             _unregister_stream_worker(str(task_id), worker)
             if worker is not threading.current_thread():
-                worker.join(timeout=2.0)
+                worker.join()
             _end_task_graph_run(task_id, run_id)
 
-        yield from self._stream_finalize(latest, interrupted_for_review)
+        yield from self._stream_finalize(latest, interrupted_for_review, msg_ctx=msg_ctx)
 
     def _stream_supervisor(
         self,
@@ -1274,11 +1573,26 @@ class GraphRunner:
             {"task_id": latest["task_id"], "status": latest["status"], "final_answer": None},
         )
 
-    def _stream_finalize(self, latest: AgentState, interrupted_for_review: bool) -> Iterator[str]:
+    def _stream_finalize(
+        self,
+        latest: AgentState,
+        interrupted_for_review: bool,
+        *,
+        msg_ctx: StreamMessagePersistCtx | None = None,
+    ) -> Iterator[str]:
+        from app.services.confirmation.stream_display import client_final_answer
+
         if interrupted_for_review and latest.get("status") != TaskStatus.WAITING_REVIEW.value:
             latest = persist_turn_draft_answer(latest)
+            latest = clear_streaming_draft(latest)
             latest = human_review_node(latest)
             get_state_store().save(latest)
+            if msg_ctx is not None:
+                get_chat_message_service().finalize_assistant_message(
+                    msg_ctx,
+                    status=get_chat_message_service().status_for_turn_end(latest),
+                    content=client_final_answer(latest) or msg_ctx.answer_text,
+                )
             yield _format_stream_event(
                 "review_required",
                 {
@@ -1289,6 +1603,22 @@ class GraphRunner:
             )
         latest = self._finalize_turn(latest)
         latest = get_state_store().save(latest)
+        if msg_ctx is not None and not (
+            interrupted_for_review and latest.get("status") == TaskStatus.WAITING_REVIEW.value
+        ):
+            thinking_text = str(latest.get("streaming_thinking_text") or "").strip()
+            if thinking_text:
+                get_chat_message_service().sync_thinking_text(
+                    msg_ctx,
+                    thinking_text,
+                    persist_snapshot_event=True,
+                )
+            get_chat_message_service().finalize_assistant_message(
+                msg_ctx,
+                status=get_chat_message_service().status_for_turn_end(latest),
+                content=client_final_answer(latest) or msg_ctx.answer_text,
+                thinking_text=thinking_text or None,
+            )
         get_audit_store().append_events(latest["task_id"], latest.get("audit_log", []))
         if latest.get("status") == TaskStatus.COMPLETED.value:
             get_metrics_service().inc_task_completed(
@@ -1348,6 +1678,9 @@ class GraphRunner:
         if revoked:
             done_body["answer_revoked"] = True
             done_body["rejection_reason"] = rejection_detail(latest)
+        if msg_ctx is not None:
+            done_body["assistant_message_id"] = msg_ctx.assistant_message_id
+            done_body["last_event_seq"] = max(0, msg_ctx.next_seq - 1)
         yield _format_stream_event("done", done_body)
 
     def steer_mission(
@@ -1827,6 +2160,19 @@ class GraphRunner:
 
         get_state_store().save(updated)
         get_audit_store().append_events(task_id, updated.get("audit_log", []))
+
+        from app.services.graph_run_registry import is_graph_run_active
+        from app.services.streaming_draft import clear_streaming_draft
+
+        if control_action in ("pause_task", "cancel_task") and not is_graph_run_active(task_id):
+            stored_idle = get_state_store().load(task_id) or updated
+            idle_control = snapshot_task_control(task_id)
+            finalized = finalize_control_outcome(stored_idle, idle_control)
+            finalized = clear_streaming_draft(finalized)
+            finalized = merge_state(finalized, execution_run=None)
+            get_state_store().save(finalized)
+            clear_live(task_id)
+
         return build_control_response(
             task_id,
             control_action=control_action,
