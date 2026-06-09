@@ -50,26 +50,34 @@ def _running_mission_state(base_state, *, goal: str = "写暗战同人"):
     )
 
 
-def test_completed_p0_resend_classified_as_new_task(base_state):
-    """COMPLETED + 纠偏 P0 + resend → new_task (not heuristic interrupt)."""
+def test_completed_p0_resend_classified_as_redirect(base_state):
+    """COMPLETED + 纠偏 P0 + resend → redirect steer stream (not resume/interrupt)."""
+    from app.services.session.turn_policy import resolve_session_turn
+
     state = _completed_mission_state(base_state)
     payload = {
         "goal": P0_STEER,
         "meta": {"resend": True},
         "mission": state.get("mission"),
     }
+    decision = resolve_session_turn(state, payload, P0_STEER, incoming=payload)
+    payload["turn_policy_decision"] = decision.to_dict()
     result = classify_user_event(state, payload=payload)
-    assert result.event_type == "new_task"
-    assert result.source == "user_resend"
+    assert result.event_type == "redirect"
+    assert result.source == "user_resend_steer"
 
 
-def test_completed_p0_non_resend_classified_as_interrupt(base_state):
-    """COMPLETED + 纠偏 P0 + non-resend → heuristic interrupt (steer path)."""
+def test_completed_p0_non_resend_classified_as_redirect(base_state):
+    """COMPLETED + 纠偏 P0 + non-resend → redirect (nothing in-flight to interrupt)."""
+    from app.services.session.turn_policy import resolve_session_turn
+
     state = _completed_mission_state(base_state)
     payload = {"goal": P0_STEER, "mission": state.get("mission")}
+    decision = resolve_session_turn(state, payload, P0_STEER, incoming=payload)
+    payload["turn_policy_decision"] = decision.to_dict()
     result = classify_user_event(state, payload=payload)
-    assert result.event_type == "interrupt"
-    assert result.source == "heuristic_interrupt"
+    assert result.event_type == "redirect"
+    assert result.source == "redirect_signal"
 
 
 def test_running_p0_classified_as_interrupt(base_state):
@@ -201,13 +209,13 @@ def _track_dispatch(monkeypatch, ctrl: SessionController) -> dict[str, int]:
             TaskStatus.COMPLETED.value,
             P0_STEER,
             {"meta": {"resend": True}},
-            "new_turn",
+            "steer",
         ),
         (
             TaskStatus.COMPLETED.value,
             P0_STEER,
             {},
-            "new_turn",
+            "steer",
         ),
         (
             TaskStatus.MISSION_RUNNING.value,
@@ -246,8 +254,8 @@ def test_handle_message_status_event_dispatch_matrix(
         assert calls["stream_task"] == 0
 
 
-def test_completed_interrupt_skips_cancel_and_steer(base_state, monkeypatch):
-    """Fix 2: COMPLETED heuristic interrupt must not enter supersede steer path."""
+def test_completed_steer_correction_uses_steer_stream_not_resume(base_state, monkeypatch):
+    """COMPLETED + steer correction must stream steer replan, not resume/new_turn."""
     state = _completed_mission_state(base_state)
     get_state_store().save(state)
 
@@ -263,8 +271,8 @@ def test_completed_interrupt_skips_cancel_and_steer(base_state, monkeypatch):
 
     list(ctrl.handle_message(state["task_id"], P0_STEER))
 
-    assert calls["stream_task"] == 1
-    assert calls["stream_steer"] == 0
+    assert calls["stream_steer"] == 1
+    assert calls["stream_task"] == 0
     assert cancel_called == []
 
 

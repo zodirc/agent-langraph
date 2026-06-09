@@ -431,6 +431,14 @@ def _register_artifact_and_utility(registry: ToolRegistry) -> None:
                     "task_id": {"type": "string"},
                     "filename": {"type": "string"},
                     "max_chars": {"type": "integer"},
+                    "with_line_numbers": {
+                        "type": "boolean",
+                        "description": "Prefix each line with line numbers for precise start_line/end_line edits",
+                    },
+                    "use_cache": {
+                        "type": "boolean",
+                        "description": "Reuse cached read within the same steer turn (default true)",
+                    },
                 },
             },
             output_schema={"type": "object"},
@@ -443,8 +451,8 @@ def _register_artifact_and_utility(registry: ToolRegistry) -> None:
         ToolSpec(
             name="edit_text_artifact",
             description=(
-                "Safely edit an existing task artifact by replacing known text. "
-                "Only task artifact files are allowed and every edit is audited."
+                "Safely edit an existing task artifact by replacing known text, "
+                "by line range, or via batch edits[]. Every edit is audited."
             ),
             input_schema={
                 "type": "object",
@@ -457,6 +465,11 @@ def _register_artifact_and_utility(registry: ToolRegistry) -> None:
                     "occurrence_index": {"type": "integer"},
                     "start_line": {"type": "integer"},
                     "end_line": {"type": "integer"},
+                    "edits": {
+                        "type": "array",
+                        "description": "Batch replacements [{old_text,new_text,replace_all?,start_line?,end_line?}]",
+                        "items": {"type": "object"},
+                    },
                     "dry_run": {"type": "boolean"},
                     "user_role": {"type": "string"},
                 },

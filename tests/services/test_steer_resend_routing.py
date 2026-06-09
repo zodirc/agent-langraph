@@ -53,6 +53,51 @@ def test_resend_classified_as_new_task_not_resume(base_state):
     assert result.event_type == "new_task"
 
 
+def test_resend_steer_correction_on_completed_classifies_redirect(base_state):
+    goal = "我认为，你应该使用原电影中的人物姓名"
+    mission = {"kind": "writing", "objective": "写黑客帝国剧本"}
+    state = merge_state(
+        base_state,
+        status=TaskStatus.COMPLETED.value,
+        mission=mission,
+        session_turn=2,
+        input_payload={"goal": "写黑客帝国剧本", "mission": mission},
+    )
+    decision = resolve_session_turn(
+        state,
+        {"goal": goal, "meta": {"resend": True}, "mission": mission},
+        goal,
+        incoming={"goal": goal, "meta": {"resend": True}},
+    )
+    assert decision.intent == "supersede_active_mission"
+    result = classify_user_event(
+        state,
+        payload={
+            "goal": goal,
+            "meta": {"resend": True},
+            "mission": mission,
+            "turn_policy_decision": decision.to_dict(),
+        },
+    )
+    assert result.event_type == "redirect"
+    assert result.source == "user_resend_steer"
+
+
+def test_completed_steer_correction_turn_policy_not_resume(base_state):
+    goal = "我认为，你应该使用原电影中的人物姓名"
+    mission = {"kind": "writing", "objective": "写黑客帝国剧本"}
+    state = merge_state(
+        base_state,
+        status=TaskStatus.COMPLETED.value,
+        mission=mission,
+        session_turn=2,
+        input_payload={"goal": "写黑客帝国剧本", "mission": mission},
+    )
+    decision = resolve_session_turn(state, {"goal": goal, "mission": mission}, goal)
+    assert decision.intent == "supersede_active_mission"
+    assert decision.source == "completed_steer_correction"
+
+
 def test_turn_policy_steer_correction_is_supersede(base_state):
     mission = {"kind": "writing", "objective": "写暗战同人", "total_target_chars": 400000}
     state = merge_state(base_state, mission=mission, session_turn=2)

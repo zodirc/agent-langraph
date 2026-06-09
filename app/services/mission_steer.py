@@ -121,6 +121,15 @@ def apply_steer_planning_gate(payload: dict[str, Any]) -> dict[str, Any]:
     out = invalidate_turn_contract_payload(dict(payload), REASON_STEER)
     out["require_planning_after_steer"] = True
     out["steer_planning_done"] = False
+    out.pop("steer_contract_pinned", None)
+    out.pop("steer_planning_complete_pending", None)
+    out.pop("steer_planning_llm_calls", None)
+    out["steer_turn_started_at"] = _now_iso()
+    from app.services.artifact_read_cache import clear_task_read_cache
+
+    task_id = str(out.get("task_id") or payload.get("task_id") or "")
+    if task_id:
+        clear_task_read_cache(task_id)
     out.pop("skip_planning_llm", None)
     if not out.get("steer_applied_at"):
         out["steer_applied_at"] = _now_iso()

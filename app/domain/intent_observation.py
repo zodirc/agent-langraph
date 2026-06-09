@@ -28,6 +28,8 @@ class IntentObservationResult:
     session_relation: str = "stay"
     turn_kind_candidate: str | None = None
     needs_planning: bool = True
+    is_revision: bool = False
+    revision_intent: dict[str, Any] | None = None
     confidence: float = 0.0
     reasons: list[str] = field(default_factory=list)
     trace_id: str | None = None
@@ -58,6 +60,10 @@ class IntentObservationResult:
             out["fallback_used"] = True
         if self.shadow_only:
             out["shadow_only"] = True
+        if self.is_revision:
+            out["is_revision"] = True
+        if self.revision_intent:
+            out["revision_intent"] = dict(self.revision_intent)
         return out
 
     @classmethod
@@ -76,6 +82,12 @@ class IntentObservationResult:
                 else None
             ),
             needs_planning=bool(data.get("needs_planning", True)),
+            is_revision=bool(data.get("is_revision")),
+            revision_intent=(
+                dict(data["revision_intent"])
+                if isinstance(data.get("revision_intent"), dict)
+                else None
+            ),
             confidence=float(data.get("confidence") or 0.0),
             reasons=[str(r) for r in (data.get("reasons") or [])],
             trace_id=str(data["trace_id"]) if data.get("trace_id") else None,

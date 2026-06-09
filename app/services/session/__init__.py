@@ -4,6 +4,7 @@ from app.services.session.config import SessionTurnPolicyConfig, load_session_tu
 from app.services.session.turn_policy import (
     TurnDecision,
     apply_qa_turn_isolation,
+    apply_revision_turn_isolation,
     classify_turn_intent,
     is_ephemeral_qa_goal,
     resolve_session_turn,
@@ -15,6 +16,7 @@ __all__ = [
     "SessionTurnPolicyConfig",
     "TurnDecision",
     "apply_qa_turn_isolation",
+    "apply_revision_turn_isolation",
     "classify_turn_intent",
     "is_ephemeral_qa_goal",
     "load_session_turn_policy_config",

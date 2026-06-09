@@ -32,6 +32,7 @@ from app.services.tool_dag import execute_tool_stages, parse_tool_stages
 from app.services.tool_intent_guard import check_tool_params_safe
 from app.services.tool_registry import get_tool_registry
 from app.services.turn_event_log import record_turn_event
+from app.services.revision_side_effects import maybe_invalidate_intent_on_tool_result
 
 
 def tool_execution_node(state: AgentState) -> AgentState:
@@ -52,6 +53,15 @@ def tool_execution_node(state: AgentState) -> AgentState:
         if outline_edit is not None:
             get_state_store().save(outline_edit)
             return outline_edit
+        from app.services.writing.revision_executor import (
+            execute_revision_fast_path,
+            is_revision_tool_path,
+        )
+
+        if is_revision_tool_path(state):
+            result = execute_revision_fast_path(state, node_id="tool_execution")
+            get_state_store().save(result)
+            return result
         from app.services.execution_control import (
             CancelRequested,
             PauseRequested,
@@ -299,6 +309,12 @@ def tool_execution_node(state: AgentState) -> AgentState:
         from app.services.context_registry import persist_tool_context
 
         updated = persist_tool_context(updated, results)
+        for item in results:
+            updated = maybe_invalidate_intent_on_tool_result(
+                updated,
+                str(item.get("tool") or ""),
+                item,
+            )
         for event_type, subject, detail in pending_events:
             updated = record_turn_event(
                 updated,
@@ -353,6 +369,38 @@ def _tool_cfg(payload: dict[str, Any], tool_name: str) -> dict[str, Any]:
         return {}
     entry = raw.get(tool_name)
     return dict(entry) if isinstance(entry, dict) else {}
+
+
+def _revision_tool_params(
+    tool_name: str,
+    state: AgentState,
+    task_id: str,
+    tool_params: dict[str, Any],
+) -> dict[str, Any] | None:
+    payload = state.get("input_payload") or {}
+    if payload.get("thin_execution_profile") != "revision_scoped":
+        return None
+    rev_raw = payload.get("revision_intent")
+    if not isinstance(rev_raw, dict) or not rev_raw:
+        return None
+    from app.services.writing.revision_command import (
+        revision_intent_to_edit_params,
+        revision_intent_to_read_params,
+    )
+
+    if tool_name == "read_text_artifact":
+        params = revision_intent_to_read_params(rev_raw, task_id)
+        params.update({k: v for k, v in tool_params.items() if k not in params})
+        return params
+    if tool_name == "edit_text_artifact":
+        params = revision_intent_to_edit_params(
+            rev_raw,
+            task_id,
+            dry_run=bool(tool_params.get("dry_run", False)),
+        )
+        params.update({k: v for k, v in tool_params.items() if k not in params})
+        return params
+    return None
 
 
 def _artifact_filename(
@@ -414,6 +462,9 @@ def _build_tool_params(tool_name: str, state: AgentState) -> dict[str, Any]:
     ):
         return {"task_id": task_id, **tool_params}
     if tool_name == "edit_text_artifact":
+        rev_params = _revision_tool_params(tool_name, state, task_id, tool_params)
+        if rev_params is not None:
+            return rev_params
         filename = _artifact_filename(state, tool_name=tool_name, tool_params=tool_params)
         return {
             "task_id": task_id,
@@ -442,6 +493,9 @@ def _build_tool_params(tool_name: str, state: AgentState) -> dict[str, Any]:
             },
         }
     if tool_name in ("write_text_artifact", "append_text_artifact", "read_text_artifact"):
+        rev_params = _revision_tool_params(tool_name, state, task_id, tool_params)
+        if rev_params is not None:
+            return {**rev_params, "_agent_state": state}
         require_exists = tool_name == "read_text_artifact" or tool_name == "edit_text_artifact"
         if tool_name in ("write_text_artifact", "append_text_artifact"):
             require_exists = False

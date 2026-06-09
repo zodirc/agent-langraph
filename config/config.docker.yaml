@@ -221,6 +221,28 @@ confirmation_gates:
   cancel_on_intervention:
     batch_unit_quality: [append_chapter, append_body, write_body]
 
+revision:
+  read_loop_max: 2
+  intent_recompute_max: 1
+  scope_clarification_threshold: 0.45
+  edit_verbs:
+    - 润色
+    - 修改
+    - 改
+    - 重写
+    - 压缩
+    - 换
+    - 收
+    - 调
+    - polish
+    - revise
+    - rewrite
+    - retone
+    - edit
+    - fix
+    - compress
+    - refine
+
 # Must mirror config.yaml route_audit (kinds + conflicts); enabled-only is a no-op
 route_audit:
   enabled: true

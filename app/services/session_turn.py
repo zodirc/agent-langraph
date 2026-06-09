@@ -64,6 +64,16 @@ def _stamp_turn_policy_and_classification(
     )
     if decision.intent in ("resume_mission", "supersede_active_mission"):
         merged = restore_archived_mission(existing, merged)
+    if decision.intent == "supersede_active_mission" and goal:
+        from app.services.mission_steer import apply_steer_message
+
+        staged = apply_steer_message(
+            existing,
+            goal,
+            skip_history_append=True,
+            persist=False,
+        )
+        merged = {**merged, **dict(staged.get("input_payload") or {})}
     if decision.intent == "resume_mission":
         from app.services.mission_execution import (
             is_mechanical_resume_decision,
@@ -110,6 +120,16 @@ def build_inbound_merged_payload(
         **payload,
         "conversation_history": history,
     }
+    from app.services.mission_intervention import reconcile_payload_mission
+
+    existing_ip = existing.get("input_payload") if isinstance(existing.get("input_payload"), dict) else {}
+    preserved_mission = existing_ip.get("mission") if isinstance(existing_ip.get("mission"), dict) else None
+    merged = reconcile_payload_mission(
+        merged,
+        state_mission=existing.get("mission"),
+        state_input_payload=existing_ip,
+        preserved_mission=preserved_mission,
+    )
     if goal:
         merged = _stamp_turn_policy_and_classification(
             existing,

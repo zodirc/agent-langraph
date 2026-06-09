@@ -10,7 +10,7 @@ suggest_pause（writing 等）。"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -26,6 +26,7 @@ class EvalResult:
     reason: str
     action: str  # continue | finish | pause | escalate
     pause_reason: str = ""
+    meta: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -35,6 +36,8 @@ class EvalResult:
         }
         if self.pause_reason:
             out["pause_reason"] = self.pause_reason
+        if self.meta:
+            out["meta"] = dict(self.meta)
         return out
 
 
@@ -188,6 +191,17 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
     )
     from app.services.task_control import snapshot_task_control
 
+    from app.services.revision_done import is_revision_done, is_revision_turn
+
+    if is_revision_turn(state):
+        from app.services.revision_done import _revision_intent_from_state, is_revision_done
+
+        ri = _revision_intent_from_state(state)
+        if ri is None or ri.completion_policy == "stop_after_edit":
+            done, reason = is_revision_done(state)
+            if done:
+                return EvalResult(done=True, reason=reason, action="finish")
+
     ctx = ensure_interrupt_context(state)
     payload_replan = merge_input_payload_for_gates(state, stored)
     from app.services.session_fsm import routing_needs_replan
@@ -312,6 +326,70 @@ def evaluate_mission_control(state: AgentState) -> EvalResult:
                 done=False,
                 reason="forced intervention continue",
                 action="continue",
+            )
+
+    from app.runtime.state_field_access import progress_from_state, set_progress_on_state
+    from app.services.mission_stall_guard import apply_stall_progress, detect_stall, record_plan_signature
+
+    progress = {**dict(progress_from_state(state) or progress or {}), **record_plan_signature(state)}
+    state_for_stall = set_progress_on_state(state, progress)
+    stall = detect_stall(state_for_stall)
+    if stall:
+        progress = apply_stall_progress(state_for_stall, stall)
+        state_for_stall = set_progress_on_state(state_for_stall, progress)
+        stall_budget = int(getattr(settings, "MISSION_STALL_BUDGET", 2))
+        signature = str(stall.get("signature") or "")
+        stall_count = int(stall.get("stall_count") or 0)
+        payload_stall = dict(state.get("input_payload") or stored.get("input_payload") or {})
+        from app.services.mission_stall_execute import stall_deterministic_already_tried
+
+        if (
+            stall_count < stall_budget
+            and signature
+            and not stall_deterministic_already_tried(payload_stall, signature)
+        ):
+            return EvalResult(
+                done=False,
+                reason=f"stall deterministic edit: {signature}",
+                action="continue",
+                meta={
+                    "stall_deterministic_edit": True,
+                    "stall_signature": signature,
+                },
+            )
+        if stall_count >= stall_budget:
+            from app.services.mission_execution import PAUSE_FORCED
+
+            question = (
+                "检测到多次重复计划但大纲/正文几乎没有变化。"
+                "请补充更具体的修改说明（例如要替换的人物名或章节）。"
+            )
+            payload_stall["steer_clarification_pending"] = True
+            payload_stall["steer_clarification_question"] = question
+            return EvalResult(
+                done=True,
+                reason=f"mission stalled: {signature}",
+                action="pause",
+                pause_reason=PAUSE_FORCED,
+                meta={"stall_clarification": question},
+            )
+
+    payload_turn = merge_input_payload_for_gates(state, stored)
+    steer_started = payload_turn.get("steer_turn_started_at") or payload_turn.get("steer_applied_at")
+    interactive_cap = int(getattr(settings, "MISSION_INTERACTIVE_STEER_MAX_SEC", 120))
+    if steer_started and interactive_cap > 0 and not payload_turn.get("steer_planning_done"):
+        elapsed_steer = _elapsed_wall_seconds(str(steer_started))
+        if elapsed_steer is not None and elapsed_steer >= interactive_cap:
+            from app.services.mission_execution import PAUSE_FORCED
+            from app.services.steer_progress_report import build_steer_progress_summary
+
+            summary = build_steer_progress_summary(state, elapsed_sec=elapsed_steer)
+            return EvalResult(
+                done=True,
+                reason=f"interactive_steer {int(elapsed_steer)}s >= {interactive_cap}s",
+                action="pause",
+                pause_reason=PAUSE_FORCED,
+                meta={"progress_summary": summary},
             )
 
     budget_raw = mission.get("budget") or {}

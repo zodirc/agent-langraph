@@ -149,6 +149,7 @@ def build_agent_graph() -> StateGraph:
         route_after_reasoning_or_writing,
         {
             "reasoning_or_writing": "reasoning_or_writing",
+            "incremental_planning": "incremental_planning",
             "verification": "verification",
             "rejected": "rejected",
             "dead_letter": "dead_letter",

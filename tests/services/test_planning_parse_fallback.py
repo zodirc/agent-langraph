@@ -83,12 +83,12 @@ def test_steer_replan_fallback_edit_plot_when_outline_exists(base_state):
     )
     fb = steer_replan_planning_fallback_from_state(state)
     assert fb is not None
-    assert fb.get("fallback_reason") == "steer_replan_edit_plot"
-    assert fb.get("mission_intervention", {}).get("action") == "edit_plot"
-    assert fb.get("writing_intent", {}).get("action") == "edit_plot"
+    assert fb.get("fallback_reason") == "steer_replan_rewrite_outline"
+    assert fb.get("mission_intervention", {}).get("action") == "rewrite_outline"
+    assert fb.get("writing_intent", {}).get("action") == "rewrite_outline"
     patch = fb.get("work_plan_patch") or {}
-    assert "write_outline" in (patch.get("cancel_kinds") or [])
-    assert fb.get("steer_outline_route") == "modify"
+    assert "edit_plot" in (patch.get("cancel_kinds") or [])
+    assert fb.get("steer_outline_route") == "rewrite"
 
 
 def test_steer_replan_fallback_write_outline_when_no_outline_file(base_state):
@@ -141,7 +141,7 @@ def test_apply_steer_replan_outline_route_clears_read_only_tools(base_state):
         "tool_stages": [["read_text_artifact"]],
     }
     routed = apply_steer_replan_outline_route(state, llm_read_loop)
-    assert routed.get("steer_outline_route") == "modify"
+    assert routed.get("steer_outline_route") == "rewrite"
     assert routed.get("selected_tools") == []
     assert "tool_stages" not in routed
 

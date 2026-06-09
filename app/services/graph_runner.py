@@ -56,8 +56,6 @@ from typing import Any, Iterator, Optional
 from app.config.settings import settings
 from app.nodes.human_review_node import human_review_node
 from app.runtime.graph import resume_graph, run_graph, stream_graph
-from app.runtime.mission_graph import run_mission_graph, stream_mission_graph
-from app.runtime.exploration_graph import run_exploration_graph, stream_exploration_graph
 from app.runtime.supervisor_graph import run_supervisor_graph, stream_supervisor_graph
 from app.services.mission_schema import should_use_mission_runtime
 from app.services.mission_service import init_mission_state
@@ -843,33 +841,20 @@ class GraphRunner:
         thread: str,
         mode: str,
     ) -> AgentState:
-        """
-        按 execution_mode 选择 run_*_graph。
+        """Select graph by execution_mode.
 
-        Select graph by execution_mode.
+        Unified core: only the single agent graph and the supervisor
+        decomposition survive. Legacy mission/exploration modes are gone.
         """
         try:
             if mode == "supervisor":
-                from app.services.manuscript_supervisor_guard import (
-                    reject_supervisor_for_manuscript,
-                )
-
-                blocked = reject_supervisor_for_manuscript(state)
-                if blocked is not None:
-                    return blocked
                 return run_supervisor_graph(state)
-            if mode == "exploration":
-                return run_exploration_graph(state, thread_id=thread)
-            if mode in ("mission", "mission_oma"):
-                return run_mission_graph(state, thread_id=thread)
             return run_graph(state, thread_id=thread)
         except Exception as exc:
             handled = handle_invoke_failure(thread, exc, state=state)
             if handled and handled.get("status") == "checkpoint_reset":
-                if mode == "exploration":
-                    return run_exploration_graph(state, thread_id=thread)
-                if mode == "mission":
-                    return run_mission_graph(state, thread_id=thread)
+                if mode == "supervisor":
+                    return run_supervisor_graph(state)
                 return run_graph(state, thread_id=thread)
             raise
 
@@ -931,16 +916,8 @@ class GraphRunner:
         )
         if task_id and not session_key:
             state = merge_state(state, task_id=task_id)
-        if should_use_mission_runtime(payload, mode):
-            goal = str(payload.get("goal") or "").strip()
-            from app.services.session_goal import should_enter_mission_runtime
-
-            if should_enter_mission_runtime(state, payload, goal):
-                mode = "mission"
-                state = _prepare_mission_for_turn(state, payload, created=created)
-            else:
-                mode = "single"
-                state = merge_state(state, execution_mode="single")
+        if mode not in ("supervisor", "single"):
+            mode = "single"
         state = merge_state(state, execution_mode=mode)
         # Promote _skill_* to state.skill_runtime_policy for planning/tool nodes
         if payload.get("skill_id") or payload.get("_skill_policy"):
@@ -1032,22 +1009,7 @@ class GraphRunner:
         state = sync_fsm_state(state)
         state_payload = stamp_session_mode(dict(state.get("input_payload") or {}))
         state = merge_state(state, input_payload=state_payload)
-        steer_replan = is_fsm_replanning(state)
-        if should_use_mission_runtime(payload, mode):
-            goal = str(payload.get("goal") or "").strip()
-            from app.services.session_goal import should_enter_mission_runtime
-
-            if steer_replan:
-                state = _prepare_mission_for_turn(state, payload, created=created)
-                state = merge_state(state, execution_mode="single")
-            elif should_enter_mission_runtime(state, payload, goal):
-                state = _prepare_mission_for_turn(state, payload, created=created)
-                state = merge_state(state, execution_mode="mission")
-            else:
-                state = merge_state(state, execution_mode="single")
-        elif mode == "exploration":
-            state = merge_state(state, execution_mode="exploration")
-            state = merge_state(state, execution_mode="exploration")
+        state = merge_state(state, execution_mode="single")
         from app.services.engineering_trace import init_trace_context
 
         state = init_trace_context(
@@ -1747,6 +1709,17 @@ class GraphRunner:
             TaskStatus.MISSION_PAUSED.value,
             TaskStatus.REASONED.value,
         ):
+            payload = stored.get("input_payload") or {}
+            goal = str(payload.get("goal") or payload.get("latest_steer_message") or "").strip()
+            from app.services.session.turn_policy import _goal_requires_steer_replan
+
+            if (
+                status.endswith("FAILED")
+                and goal
+                and _goal_requires_steer_replan(goal)
+                and (stored.get("mission") or payload.get("mission"))
+            ):
+                return self.prepare_supersede_replan(task_id)
             raise ValueError(f"Task {task_id} cannot resume from fsm={fsm} status={status}")
 
         from app.services.mission_steer_confirm import (

@@ -45,6 +45,32 @@ def normalize_payload_execution_fields(payload: dict[str, Any]) -> dict[str, Any
     wi = out.get("writing_intent")
     if wi is not None and not isinstance(wi, dict):
         out.pop("writing_intent", None)
+    if out.get("mission") is not None and not isinstance(out.get("mission"), dict):
+        out.pop("mission", None)
+    return out
+
+
+def reconcile_payload_mission(
+    payload: dict[str, Any],
+    *,
+    state_mission: Any = None,
+    state_input_payload: dict[str, Any] | None = None,
+    preserved_mission: Any = None,
+) -> dict[str, Any]:
+    """Prefer dict mission blocks; drop string scalars that break ``.get`` chains."""
+    out = dict(payload)
+    raw = out.get("mission")
+    if isinstance(raw, dict):
+        return out
+    for candidate in (
+        preserved_mission,
+        state_mission,
+        (state_input_payload or {}).get("mission"),
+    ):
+        if isinstance(candidate, dict) and candidate:
+            out["mission"] = candidate
+            return out
+    out.pop("mission", None)
     return out
 
 
@@ -96,7 +122,7 @@ def coerce_steer_intervention(
     state: dict[str, Any],
     intent: WritingIntentRecord,
 ) -> WritingIntentRecord:
-    if intent.action not in ("rewrite_outline", "write_outline"):
+    if intent.action not in ("rewrite_outline", "write_outline", "edit_plot"):
         return intent
 
     from app.services.manuscript_service import resolve_manuscript
@@ -104,11 +130,6 @@ def coerce_steer_intervention(
     task_id = str(state.get("task_id") or "")
     stored = state.get("manuscript") or {}
     ms = resolve_manuscript(task_id, stored) if task_id else None
-    outline_bytes = max(
-        int(getattr(ms, "outline_bytes", 0) or 0),
-        int(stored.get("outline_bytes") or 0),
-    )
-    min_outline = int(getattr(settings, "MANUSCRIPT_MIN_OUTLINE_CHARS", 80))
     anchor = intent.anchor
 
     if anchor.old_text and anchor.new_text:
@@ -125,16 +146,25 @@ def coerce_steer_intervention(
         )
 
     from app.services.artifact_resolver import outline_exists
-
-    if not outline_exists(state):
-        return intent
+    from app.services.edit_scope import classify_edit_action
 
     payload = state.get("input_payload") or {}
     steer = str(payload.get("latest_steer_message") or payload.get("goal") or "")
+    action = classify_edit_action(steer, outline_exists=outline_exists(state))
+    if action == "rewrite_outline":
+        return WritingIntentRecord(
+            action="rewrite_outline",
+            force=intent.force,
+            reason=intent.reason or steer[:240],
+            anchor=IntentAnchor(steer_correction=steer[-2000:] if steer else "", target_hint="outline"),
+            source=intent.source,
+        )
+    if not outline_exists(state):
+        return intent
     return WritingIntentRecord(
         action="edit_plot",
         force=intent.force,
-        reason=intent.reason or "localized outline patch",
+        reason=intent.reason or "outline edit per steer",
         anchor=IntentAnchor(
             steer_correction=steer[-2000:] if steer else "",
             target_hint="outline",
@@ -190,9 +220,11 @@ def apply_intent_to_payload(
     if action == "run_tools":
         pass
 
-    if intent.force:
+    if intent.force and action not in ("edit_plot", "review_outline"):
         out["force_slow_reasoning"] = True
         out.pop("skip_planning_llm", None)
+    elif action in ("edit_plot", "review_outline") and intent.force:
+        out.pop("force_slow_reasoning", None)
 
     from app.services.turn_contract import apply_turn_contract_to_payload, build_turn_contract
 

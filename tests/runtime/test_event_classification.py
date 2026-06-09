@@ -102,8 +102,9 @@ def test_classify_user_event_matrix(payload, state_patch, expected):
 
 
 def test_resend_beats_p0_heuristic_on_completed_mission(base_state):
-    """Explicit resend must win over P0 content-regex interrupt guess."""
+    """Explicit resend steer on completed mission → redirect (not resume/interrupt)."""
     from app.services.mission_schema import build_mission_dict
+    from app.services.session.turn_policy import resolve_session_turn
 
     steer = "基于原电影编写，人物需要为原电影人物，只改动剧情走向"
     mission = build_mission_dict(
@@ -118,9 +119,11 @@ def test_resend_beats_p0_heuristic_on_completed_mission(base_state):
         input_payload={"mission": mission, "goal": "写剧本"},
     )
     payload = {"goal": steer, "meta": {"resend": True}, "mission": mission}
+    decision = resolve_session_turn(state, payload, steer, incoming=payload)
+    payload["turn_policy_decision"] = decision.to_dict()
     result = classify_user_event(state, payload=payload)
-    assert result.event_type == "new_task"
-    assert result.source == "user_resend"
+    assert result.event_type == "redirect"
+    assert result.source == "user_resend_steer"
 
 
 def test_interrupt_preempts_redirect(base_state):

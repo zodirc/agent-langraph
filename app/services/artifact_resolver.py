@@ -103,8 +103,14 @@ def _file_exists(task_id: str, filename: str) -> bool:
     return artifact_bytes_on_disk(task_id, filename) > 0
 
 
+def _payload_mission_dict(payload: dict[str, Any]) -> dict[str, Any]:
+    """Mission block from payload — ignore legacy string scalars (e.g. ``\"writing\"``)."""
+    raw = payload.get("mission")
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
 def _planned_artifacts(payload: dict[str, Any], ms: Manuscript) -> tuple[Optional[str], Optional[str]]:
-    mission = payload.get("mission") or {}
+    mission = _payload_mission_dict(payload)
     policy = mission.get("step_policy") if isinstance(mission.get("step_policy"), dict) else {}
     outline = None
     body = None
@@ -286,7 +292,7 @@ def _create_target(
     role: ArtifactRole,
     action: str,
 ) -> ResolvedTarget:
-    mission = payload.get("mission") or {}
+    mission = _payload_mission_dict(payload)
     policy = mission.get("step_policy") if isinstance(mission.get("step_policy"), dict) else {}
     if role == ArtifactRole.OUTLINE:
         name = _pick_artifact_basename(

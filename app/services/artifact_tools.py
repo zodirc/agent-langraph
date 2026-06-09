@@ -285,6 +285,105 @@ def _audit_artifact_edit(
 
 
 
+def _normalize_edit_text(text: str) -> str:
+    """Fold whitespace and strip common streaming escape noise for fuzzy anchor match."""
+    import unicodedata
+
+    raw = str(text or "")
+    raw = raw.replace("\\-", "-").replace("\\_", "_").replace("\\*", "*")
+    raw = raw.replace("\\`", "`").replace("\\.", ".")
+    raw = re.sub(r"\\([^\s])", r"\1", raw)
+    raw = unicodedata.normalize("NFKC", raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
+    return raw
+
+
+def _find_fuzzy_span(target: str, old_text: str) -> tuple[int, int] | None:
+    """Locate old_text in target using normalized comparison; return char span in target."""
+    if not old_text:
+        return None
+    if old_text in target:
+        start = target.index(old_text)
+        return start, start + len(old_text)
+
+    norm_old = _normalize_edit_text(old_text)
+    if not norm_old:
+        return None
+
+    lines = target.splitlines(keepends=True)
+    if not lines:
+        return None
+
+    norm_lines = [_normalize_edit_text(line) for line in lines]
+    joined = "".join(norm_lines)
+    pos = joined.find(norm_old)
+    if pos >= 0:
+        cursor = 0
+        start_idx = 0
+        end_idx = len(target)
+        norm_cursor = 0
+        for line, norm_line in zip(lines, norm_lines):
+            line_start = cursor
+            line_norm_start = norm_cursor
+            line_norm_end = norm_cursor + len(norm_line)
+            if line_norm_start <= pos < line_norm_end:
+                start_idx = line_start + max(0, pos - line_norm_start)
+            if line_norm_start < pos + len(norm_old) <= line_norm_end:
+                end_idx = line_start + min(len(line), pos + len(norm_old) - line_norm_start)
+                break
+            cursor += len(line)
+            norm_cursor = line_norm_end
+        if end_idx > start_idx:
+            return start_idx, end_idx
+
+    best: tuple[float, int, int] | None = None
+    window = max(len(norm_old), 8)
+    step = max(1, window // 4)
+    for start in range(0, max(1, len(joined) - window + 1), step):
+        chunk = joined[start : start + window + len(norm_old)]
+        ratio = difflib.SequenceMatcher(None, norm_old, chunk[: len(norm_old) + window]).ratio()
+        if ratio >= 0.82 and (best is None or ratio > best[0]):
+            best = (ratio, start, start + len(norm_old))
+    if best is None:
+        return None
+    _, norm_start, norm_end = best
+    cursor = 0
+    norm_cursor = 0
+    start_idx = 0
+    end_idx = len(target)
+    for line, norm_line in zip(lines, norm_lines):
+        line_start = cursor
+        line_norm_start = norm_cursor
+        line_norm_end = norm_cursor + len(norm_line)
+        if line_norm_start <= norm_start < line_norm_end:
+            start_idx = line_start
+        if line_norm_start < norm_end <= line_norm_end:
+            end_idx = line_start + len(line)
+            break
+        cursor += len(line)
+        norm_cursor = line_norm_end
+    if end_idx <= start_idx:
+        return None
+    return start_idx, end_idx
+
+
+def _nearest_candidate(target: str, old_text: str, *, limit: int = 240) -> str:
+    norm_old = _normalize_edit_text(old_text)
+    if not norm_old:
+        return ""
+    lines = target.splitlines()
+    best_line = ""
+    best_ratio = 0.0
+    for line in lines:
+        ratio = difflib.SequenceMatcher(None, norm_old, _normalize_edit_text(line)).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_line = line
+    if best_line:
+        return best_line[:limit]
+    return target[:limit]
+
+
 def _slice_bounds(content: str, start_line: int | None, end_line: int | None) -> tuple[int, int]:
     if start_line is None and end_line is None:
         return 0, len(content)
@@ -313,9 +412,37 @@ def _apply_precision_edit(
 ) -> tuple[str, int, dict[str, Any]]:
     start_idx, end_idx = _slice_bounds(original, start_line, end_line)
     target = original[start_idx:end_idx]
+    match_mode = "exact"
+    resolved_old = old_text
     occurrences = target.count(old_text)
     if occurrences == 0:
-        raise ValueError("old_text not found in selected scope")
+        span = _find_fuzzy_span(target, old_text)
+        if span is not None:
+            match_mode = "fuzzy"
+            rel_start, rel_end = span
+            resolved_old = target[rel_start:rel_end]
+            occurrences = 1
+            if occurrence_index is not None or replace_all:
+                old_text = resolved_old
+            else:
+                updated = (
+                    original[: start_idx + rel_start]
+                    + new_text
+                    + original[start_idx + rel_end :]
+                )
+                return updated, 1, {
+                    "operation": "replace_fuzzy",
+                    "scope": {"start_line": start_line, "end_line": end_line},
+                    "occurrence_index": occurrence_index,
+                    "scope_match_count": 1,
+                    "match_mode": match_mode,
+                    "resolved_old_text": resolved_old,
+                }
+        else:
+            candidate = _nearest_candidate(target, old_text)
+            hint = f" (nearest: {candidate[:120]!r})" if candidate else ""
+            raise ValueError(f"old_text not found in selected scope{hint}")
+    old_text = resolved_old if match_mode == "fuzzy" else old_text
     if occurrence_index is not None:
         if occurrence_index < 1 or occurrence_index > occurrences:
             raise ValueError("occurrence_index out of range")
@@ -336,7 +463,7 @@ def _apply_precision_edit(
         replacements = occurrences if replace_all else 1
         operation = "replace_all" if replace_all else "replace_one"
     updated = original[:start_idx] + replaced_target + original[end_idx:]
-    return updated, replacements, {
+    selection: dict[str, Any] = {
         "operation": operation,
         "scope": {
             "start_line": start_line,
@@ -345,6 +472,39 @@ def _apply_precision_edit(
         "occurrence_index": occurrence_index,
         "scope_match_count": occurrences,
     }
+    if match_mode != "exact":
+        selection["match_mode"] = match_mode
+        selection["resolved_old_text"] = old_text
+    return updated, replacements, selection
+
+
+def _apply_batch_edits(
+    original: str,
+    edits: list[dict[str, Any]],
+) -> tuple[str, int, list[dict[str, Any]]]:
+    updated = original
+    total = 0
+    details: list[dict[str, Any]] = []
+    for idx, edit in enumerate(edits):
+        if not isinstance(edit, dict):
+            continue
+        old_text = str(edit.get("old_text") or "")
+        if not old_text:
+            continue
+        updated, replacements, selection = _apply_precision_edit(
+            updated,
+            old_text=old_text,
+            new_text=str(edit.get("new_text") or ""),
+            replace_all=bool(edit.get("replace_all", False)),
+            occurrence_index=(
+                int(edit["occurrence_index"]) if edit.get("occurrence_index") is not None else None
+            ),
+            start_line=int(edit["start_line"]) if edit.get("start_line") is not None else None,
+            end_line=int(edit["end_line"]) if edit.get("end_line") is not None else None,
+        )
+        total += replacements
+        details.append({"index": idx, "replacements": replacements, "selection": selection})
+    return updated, total, details
 
 
 
@@ -362,21 +522,31 @@ def handle_edit_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
     end_line = params.get("end_line")
     end_line = int(end_line) if end_line is not None else None
     dry_run = bool(params.get("dry_run", False))
+    batch_edits = params.get("edits")
     path = task_artifact_dir(task_id) / filename
     if not path.exists():
         raise FileNotFoundError(f"Artifact not found: {filename}")
     original = path.read_text(encoding="utf-8")
-    if not old_text:
-        raise ValueError("old_text is required")
-    updated, replacements, selection = _apply_precision_edit(
-        original,
-        old_text=old_text,
-        new_text=new_text,
-        replace_all=replace_all,
-        occurrence_index=occurrence_index,
-        start_line=start_line,
-        end_line=end_line,
-    )
+    batch_details: list[dict[str, Any]] = []
+    if isinstance(batch_edits, list) and batch_edits:
+        updated, replacements, batch_details = _apply_batch_edits(original, batch_edits)
+        selection = {"operation": "batch_replace", "batch_count": len(batch_details)}
+    else:
+        if not old_text and start_line is None and end_line is None:
+            raise ValueError("old_text is required unless edits[] or line range is provided")
+        if not old_text and start_line is not None:
+            old_text = "\n".join(
+                original.splitlines()[start_line - 1 : (end_line or start_line)]
+            )
+        updated, replacements, selection = _apply_precision_edit(
+            original,
+            old_text=old_text,
+            new_text=new_text,
+            replace_all=replace_all,
+            occurrence_index=occurrence_index,
+            start_line=start_line,
+            end_line=end_line,
+        )
     _check_size(updated, existing_bytes=0)
     if not dry_run:
         path.write_text(updated, encoding="utf-8")
@@ -390,7 +560,7 @@ def handle_edit_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
         dry_run=dry_run,
         selection=selection,
     )
-    return {
+    result = {
         "path": str(path),
         "filename": filename,
         "replacements": replacements,
@@ -401,28 +571,83 @@ def handle_edit_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
         "diff_preview": _build_diff_preview(filename, original, updated),
         "status": "ok",
     }
+    if batch_details:
+        result["batch_details"] = batch_details
+    _emit_edit_diff_stream(task_id, filename, result.get("diff_preview") or "")
+    return result
+
+
+def _emit_edit_diff_stream(task_id: str, filename: str, diff_preview: str) -> None:
+    if not diff_preview:
+        return
+    try:
+        from app.services.confirmation.writing_delta import stream_edit_diff_preview
+
+        stream_edit_diff_preview(
+            task_id=task_id,
+            filename=filename,
+            diff_preview=diff_preview,
+        )
+    except Exception:
+        logger.debug("diff_preview stream skipped", exc_info=True)
+
+
+def _format_with_line_numbers(text: str) -> str:
+    lines = text.splitlines()
+    width = max(4, len(str(len(lines) or 1)))
+    return "\n".join(f"{idx:>{width}}| {line}" for idx, line in enumerate(lines, start=1))
 
 
 def handle_read_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
     task_id = str(params["task_id"])
     filename = _safe_filename(str(params["filename"]))
     max_chars = int(params.get("max_chars", 8000))
+    with_line_numbers = bool(params.get("with_line_numbers", False))
+    use_cache = params.get("use_cache", True) is not False
+    start_line_raw = params.get("start_line")
+    end_line_raw = params.get("end_line")
+    start_line = int(start_line_raw) if start_line_raw is not None else None
+    end_line = int(end_line_raw) if end_line_raw is not None else None
+    scoped = start_line is not None or end_line is not None
     path = task_artifact_dir(task_id) / filename
     if not path.exists():
         raise FileNotFoundError(f"Artifact not found: {filename}")
-    text = path.read_text(encoding="utf-8")
-    truncated = len(text) > max_chars
-    if truncated:
-        text = text[:max_chars]
-    return {
+
+    if use_cache and not with_line_numbers and not scoped:
+        from app.services.artifact_read_cache import get_cached_read, store_cached_read
+
+        cached = get_cached_read(task_id, filename, path)
+        if cached is not None:
+            return dict(cached)
+
+    full_text = path.read_text(encoding="utf-8")
+    scope_start = start_line
+    scope_end = end_line
+    if scoped:
+        start_idx, end_idx = _slice_bounds(full_text, start_line, end_line)
+        full_text = full_text[start_idx:end_idx]
+    truncated = len(full_text) > max_chars
+    text = full_text[:max_chars] if truncated else full_text
+    display = _format_with_line_numbers(text) if with_line_numbers else text
+    result = {
         "path": str(path),
         "filename": filename,
-        "content": text,
-        "total_chars": len(path.read_text(encoding="utf-8")),
+        "content": display,
+        "raw_content": text,
+        "total_chars": len(full_text),
+        "line_count": len(full_text.splitlines()),
         "tail_excerpt": read_artifact_tail(task_id, filename, max_chars=min(1200, max_chars)),
         "truncated": truncated,
+        "with_line_numbers": with_line_numbers,
         "status": "ok",
     }
+    if scoped:
+        result["scope"] = {"start_line": scope_start, "end_line": scope_end}
+    if use_cache and not with_line_numbers and not scoped:
+        from app.services.artifact_read_cache import store_cached_read
+
+        store_cached_read(task_id, filename, path, result)
+    return result
 
 
 def read_artifact_tail(task_id: str, filename: str, max_chars: int = 1200) -> str:

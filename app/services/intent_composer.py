@@ -126,3 +126,30 @@ def record_grant_steer_conflict(payload: dict[str, Any], *, reason: str) -> dict
         "had_grant": bool(_grant_block(payload)),
     }
     return out
+
+
+def classify_revision_override(payload: dict[str, Any], state: AgentState) -> bool:
+    """
+    True when revision should replace the active mission goal for this turn.
+
+    Rules:
+    1. Existing artifacts + edit verb → replaces_active_goal
+    2. no_continue / keep_structure constraints force mission freeze (handled upstream)
+    3. explicit continue signals → False
+    """
+    from app.services.revision_detection import (
+        _CONTINUE_RE,
+        detect_structural_revision,
+        has_writing_artifacts,
+    )
+
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    if _CONTINUE_RE.search(goal) and not detect_structural_revision(state, goal):
+        return False
+    intent_obs = state.get("intent_observation") or {}
+    if intent_obs.get("is_revision"):
+        rev = intent_obs.get("revision_intent") or {}
+        if isinstance(rev, dict) and rev.get("replaces_active_goal") is False:
+            return False
+        return True
+    return has_writing_artifacts(state) and detect_structural_revision(state, goal)

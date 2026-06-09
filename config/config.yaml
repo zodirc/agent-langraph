@@ -252,6 +252,11 @@ mission:
   max_steps: 500              # fallback when planner omits budget (non-writing)
   max_wall_sec: 3600
   max_failures: 3
+  stall_budget: 2               # identical plan signatures before pause/clarify
+  stall_min_byte_delta: 200     # |Δbytes| below this counts as no progress
+  interactive_steer_max_sec: 120  # soft wall per steer turn (writing missions)
+  steer_planning_llm_max_calls: 2
+  steer_clarification_confidence: 0.3
   writing_max_steps: 500      # legacy alias; writing uses estimate or planner budget
   execution_mode: mission_oma
   require_fact_bundle: true
@@ -335,6 +340,29 @@ intent_observation:
   low_confidence_threshold: 0.55
   primary_model: ""
   fallback_model: ""
+
+# Revision fast path — scoped read/edit, loop guards, edit verb table
+revision:
+  read_loop_max: 2
+  intent_recompute_max: 1
+  scope_clarification_threshold: 0.45
+  edit_verbs:
+    - 润色
+    - 修改
+    - 改
+    - 重写
+    - 压缩
+    - 换
+    - 收
+    - 调
+    - polish
+    - revise
+    - rewrite
+    - retone
+    - edit
+    - fix
+    - compress
+    - refine
 
 # Post-planning route alignment (see docs/ROUTE_AUDIT.md): kinds + conflicts, not per-user-string hacks
 route_audit:

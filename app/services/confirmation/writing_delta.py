@@ -71,3 +71,52 @@ def persist_writing_delta(state: dict[str, Any], delta: dict[str, Any]) -> dict[
     progress = dict(state.get("progress") or {})
     progress["writing_step_delta"] = delta
     return progress
+
+
+def stream_edit_diff_preview(
+    *,
+    task_id: str,
+    filename: str,
+    diff_preview: str,
+    node: str = "artifact_edit",
+) -> None:
+    """Push edit diff to SSE and persist on progress for confirmation gates."""
+    text = (diff_preview or "").strip()
+    if not text:
+        return
+    try:
+        from app.services.stream_progress import report_writing_delta
+
+        report_writing_delta(
+            node=node,
+            phase="diff_preview",
+            text=text,
+            filename=filename,
+        )
+    except Exception:
+        pass
+    try:
+        from app.runtime.state_field_access import progress_from_state, set_progress_on_state
+        from app.services.state_store import get_state_store
+
+        stored = get_state_store().load(task_id) or {}
+        progress = dict(progress_from_state(stored) or {})
+        previews = list(progress.get("edit_diff_previews") or [])
+        previews.append(
+            {
+                "filename": filename,
+                "diff_preview": text[:8000],
+                "node": node,
+            }
+        )
+        progress["edit_diff_previews"] = previews[-6:]
+        progress["last_edit_diff_preview"] = text[:8000]
+        payload = dict(stored.get("input_payload") or {})
+        get_state_store().save(
+            set_progress_on_state(
+                {**stored, "task_id": task_id, "input_payload": payload},
+                progress,
+            )
+        )
+    except Exception:
+        pass

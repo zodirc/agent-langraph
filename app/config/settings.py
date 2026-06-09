@@ -600,6 +600,15 @@ class Settings:
         )
         self.MISSION_MAX_WALL_SEC = int(mission_cfg.get("max_wall_sec", 3600))
         self.MISSION_MAX_FAILURES = int(mission_cfg.get("max_failures", 3))
+        self.MISSION_STALL_BUDGET = int(mission_cfg.get("stall_budget", 2))
+        self.MISSION_STALL_MIN_BYTE_DELTA = int(mission_cfg.get("stall_min_byte_delta", 200))
+        self.MISSION_INTERACTIVE_STEER_MAX_SEC = int(
+            mission_cfg.get("interactive_steer_max_sec", 120)
+        )
+        self.STEER_PLANNING_LLM_MAX_CALLS = int(mission_cfg.get("steer_planning_llm_max_calls", 2))
+        self.STEER_CLARIFICATION_CONFIDENCE = float(
+            mission_cfg.get("steer_clarification_confidence", 0.3)
+        )
         self.MISSION_WRITING_MAX_STEPS = int(mission_cfg.get("writing_max_steps", 500))
         self.MISSION_OUTLINE_MAX_CHARS = int(mission_cfg.get("outline_max_chars", 12000))
         self.MISSION_LLM_DECIDE = _coerce_bool(mission_cfg.get("llm_decide", False))
@@ -677,6 +686,9 @@ class Settings:
         self.INTENT_OBSERVATION_CONFIG = (
             intent_obs_cfg if isinstance(intent_obs_cfg, dict) else {}
         )
+
+        revision_cfg = raw.get("revision", {})
+        self.REVISION_CONFIG = revision_cfg if isinstance(revision_cfg, dict) else {}
 
         mode_routing_cfg = raw.get("mode_routing", {})
         self.MODE_ROUTING_CONFIG = (

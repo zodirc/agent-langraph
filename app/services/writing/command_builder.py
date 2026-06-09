@@ -99,6 +99,24 @@ def _edit_spec_from_anchor(anchor: IntentAnchor, target_filename: str) -> dict[s
     return spec
 
 
+def _edit_spec_from_revision(payload: dict[str, Any], target_filename: str) -> dict[str, Any]:
+    from app.domain.revision_intent import RevisionIntent
+    from app.services.writing.revision_command import revision_intent_to_edit_params
+
+    raw = payload.get("revision_intent") or (payload.get("intent_observation") or {}).get(
+        "revision_intent"
+    )
+    rev = RevisionIntent.from_dict(raw) if isinstance(raw, dict) else None
+    if rev is None:
+        return {"filename": target_filename}
+    task_id = str(state.get("task_id") or "")
+    if not task_id:
+        return {"filename": target_filename}
+    params = revision_intent_to_edit_params(rev, task_id)
+    params["filename"] = target_filename
+    return params
+
+
 def _resolve_intent(
     state: dict[str, Any],
     item: Optional[dict[str, Any]],
@@ -176,7 +194,9 @@ def build_writing_command(
         }
 
     edit_spec = (
-        _edit_spec_from_anchor(record.anchor, target_filename)
+        _edit_spec_from_revision({**payload, "task_id": task_id}, target_filename)
+        if resolved_action == "edit_plot" and payload.get("revision_intent")
+        else _edit_spec_from_anchor(record.anchor, target_filename)
         if resolved_action == "edit_plot"
         else {}
     )

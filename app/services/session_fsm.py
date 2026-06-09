@@ -147,6 +147,16 @@ def sync_fsm_state(state: AgentState) -> AgentState:
         current = derived
     elif explicit in VALID_FSM_STATES:
         current = explicit  # type: ignore[assignment]
+        status = str(state.get("status") or "")
+        if (
+            current == FSM_RUNNING
+            and derived == FSM_IDLE
+            and (
+                status.endswith("FAILED")
+                or status in ("FAILED", "TOOL_FAILED", "REASON_FAILED", "WRITING_FAILED", "CANCELLED")
+            )
+        ):
+            current = FSM_IDLE
     else:
         current = derived
     if payload.get("fsm_state") != current:

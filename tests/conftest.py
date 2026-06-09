@@ -222,7 +222,6 @@ skill:
 
 def _reset_service_singletons() -> None:
     import app.runtime.graph as graph_module
-    import app.runtime.mission_graph as mission_graph_module
     import app.runtime.supervisor_graph as supervisor_graph_module
     import app.runtime.checkpointer as checkpointer_module
     import app.runtime.worker_graph as worker_graph_module
@@ -235,7 +234,6 @@ def _reset_service_singletons() -> None:
     import app.services.schedule_store as schedule_mod
     import app.services.task_queue_store as tq_mod
     import app.services.pack_params_store as pack_mod
-    import app.runtime.exploration_graph as explore_mod
     import app.services.dead_letter_store as dlq_mod
     import app.services.llm_interaction_store as llm_ix_mod
     import app.services.tool_bootstrap as bootstrap_mod
@@ -276,9 +274,7 @@ def _reset_service_singletons() -> None:
     chat_msg_svc_mod._service = None
     bootstrap_mod.reset_tool_bootstrap()
     graph_module.get_compiled_graph.cache_clear()
-    mission_graph_module.get_compiled_mission_graph.cache_clear()
     supervisor_graph_module.get_compiled_supervisor_graph.cache_clear()
-    explore_mod.get_compiled_exploration_graph.cache_clear()
     import app.runtime.worker_graph as worker_graph_module
 
     worker_graph_module.get_compiled_worker_graph.cache_clear()
@@ -343,16 +339,6 @@ def isolated_stores(test_settings: Settings, monkeypatch: pytest.MonkeyPatch) ->
     import app.nodes.retrieval_node as retrieval_node_module
     import app.nodes.tool_node as tool_node_module
     import app.nodes.writing_node as writing_node_module
-    import app.nodes.mission_init_node as mission_init_module
-    import app.nodes.mission_decide_node as mission_decide_module
-    import app.nodes.mission_act_node as mission_act_module
-    import app.nodes.mission_observe_node as mission_observe_module
-    import app.nodes.mission_eval_node as mission_eval_module
-    import app.nodes.mission_finalize_node as mission_finalize_module
-    import app.nodes.react_deliberate_node as react_deliberate_module
-    import app.nodes.react_execute_node as react_execute_module
-    import app.nodes.react_observe_node as react_observe_module
-    import app.nodes.react_finalize_node as react_finalize_module
     import app.services.graph_runner as graph_runner_module
 
     for module in (
@@ -365,16 +351,6 @@ def isolated_stores(test_settings: Settings, monkeypatch: pytest.MonkeyPatch) ->
         human_review_node_module,
         output_node_module,
         memory_writeback_node_module,
-        mission_init_module,
-        mission_decide_module,
-        mission_act_module,
-        mission_observe_module,
-        mission_eval_module,
-        mission_finalize_module,
-        react_deliberate_module,
-        react_execute_module,
-        react_observe_module,
-        react_finalize_module,
     ):
         monkeypatch.setattr(module, "get_state_store", lambda: state_store)
     monkeypatch.setattr(output_node_module, "get_audit_store", lambda: audit_store)
@@ -390,12 +366,10 @@ def isolated_stores(test_settings: Settings, monkeypatch: pytest.MonkeyPatch) ->
     )
 
     from app.runtime import graph as graph_module
-    from app.runtime import mission_graph as mission_graph_module
     from app.runtime import supervisor_graph as supervisor_graph_module
     from app.runtime import worker_graph as worker_graph_module
 
     graph_module.get_compiled_graph.cache_clear()
-    mission_graph_module.get_compiled_mission_graph.cache_clear()
     supervisor_graph_module.get_compiled_supervisor_graph.cache_clear()
     worker_graph_module.get_compiled_worker_graph.cache_clear()
     return state_store

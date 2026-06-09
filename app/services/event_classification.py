@@ -21,6 +21,7 @@ from app.services.interaction_goal import goal_is_mission_status_query, goal_is_
 
 EventType = Literal[
     "new_task",
+    "revision",
     "clarification",
     "interrupt",
     "redirect",
@@ -33,6 +34,7 @@ EventType = Literal[
 VALID_EVENT_TYPES: frozenset[str] = frozenset(
     {
         "new_task",
+        "revision",
         "clarification",
         "interrupt",
         "redirect",
@@ -161,6 +163,8 @@ def _active_mission_block(state: dict[str, Any], payload: dict[str, Any]) -> dic
     ):
         if isinstance(source, dict) and source:
             return source
+        if source is not None and not isinstance(source, dict):
+            continue
     return None
 
 
@@ -297,6 +301,13 @@ def _heuristic_interrupt(
     """P0 content-regex steer — heuristic only; must not beat explicit resend."""
     if not _mission_steerable(state, payload):
         return False
+    from app.runtime.state import TaskStatus
+
+    if str(state.get("status") or "") == TaskStatus.COMPLETED.value:
+        from app.services.session.turn_policy import _goal_requires_steer_replan
+
+        if _goal_requires_steer_replan(goal):
+            return False
     intervention = payload.get("intervention") if isinstance(payload.get("intervention"), dict) else {}
     tier = classify_steer_interrupt(
         goal,
@@ -310,6 +321,40 @@ def _heuristic_interrupt(
 def _resume_signals(state: dict[str, Any], payload: dict[str, Any], goal: str) -> bool:
     if _is_user_resend(payload):
         return False
+    from app.runtime.state import TaskStatus
+
+    status = str(state.get("status") or "")
+    if status.endswith("FAILED") or status in (
+        TaskStatus.FAILED.value,
+        TaskStatus.TOOL_FAILED.value,
+        TaskStatus.REASON_FAILED.value,
+        TaskStatus.WRITING_FAILED.value,
+    ):
+        from app.services.session.turn_policy import _goal_requires_steer_replan
+
+        if _goal_requires_steer_replan(goal):
+            return False
+        if not (
+            payload.get("resume") is True
+            or payload.get("resume_checkpoint_ref")
+            or payload.get("resume_from_step_id")
+        ):
+            return False
+    if status == TaskStatus.COMPLETED.value:
+        from app.services.manuscript_service import is_continue_writing_goal
+        from app.services.session.turn_policy import _goal_requires_steer_replan
+
+        if _goal_requires_steer_replan(goal) and _active_mission_block(state, payload):
+            return False
+        decision = payload.get("turn_policy_decision")
+        if (
+            isinstance(decision, dict)
+            and decision.get("intent") == "resume_mission"
+            and _active_mission_block(state, payload)
+            and not is_continue_writing_goal(goal)
+            and not payload.get("resume")
+        ):
+            return False
     if payload.get("resume") is True:
         return True
     if payload.get("resume_checkpoint_ref") or payload.get("resume_from_step_id"):
@@ -327,16 +372,31 @@ def _resume_signals(state: dict[str, Any], payload: dict[str, Any], goal: str) -
     return False
 
 
-def _redirect_signals(state: dict[str, Any], payload: dict[str, Any], goal: str) -> bool:
-    from app.services.session_fsm import routing_needs_replan
-
-    if routing_needs_replan(state) and goal:
-        return True
-    if not _mission_steerable(state, payload):
+def _resend_steer_redirect(state: dict[str, Any], payload: dict[str, Any], goal: str) -> bool:
+    """Resend on an active writing mission with steer correction → redirect, not new_task."""
+    if not _is_user_resend(payload):
+        return False
+    mission = _active_mission_block(state, payload)
+    if not mission or payload.get("mission_suspended"):
         return False
     decision = payload.get("turn_policy_decision")
     if isinstance(decision, dict) and decision.get("intent") == "supersede_active_mission":
         return True
+    from app.services.session.turn_policy import _goal_requires_steer_replan
+
+    return bool(goal) and _goal_requires_steer_replan(goal)
+
+
+def _redirect_signals(state: dict[str, Any], payload: dict[str, Any], goal: str) -> bool:
+    from app.services.session_fsm import routing_needs_replan
+
+    decision = payload.get("turn_policy_decision")
+    if isinstance(decision, dict) and decision.get("intent") == "supersede_active_mission":
+        return True
+    if routing_needs_replan(state) and goal:
+        return True
+    if not _mission_steerable(state, payload):
+        return False
     intervention = payload.get("intervention") if isinstance(payload.get("intervention"), dict) else {}
     action = str(intervention.get("action") or "").lower()
     if action in {"rewrite", "rewrite_outline", "reset_body", "edit_plot", "redirect"}:
@@ -395,6 +455,13 @@ def classify_user_event(
         )
 
     if _is_user_resend(payload):
+        if _resend_steer_redirect(state, payload, goal):
+            return EventClassification(
+                event_type="redirect",
+                event_id=event_id,
+                source="user_resend_steer",
+                reason="resend steer correction on active mission — replan stream",
+            )
         return EventClassification(
             event_type="new_task",
             event_id=event_id,
@@ -449,6 +516,17 @@ def classify_user_event(
             event_id=event_id,
             source="redirect_signal",
             reason="goal replacement or supersede replan",
+        )
+
+    from app.services.revision_detection import detect_structural_revision
+
+    if goal and detect_structural_revision(state, goal):
+        return EventClassification(
+            event_type="revision",
+            event_id=event_id,
+            source="revision_signal",
+            reason="existing artifact local edit/polish",
+            confidence=0.9,
         )
 
     if _is_constraint_supplement(state, payload, goal):

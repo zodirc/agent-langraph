@@ -50,17 +50,13 @@ def cached_graph_compiler(
 
 
 def clear_all_graph_caches() -> None:
-    from app.runtime.exploration_graph import get_compiled_exploration_graph
     from app.runtime.graph import get_compiled_graph
-    from app.runtime.mission_graph import get_compiled_mission_graph
     from app.runtime.supervisor_graph import get_compiled_supervisor_graph
     from app.runtime.worker_graph import get_compiled_worker_graph
 
     for fn in (
         get_compiled_graph,
-        get_compiled_mission_graph,
         get_compiled_supervisor_graph,
-        get_compiled_exploration_graph,
         get_compiled_worker_graph,
     ):
         if hasattr(fn, "cache_clear"):

@@ -20,7 +20,6 @@ from app.services.mission_service import prepare_state_for_mission_act, update_p
 from app.services.observation import attach_observation
 from app.services.state_store import get_state_store
 from app.runtime.planning_gate_router import route_after_incremental_planning
-from app.runtime.mission_pipeline_router import route_after_writing
 from app.runtime.router import route_after_retrieval, route_after_tool
 from app.runtime.state import AgentState, merge_state
 from app.runtime.state_field_access import mission_from_state
@@ -161,7 +160,10 @@ def _run_pipeline_node_loop(
             current = writing_node(current)
             if str(current.get("status", "")).endswith("FAILED"):
                 break
-            node = route_after_writing(current)
+            # mission_pipeline_router removed in unified-core refactor; on a
+            # successful writing step the inline pipeline always proceeds to
+            # reasoning (failure already handled by the break above).
+            node = "reasoning"
         elif node == "reasoning":
             from app.services.turn_contract import (
                 contract_requires_side_effects,
@@ -453,6 +455,36 @@ def _run_contract_tool_step(state: AgentState) -> AgentState | None:
     return tool_execution_node(merge_state(state, selected_tools=tools))
 
 
+def _run_contract_writing_command(state: AgentState, step_decision: dict) -> AgentState | None:
+    """Execute edit_plot / review_outline via WritingCommand without re-planning."""
+    from app.services.turn_contract import contract_blocks_writing, contract_from_payload
+
+    payload = state.get("input_payload") or {}
+    if not contract_blocks_writing(payload):
+        return None
+    contract = contract_from_payload(payload) or {}
+    primary = str(contract.get("primary_op") or "")
+    if primary not in ("edit_plot", "review_outline"):
+        return None
+    from app.services.writing.command_builder import build_writing_command
+    from app.services.writing.command_validator import validate_target_bound
+    from app.services.writing.executor import block_command_execution, execute_writing_command
+
+    command = build_writing_command(state)
+    if command is None or command.action != primary:
+        return None
+    target_error = validate_target_bound(command)
+    if target_error is not None:
+        return block_command_execution(state, target_error)
+    return execute_writing_command(
+        state,
+        command,
+        step_decision=step_decision,
+        mission_act_for_writing=_mission_act_for_writing,
+        oma_act_available=_oma_act_available,
+    )
+
+
 def run_subgraph_writing(state: AgentState) -> AgentState:
     """Writing-focused step: mission step_policy → writing → lightweight reasoning."""
     from app.services.turn_contract import contract_blocks_writing
@@ -484,6 +516,9 @@ def run_subgraph_writing(state: AgentState) -> AgentState:
         tool_step = _run_contract_tool_step(state)
         if tool_step is not None:
             return tool_step
+        cmd_step = _run_contract_writing_command(state, {})
+        if cmd_step is not None:
+            return cmd_step
         return run_pipeline_request(state)
 
     intent = payload.get("writing_intent") or {}
@@ -555,6 +590,10 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
     from app.services.mission_steer_outcome_confirm import steer_outcome_confirmation_pending
 
     payload = state.get("input_payload") or {}
+    if payload.get("stall_force_deterministic_edit"):
+        from app.services.mission_stall_execute import run_stall_deterministic_edit
+
+        return run_stall_deterministic_edit(state)
     if steer_confirmation_pending(payload) and not payload.get("steer_intent_confirmed"):
         return merge_state(
             state,
@@ -661,6 +700,9 @@ def execute_mission_step(state: AgentState, step_decision: dict) -> AgentState:
         tool_step = _run_contract_tool_step(state)
         if tool_step is not None:
             return tool_step
+        cmd_step = _run_contract_writing_command(state, step_decision)
+        if cmd_step is not None:
+            return cmd_step
         return _mission_act_for_writing(state, step_decision)
     if executor in ("subgraph:writing", "oma:planner"):
         return _mission_act_for_writing(state, step_decision)

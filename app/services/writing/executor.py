@@ -105,13 +105,30 @@ def _execute_edit_plot(state: AgentState, command: WritingCommand) -> AgentState
     target = resolve_artifact_target(state, action="edit_plot", target_hint=command.target_kind)
     filename = target.filename
 
+    revision_raw = payload.get("revision_intent")
+    if revision_raw or spec.get("edits") or spec.get("start_line"):
+        from app.services.writing.revision_executor import execute_revision_fast_path
+
+        return execute_revision_fast_path(
+            state,
+            node_id="writing_executor",
+            edit_spec=spec,
+            command=command,
+        )
+
     if spec.get("old_text"):
         from app.services.artifact_tools import handle_edit_text_artifact, handle_read_text_artifact
         from app.services.manuscript_service import resolve_manuscript
 
         task_id = state["task_id"]
         read_out = handle_read_text_artifact(
-            {"task_id": task_id, "filename": filename, "max_chars": 12000}
+            {
+                "task_id": task_id,
+                "filename": filename,
+                "max_chars": 12000,
+                "use_cache": True,
+                "with_line_numbers": bool(spec.get("start_line") or spec.get("end_line")),
+            }
         )
         edit_out = handle_edit_text_artifact(
             {
@@ -150,7 +167,10 @@ def _execute_edit_plot(state: AgentState, command: WritingCommand) -> AgentState
         elif ms.body_path == filename or not ms.body_path:
             ms.body_path = filename
             ms.body_bytes = nbytes
-        return merge_state(
+        from app.services.steer_planning_lifecycle import maybe_complete_steer_planning_after_execute
+        from app.services.turn_guard import mark_turn_step_executed
+
+        updated = merge_state(
             state,
             tool_results=[
                 {"tool": "read_text_artifact", "status": "ok", "result": read_out},
@@ -159,6 +179,8 @@ def _execute_edit_plot(state: AgentState, command: WritingCommand) -> AgentState
             manuscript=ms.to_dict(),
             status=TaskStatus.TOOL_EXECUTED.value,
         )
+        updated = mark_turn_step_executed(updated)
+        return maybe_complete_steer_planning_after_execute(updated)
 
     from app.nodes.tool_node import tool_execution_node
 

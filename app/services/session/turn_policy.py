@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from app.runtime.state import TaskStatus
 from app.services.manuscript_service import is_continue_writing_goal
 from app.services.mission_intervention import intervention_from_payload
 from app.services.mission_routing import explicit_mission_requested
@@ -83,6 +84,55 @@ def _pattern_kind_decision(
     return None
 
 
+def failed_mission_steer_correction(
+    state: dict[str, Any],
+    payload: dict[str, Any],
+    goal: str,
+) -> TurnDecision | None:
+    """FAILED turn + active mission + steer correction → replan, not checkpoint resume."""
+    text = (goal or "").strip()
+    if not text or not _goal_requires_steer_replan(text):
+        return None
+    status = str(state.get("status") or "")
+    if not (
+        status.endswith("FAILED")
+        or status in (TaskStatus.FAILED.value, TaskStatus.TOOL_FAILED.value)
+    ):
+        return None
+    has_mission = _active_mission_block(state, payload) is not None
+    if not has_mission and not explicit_mission_requested(
+        payload,
+        str(payload.get("execution_mode") or state.get("execution_mode") or ""),
+    ):
+        return None
+    return TurnDecision(
+        intent="supersede_active_mission",
+        source="failed_steer_correction",
+        reason="failed mission steer requires replan (not resume)",
+    )
+
+
+def completed_mission_steer_correction(
+    state: dict[str, Any],
+    payload: dict[str, Any],
+    goal: str,
+) -> TurnDecision | None:
+    """COMPLETED session + active mission + mid-mission correction → replan, not resume."""
+    mission = _active_mission_block(state, payload)
+    text = (goal or "").strip()
+    if mission is None or not text:
+        return None
+    if str(state.get("status") or "") != TaskStatus.COMPLETED.value:
+        return None
+    if not _goal_requires_steer_replan(text):
+        return None
+    return TurnDecision(
+        intent="supersede_active_mission",
+        source="completed_steer_correction",
+        reason="completed mission correction requires replan (not resume)",
+    )
+
+
 def _goal_requires_steer_replan(goal: str) -> bool:
     """True for mid-mission direction corrections that need replan, not casual QA."""
     import re
@@ -109,15 +159,25 @@ def _goal_requires_steer_replan(goal: str) -> bool:
     return bool(correction_cues.search(text))
 
 
+def _coerce_mission_dict(raw: Any) -> dict[str, Any] | None:
+    return dict(raw) if isinstance(raw, dict) and raw else None
+
+
 def _active_mission_block(
     state: dict[str, Any],
     payload: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Resolve non-suspended mission from session state or merged payload."""
-    mission = state.get("mission")
-    if not isinstance(mission, dict) or not mission:
-        mission = payload.get("mission") or (state.get("input_payload") or {}).get("mission")
-    if not isinstance(mission, dict) or not mission:
+    mission = None
+    for source in (
+        state.get("mission"),
+        payload.get("mission"),
+        (state.get("input_payload") or {}).get("mission"),
+    ):
+        mission = _coerce_mission_dict(source)
+        if mission is not None:
+            break
+    if mission is None:
         return None
     if payload.get("mission_suspended"):
         return None
@@ -283,6 +343,14 @@ def resolve_session_turn(
             reason="mission already suspended for this turn",
         )
 
+    completed_correction = completed_mission_steer_correction(state, payload, goal)
+    if completed_correction is not None:
+        return completed_correction
+
+    failed_correction = failed_mission_steer_correction(state, payload, goal)
+    if failed_correction is not None:
+        return failed_correction
+
     mission = _active_mission_block(state, payload)
     if mission is not None and _mission_session_ongoing(state) and (goal or "").strip():
         eval_state = state if isinstance(state.get("mission"), dict) and state.get("mission") else {
@@ -301,6 +369,17 @@ def resolve_session_turn(
         pattern = _pattern_kind_decision(goal, turn_cfg=turn_cfg, route_cfg=route_cfg)
         if pattern is not None and pattern.intent == "isolate_qa":
             return pattern
+        if (
+            _active_mission_block(state, payload) is not None
+            and str(state.get("status") or "") == TaskStatus.COMPLETED.value
+            and (goal or "").strip()
+            and _goal_requires_steer_replan(goal)
+        ):
+            return TurnDecision(
+                intent="supersede_active_mission",
+                source="completed_explicit_mission_steer",
+                reason="completed mission with steer correction — replan not resume",
+            )
         return TurnDecision(
             intent="resume_mission",
             source="explicit_request",
@@ -436,4 +515,33 @@ def restore_archived_mission(state: dict[str, Any], payload: dict[str, Any]) -> 
     out["execution_mode"] = "mission"
     out.pop("mission_suspended", None)
     out.pop("disable_mission_auto", None)
+    out.pop("suspension_reason", None)
+    out["draft_mission_state"] = "active"
+    wi = out.get("writing_intent")
+    if isinstance(wi, dict):
+        out["writing_intent"] = {**wi, "enabled": True}
+    return out
+
+
+def apply_revision_turn_isolation(payload: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    """Suspend draft/unit-loop mission while user performs local revision."""
+    from app.services.manuscript_service import sanitize_manuscript_bindings
+
+    out = dict(payload)
+    out["mission_suspended"] = True
+    out["suspension_reason"] = "user_revision_override"
+    out["draft_mission_state"] = "suspended"
+    mission = existing.get("mission") or out.get("mission")
+    if isinstance(mission, dict) and mission:
+        out["archived_mission"] = mission
+        out.pop("mission", None)
+    for key in ("manuscript",):
+        raw = out.get(key) or existing.get(key) or (existing.get("input_payload") or {}).get(key)
+        if raw:
+            out[key] = sanitize_manuscript_bindings(raw)
+    wi = out.get("writing_intent")
+    if isinstance(wi, dict):
+        out["writing_intent"] = {**wi, "enabled": False, "source": "revision_turn_isolation"}
+    else:
+        out["writing_intent"] = {"enabled": False, "source": "revision_turn_isolation"}
     return out

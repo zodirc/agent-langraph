@@ -142,10 +142,25 @@ def mechanical_step_decision(state: AgentState) -> StepDecision:
         )
 
     from app.services.mission_orchestrator import work_plan_from_mission
+    from app.services.revision_done import is_revision_turn
 
+    payload = state.get("input_payload") or {}
     mission = state.get("mission") or {}
+    if is_revision_turn(state) and payload.get("mission_suspended"):
+        item = _work_item_from_head(state)
+        if not item:
+            return StepDecision(
+                action="finish",
+                rationale="revision turn — mission suspended, no expand",
+            )
+
     plan = work_plan_from_mission(mission)
     if not (plan.get("items") or []):
+        if is_revision_turn(state):
+            return StepDecision(
+                action="finish",
+                rationale="revision turn — block expand_unit_work_loop",
+            )
         state = expand_unit_work_loop(state, unit_loop=str(mission.get("unit_loop") or "chapter_unit"))
 
     item = _work_item_from_head(state)

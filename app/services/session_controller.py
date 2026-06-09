@@ -45,9 +45,46 @@ def _completed_has_no_in_flight_work(state: AgentState) -> bool:
     return str(state.get("status") or "") == TaskStatus.COMPLETED.value
 
 
+def _active_mission_block(state: AgentState, payload: dict[str, Any]) -> dict[str, Any] | None:
+    mission = state.get("mission")
+    if isinstance(mission, dict) and mission:
+        return mission
+    for source in (payload, state.get("input_payload") or {}):
+        block = source.get("mission") if isinstance(source, dict) else None
+        if isinstance(block, dict) and block:
+            return block
+    return None
+
+
+def _completed_steer_replan_dispatch(
+    state: AgentState,
+    event: EventClassification,
+    payload: dict[str, Any],
+) -> bool:
+    """COMPLETED writing mission + steer correction must use steer/supersede stream."""
+    if event.event_type not in ("redirect", "interrupt"):
+        return False
+    if not _completed_has_no_in_flight_work(state):
+        return False
+    mission = _active_mission_block(state, payload)
+    if not mission or str(mission.get("kind") or "").lower() != "writing":
+        return False
+    if payload.get("mission_suspended"):
+        return False
+    goal = str(payload.get("goal") or payload.get("message") or "").strip()
+    decision = payload.get("turn_policy_decision")
+    if isinstance(decision, dict) and decision.get("intent") == "supersede_active_mission":
+        return True
+    from app.services.session.turn_policy import _goal_requires_steer_replan
+
+    return bool(goal) and _goal_requires_steer_replan(goal)
+
+
 def _apply_fsm_dispatch_override(
     event: EventClassification,
     state: AgentState,
+    *,
+    payload: dict[str, Any] | None = None,
 ) -> EventClassification:
     """Resume under REPLANNING auto-upgrades to redirect."""
     fsm = get_fsm_state(state)
@@ -57,6 +94,23 @@ def _apply_fsm_dispatch_override(
             event_id=event.event_id,
             source="fsm_replanning_resume_override",
             reason="resume while REPLANNING → auto redirect (no awaits supersede deadlock)",
+        )
+    inbound = payload if payload is not None else (state.get("input_payload") or {})
+    if event.event_type == "resume" and _completed_steer_replan_dispatch(
+        state,
+        EventClassification(
+            event_type="redirect",
+            event_id=event.event_id,
+            source="probe",
+            reason="",
+        ),
+        inbound if isinstance(inbound, dict) else {},
+    ):
+        return EventClassification(
+            event_type="redirect",
+            event_id=event.event_id,
+            source="completed_resume_to_steer_redirect",
+            reason="COMPLETED steer correction must not resume — steer replan stream",
         )
     return event
 
@@ -76,6 +130,7 @@ def _resolve_inbound_dispatch(
     event = _apply_fsm_dispatch_override(
         resolve_inbound_event(classify_state, payload=inbound),
         state,
+        payload=inbound,
     )
     return inbound, event
 
@@ -150,7 +205,15 @@ class SessionController:
         inbound, event = _resolve_inbound_dispatch(stored, payload)
 
         if event.event_type in ("redirect", "interrupt"):
-            if _completed_has_no_in_flight_work(stored):
+            if _completed_steer_replan_dispatch(stored, event, inbound):
+                yield from self._dispatch_redirect(
+                    task_id,
+                    text,
+                    intervention=intervention,
+                    confirm=confirm,
+                    priority=priority,
+                )
+            elif _completed_has_no_in_flight_work(stored):
                 yield from self._dispatch_new_turn(
                     task_id,
                     text,
@@ -169,10 +232,15 @@ class SessionController:
                     confirm=confirm,
                     priority=priority,
                 )
-        elif event.event_type == "resume":
-            yield from self._runner.stream_resume_mission(task_id, confirm=confirm)
-        elif event.event_type == "confirm":
-            yield from self._runner.stream_resume_mission(task_id, confirm=True)
+        elif event.event_type in ("resume", "confirm"):
+            yield from self._dispatch_new_turn(
+                task_id,
+                text,
+                payload=inbound,
+                user_id=user_id,
+                task_type=task_type,
+                new_session=new_session,
+            )
         elif event.event_type == "status_query":
             yield from self._dispatch_status_query(task_id, text, stored)
         else:
@@ -230,13 +298,24 @@ class SessionController:
         confirm: bool = False,
         priority: int = 0,
     ) -> Iterator[str]:
-        """Redirect = steer + supersede replan stream (single SSE)."""
-        yield from self._runner.stream_steer_mission(
-            task_id,
-            text,
+        """Redirect: the running graph is already cancelled by the caller; the
+        new user input simply drives a fresh session turn (re-plan)."""
+        stored = get_state_store().load(task_id)
+        payload = merge_stripped_message_payload(
+            stored.get("input_payload") if stored else None,
+            text=text,
             intervention=intervention,
             confirm=confirm,
             priority=priority,
+        )
+        payload = stamp_session_mode(payload)
+        yield from self._dispatch_new_turn(
+            task_id,
+            text,
+            payload=payload,
+            user_id="anonymous",
+            task_type="qa",
+            new_session=False,
         )
 
     def _dispatch_new_turn(
@@ -264,13 +343,17 @@ class SessionController:
         text: str,
         state: AgentState,
     ) -> Iterator[str]:
-        """Status inquiry: steer with forced pause intervention."""
-        yield from self._runner.stream_steer_mission(
-            task_id,
-            text,
-            intervention={"action": "pause", "force": True, "reason": "status inquiry"},
-            priority=100,
-        )
+        """Status inquiry: report current task status without starting work."""
+        import json
+
+        payload = {
+            "task_id": task_id,
+            "status": state.get("status"),
+            "current_node": state.get("current_node"),
+            "session_turn": state.get("session_turn"),
+        }
+        yield f"event: status\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        yield f"event: done\ndata: {json.dumps({'task_id': task_id, 'status': state.get('status')}, ensure_ascii=False)}\n\n"
 
 
 _controller: Optional[SessionController] = None

@@ -28,26 +28,60 @@ Output ONE JSON object with these fields:
 - target_mode: "qa_mode" | "engineering_mode" | "manuscript_mode"
 - session_relation: "stay" | "switch" | "isolate"
 - turn_kind_candidate: "narrate_only" | "steer_replan" | "steer_execute" | "mission_step_execute" | "mechanical_continue" | null
-- needs_planning: boolean
+- is_revision: boolean — true when user revises existing manuscript/outline (polish, retone, local edit)
+- revision_intent: when is_revision=true, object with:
+  - artifact_role: "outline" | "body"
+  - revision_scope: "full" | "chapter" | "section" | "paragraph" | "sentence" | "span"
+  - target_sections: string[] (e.g. ["第6章 裂痕", "第二段"])
+  - operation_type: "polish" | "expand" | "compress" | "rewrite" | "fix" | "retone" | "restructure"
+  - edits: [{old_text, new_text, occurrence_index, start_line, end_line, replace_all}]
+  - constraints: string[] (no_expand, no_continue, keep_plot, keep_structure)
+  - completion_policy: "stop_after_edit" | "propose_next" | "batch_until_done"
 - confidence: number 0.0-1.0
 - reasons: array of short strings
 
 Rules:
 - Do NOT produce execution plans or prose answers.
-- mission_control when an active writing mission needs continue/steer/intervention semantics.
+- When user polishes/edits existing text with locatable anchors, set is_revision=true and fill edits[].old_text when quoted.
+- mission_control when an active writing mission needs continue/steer/intervention semantics (unless is_revision overrides).
 - isolate when user switches to unrelated QA while mission is active.
 - mechanical_continue only for pure continue/resume without new steer constraints.
-- Mixed "explain X then fix Y" → engineering or writing based on deliverable, needs_planning=true."""
+- Mixed "explain X then fix Y" → engineering or writing based on deliverable."""
 
 _STRUCTURAL_KIND_MAP: dict[str, str] = {
     "manuscript": "writing",
     "writing": "writing",
+    "revision": "writing",
     "code": "engineering",
     "interactive_app": "engineering",
     "small_project": "engineering",
     "qa": "qa",
     "general": "qa",
 }
+
+
+def _apply_revision_structural(
+    state: AgentState,
+    payload: dict[str, Any],
+    result: IntentObservationResult,
+    goal: str,
+) -> IntentObservationResult:
+    from app.services.revision_detection import detect_structural_revision, infer_revision_intent_structural
+
+    if not detect_structural_revision(state, goal):
+        return result
+    revision_dict = infer_revision_intent_structural(state, goal)
+    if not revision_dict:
+        return result
+    from app.services.planning_gate_policy import derive_planning_required
+
+    result.is_revision = True
+    result.revision_intent = revision_dict
+    result.intent_kind = "writing"
+    result.target_mode = "manuscript_mode"
+    result.turn_kind_candidate = "steer_execute"
+    result.reasons = [*result.reasons, "structural_revision=true"]
+    return result
 
 
 def _clip(text: str, limit: int) -> str:
@@ -67,11 +101,18 @@ def build_structural_observation(
     payload = state.get("input_payload") or {}
     from app.runtime.state_field_access import mission_from_state
 
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
     mission_active = bool(mission_from_state(state)) and not payload.get("mission_suspended")
     inferred = str(route_audit_seed.get("inferred_kind") or "general")
     confidence = float(route_audit_seed.get("kind_confidence") or 0.0)
     intent_kind = _STRUCTURAL_KIND_MAP.get(inferred.lower(), "qa")
-    if mission_active and intent_kind == "writing":
+
+    from app.services.revision_detection import detect_structural_revision
+
+    is_revision = detect_structural_revision(state, goal)
+    if is_revision:
+        intent_kind = "writing"
+    elif mission_active and intent_kind == "writing":
         intent_kind = "mission_control"
     target_mode = map_intent_to_mode(
         "manuscript" if intent_kind in ("writing", "mission_control") else inferred
@@ -88,10 +129,6 @@ def build_structural_observation(
         if intent_kind == "engineering" and current_mode == "manuscript_mode":
             session_relation = "isolate"
 
-    needs_planning = intent_kind != "qa" or session_relation != "stay"
-    if payload.get("execution_grant"):
-        needs_planning = False
-
     reasons = [f"structural_kind={inferred}"]
     if explicit_mode:
         reasons.append(f"explicit_mode={explicit_mode}")
@@ -99,31 +136,41 @@ def build_structural_observation(
         reasons.append("mission_active=true")
 
     turn_kind: str | None = None
-    if mission_active:
+    if mission_active and not is_revision:
         if payload.get("foreground_preempt_consumed") or payload.get("steer_replan_mode") in (
             "rewrite",
             "repair",
         ):
             turn_kind = "steer_replan"
-            needs_planning = True
         elif payload.get("execution_grant"):
             turn_kind = "mechanical_continue"
         elif payload.get("steer_planning_done") is False or payload.get("require_planning_after_steer"):
             turn_kind = "steer_replan"
         else:
             turn_kind = "mission_step_execute"
+    elif is_revision:
+        turn_kind = "steer_execute"
+        reasons.append("revision_detected=true")
 
-    return IntentObservationResult(
+    result = IntentObservationResult(
         source="structural",
         intent_kind=intent_kind,
         target_mode=target_mode,
         session_relation=session_relation,
         turn_kind_candidate=turn_kind,
-        needs_planning=needs_planning,
+        needs_planning=True,
         confidence=confidence,
         reasons=reasons,
         trace_id=new_observation_trace_id(),
     )
+    result = _apply_revision_structural(state, payload, result, goal)
+    from app.services.planning_gate_policy import derive_planning_required
+
+    temp_state = {**state, "intent_observation": result.to_dict()}
+    planning_required, planning_source = derive_planning_required(temp_state)  # type: ignore[arg-type]
+    result.needs_planning = planning_required
+    result.reasons = [*result.reasons, f"planning_source={planning_source}"]
+    return result
 
 
 def _invoke_observation_model(
@@ -193,6 +240,10 @@ def _invoke_observation_model(
 
     turn_kind = raw.get("turn_kind_candidate")
     turn_kind_str = str(turn_kind) if turn_kind else None
+    is_revision = bool(raw.get("is_revision"))
+    revision_intent = raw.get("revision_intent")
+    if not isinstance(revision_intent, dict):
+        revision_intent = None
 
     result = IntentObservationResult(
         source="llm",
@@ -200,13 +251,27 @@ def _invoke_observation_model(
         target_mode=target_mode,
         session_relation=session_relation,
         turn_kind_candidate=turn_kind_str,
-        needs_planning=bool(raw.get("needs_planning", True)),
+        needs_planning=True,
+        is_revision=is_revision,
+        revision_intent=revision_intent,
         confidence=float(raw.get("confidence") or 0.0),
         reasons=[str(r) for r in (raw.get("reasons") or [])][:8],
         trace_id=trace_id,
         model_name=str(cfg.get("primary_model") or "") or None,
         latency_ms=latency_ms,
     )
+    payload = state.get("input_payload") or {}
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    result = _apply_revision_structural(state, payload, result, goal)
+    if is_revision and revision_intent:
+        result.is_revision = True
+        result.revision_intent = revision_intent
+    from app.services.planning_gate_policy import derive_planning_required
+
+    temp_state = {**state, "intent_observation": result.to_dict()}
+    planning_required, planning_source = derive_planning_required(temp_state)  # type: ignore[arg-type]
+    result.needs_planning = planning_required
+    result.reasons = [*result.reasons, f"planning_source={planning_source}"]
     get_metrics_service().inc_intent_observation(
         source="llm",
         intent_kind=intent_kind,
@@ -241,7 +306,21 @@ def observe_intent(
     route_audit_seed: dict[str, Any],
 ) -> IntentObservationResult:
     """Run L0–L2 observation; model only when policy requires."""
+    from app.services.intent_snapshot import get_or_freeze_intent_snapshot
     from app.services.pre_planning import parse_explicit_interaction_mode
+
+    cached = get_or_freeze_intent_snapshot(state)
+    if cached is not None:
+        return cached
+
+    from app.services.intent_snapshot import current_intent_snapshot
+
+    snap = current_intent_snapshot(state)
+    payload = dict(state.get("input_payload") or {})
+    if snap and snap.snapshot_status == "frozen":
+        payload["intent_recompute_count"] = int(payload.get("intent_recompute_count") or 0) + 1
+        payload["intent_recompute_reason"] = "observe_intent_rerun"
+        state = merge_state(state, input_payload=payload)
 
     explicit = explicit_mode or parse_explicit_interaction_mode(state.get("input_payload") or {})
     policy = decide_intent_observation_policy(
@@ -307,6 +386,8 @@ def _respect_explicit_mode(
         session_relation=result.session_relation,
         turn_kind_candidate=result.turn_kind_candidate,
         needs_planning=result.needs_planning,
+        is_revision=result.is_revision,
+        revision_intent=result.revision_intent,
         confidence=max(result.confidence, 0.9),
         reasons=merged_reasons,
         trace_id=result.trace_id,
@@ -321,12 +402,39 @@ def apply_intent_observation_to_state(
     result: IntentObservationResult,
 ) -> AgentState:
     """Write observation to state, payload audit, and turn metrics."""
+    from app.services.intent_snapshot import (
+        current_intent_snapshot,
+        freeze_intent_snapshot,
+        get_or_freeze_intent_snapshot,
+    )
+    from app.services.planning_gate_policy import derive_planning_required
+
     shadow = intent_observation_shadow_mode()
     result_dict = result.to_dict()
     if shadow:
         result_dict["shadow_only"] = True
 
+    cached = get_or_freeze_intent_snapshot(state)
+    snapshot_hit = cached is not None and cached.intent_kind == result.intent_kind
+
     payload = dict(state.get("input_payload") or {})
+    if snapshot_hit:
+        payload["intent_snapshot_hit"] = True
+        payload["intent_snapshot_source"] = "frozen"
+    else:
+        planning_required, planning_source = derive_planning_required(
+            {**state, "intent_observation": result_dict}  # type: ignore[arg-type]
+        )
+        result.needs_planning = planning_required
+        result_dict["needs_planning"] = planning_required
+        state = freeze_intent_snapshot(
+            state,
+            result,
+            planning_required=planning_required,
+            planning_required_source=planning_source,
+        )
+        payload = dict(state.get("input_payload") or payload)
+        payload["planning_required_source"] = planning_source
     audit = dict(payload.get("route_audit") or {})
     audit["pre_observation"] = True
     audit["intent_observation_summary"] = {
@@ -335,13 +443,18 @@ def apply_intent_observation_to_state(
         "target_mode": result.target_mode,
         "session_relation": result.session_relation,
         "needs_planning": result.needs_planning,
+        "is_revision": result.is_revision,
         "confidence": result.confidence,
         "trace_id": result.trace_id,
         "shadow_only": shadow,
     }
+    if result.revision_intent:
+        audit["revision_scope"] = result.revision_intent.get("revision_scope")
+        audit["target_sections"] = result.revision_intent.get("target_sections")
     payload["route_audit"] = audit
 
     from app.runtime.state_field_access import mission_from_state
+    from app.services.turn_event_log import record_turn_event
 
     audit_entry = {
         "observation_source": result.source,
@@ -350,14 +463,61 @@ def apply_intent_observation_to_state(
         "mission_active": bool(mission_from_state(state)),
         "session_relation": result.session_relation,
         "needs_planning": result.needs_planning,
+        "is_revision": result.is_revision,
+        "planning_required_source": payload.get("planning_required_source") or "rule",
+        "intent_snapshot_hit": payload.get("intent_snapshot_hit"),
         "model_name": result.model_name,
         "latency_ms": result.latency_ms,
         "fallback_used": result.fallback_used,
         "shadow_only": shadow,
         "trace_id": result.trace_id,
     }
+    if result.is_revision:
+        snap = current_intent_snapshot(state)
+        payload["is_revision"] = True
+        payload["revision_intent"] = result.revision_intent or (snap.revision_intent if snap else None)
+        from app.services.intent_composer import classify_revision_override
 
-    from app.services.turn_event_log import record_turn_event
+        replaces = classify_revision_override(payload, state)
+        if result.revision_intent and isinstance(result.revision_intent, dict):
+            result.revision_intent["replaces_active_goal"] = replaces
+            payload["revision_intent"] = result.revision_intent
+        payload["active_goal_source"] = "revision_override" if replaces else "mission"
+        if replaces:
+            from app.services.session.turn_policy import apply_revision_turn_isolation
+
+            payload = apply_revision_turn_isolation(payload, state)
+            state = record_turn_event(
+                state,
+                "draft_mission_suspended",
+                "pre_planning",
+                "revision_isolation",
+                {"reason": "user_revision_override"},
+            )
+            state = record_turn_event(
+                state,
+                "active_goal_replaced",
+                "pre_planning",
+                "revision_override",
+                {
+                    "confirmed_goal": (result.revision_intent or {}).get("revision_scope"),
+                    "source": "revision_override",
+                },
+            )
+        if payload.get("revision_intent"):
+            from app.services.confirmation.revision_boundary import stream_revision_boundary
+
+            stream_revision_boundary(
+                task_id=str(state.get("task_id") or ""),
+                revision_intent=payload["revision_intent"],
+            )
+        state = record_turn_event(
+            state,
+            "revision_intent_recognized",
+            "pre_planning",
+            "intent_observation",
+            {"revision_intent": result.revision_intent},
+        )
 
     state = merge_state(
         state,
