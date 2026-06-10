@@ -18,7 +18,8 @@ def test_tool_registry_permission_denied(isolated_stores):
         raise AssertionError("Expected PermissionError")
 
 
-def test_edit_text_artifact_requires_admin(isolated_stores):
+def test_edit_text_artifact_allowed_for_user(isolated_stores):
+    """unified-core: edit_artifact is a standard user action (not admin-only)."""
     registry = get_tool_registry()
     try:
         registry.invoke(
@@ -31,7 +32,7 @@ def test_edit_text_artifact_requires_admin(isolated_stores):
             },
             user_role="user",
         )
-    except PermissionError:
-        assert True
-    else:
-        raise AssertionError("Expected PermissionError")
+    except PermissionError as exc:
+        raise AssertionError(f"edit_text_artifact must be user-invocable: {exc}")
+    except FileNotFoundError:
+        pass  # permission passed; artifact does not exist in this test

@@ -94,9 +94,9 @@ def _bind_command_payload(payload: dict[str, Any], command: WritingCommand) -> d
 
 
 def _execute_edit_plot(state: AgentState, command: WritingCommand) -> AgentState:
-    from app.services.artifact_resolver import maybe_run_outline_edit, resolve_artifact_target
+    from app.services.artifact_resolver import resolve_artifact_target
 
-    outline_edit = maybe_run_outline_edit(state)
+    outline_edit = None
     if outline_edit is not None:
         return outline_edit  # type: ignore[return-value]
 

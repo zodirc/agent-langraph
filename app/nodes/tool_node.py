@@ -1,11 +1,11 @@
-"""工具节点 tool_execution_node：按 tool_dag 执行 selected_tools。
+"""工具节点 tool_execution_node：统一 Action 执行 + 过渡期 staged 执行。
 
-parse_tool_stages → execute_tool_stages；单工具经 tool_intent_guard 与 registry.invoke。
+unified-core WP-5：``planned_actions`` 非空时走 ``action_executor.execute_actions``
+（规划期已产出全量后端参数，零翻译）；否则回退既有 selected_tools / tool_stages
+staged 执行（过渡期保留）。
+
 失败处理：全失败 TOOL_FAILED；全非 retryable 时 router 转 reasoning。
-Skill 白名单在 planning 阶段已收窄工具列表。
-
-tool_execution_node runs tools via parse_tool_stages and execute_tool_stages.
-Uses tool_registry.invoke; route_after_tool selects next node.
+``edit_artifact`` 的编辑诚实（is_edit_applied）由 action_executor 写入 turn_facts。
 """
 
 from __future__ import annotations
@@ -20,10 +20,8 @@ from app.services.fact_layer import attach_turn_facts
 from app.services.artifact_resolver import (
     ArtifactResolutionError,
     action_for_tool,
-    maybe_run_outline_edit,
     resolve_artifact_target,
 )
-from app.services.manuscript_service import WRITING_TOOL_NAMES
 from app.services.artifact_tools import extract_math_expression
 from app.services.metrics_service import get_metrics_service
 from app.services.reasoning_trace import report_boundary, report_status_trace
@@ -32,7 +30,98 @@ from app.services.tool_dag import execute_tool_stages, parse_tool_stages
 from app.services.tool_intent_guard import check_tool_params_safe
 from app.services.tool_registry import get_tool_registry
 from app.services.turn_event_log import record_turn_event
-from app.services.revision_side_effects import maybe_invalidate_intent_on_tool_result
+
+
+def _classify_failures(new_results: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    """Return (failures, all_non_retryable) over this turn's new results."""
+    failures = [
+        r
+        for r in new_results
+        if r.get("status") in ("error", "skipped") or r.get("error")
+    ]
+    all_non_retryable = bool(failures) and all(
+        bool(r.get("non_retryable")) or bool((r.get("result") or {}).get("non_retryable"))
+        for r in failures
+    )
+    return failures, all_non_retryable
+
+
+def _run_planned_actions(state: AgentState) -> AgentState:
+    """Unified action pipeline: execute planned_actions and set turn status."""
+    from app.services.action_executor import execute_actions
+    from app.services.turn_guard import mark_turn_step_executed
+
+    prior_len = len(state.get("tool_results") or [])
+    actions = state.get("planned_actions") or []
+    report_boundary("tool_execution", "enter", f"{len(actions)} actions")
+
+    updated = execute_actions(state)
+    results = list(updated.get("tool_results") or [])
+    new_results = results[prior_len:]
+    failures, all_non_retryable = _classify_failures(new_results)
+
+    if new_results and len(failures) == len(new_results):
+        msg = str(failures[0].get("error") or "all actions failed")
+        prefix = "tool_execution(non_retryable)" if all_non_retryable else "tool_execution"
+        updated = merge_state(
+            updated,
+            errors=list(updated.get("errors", [])) + [f"{prefix}: {msg}"],
+            status=TaskStatus.TOOL_FAILED.value,
+            current_node="tool_execution",
+            audit_log=append_audit(
+                updated,
+                "tool_execution",
+                "non_retryable_error" if all_non_retryable else "all_tools_failed",
+                {"actions": [str(a.get("type")) for a in actions if isinstance(a, dict)], "error": msg},
+            ),
+        )
+        get_state_store().save(updated)
+        return updated
+
+    updated = merge_state(
+        updated,
+        status=TaskStatus.TOOL_EXECUTED.value,
+        current_node="tool_execution",
+        audit_log=append_audit(
+            updated,
+            "tool_execution",
+            "success",
+            {
+                "executed": len(new_results),
+                "tool_names": [str(r.get("tool") or "") for r in new_results],
+                "failed": len(failures),
+                "source": "planned_actions",
+            },
+        ),
+    )
+    from app.services.context_registry import persist_tool_context
+
+    updated = persist_tool_context(updated, new_results)
+    for item in new_results:
+        event = "tool_failed" if item.get("status") == "error" else "tool_invoked"
+        updated = record_turn_event(
+            updated,
+            event,
+            str(item.get("tool") or "action"),
+            "tool_execution",
+            {"status": str(item.get("status") or "ok"), "action_type": item.get("action_type")},
+        )
+    # attach_turn_facts rebuilds the snapshot; executor honesty facts
+    # (edit_applied / edits_* / actions_executed) must survive the rebuild.
+    executor_facts = {
+        k: v
+        for k, v in (updated.get("turn_facts") or {}).items()
+        if k in ("edit_applied", "edits_attempted", "edits_applied", "actions_executed")
+    }
+    updated = attach_turn_facts(updated)
+    if executor_facts:
+        merged_facts = {**(updated.get("turn_facts") or {}), **executor_facts}
+        payload_facts = dict(updated.get("input_payload") or {})
+        payload_facts["turn_facts"] = merged_facts
+        updated = merge_state(updated, turn_facts=merged_facts, input_payload=payload_facts)
+    updated = mark_turn_step_executed(updated)
+    get_state_store().save(updated)
+    return updated
 
 
 def tool_execution_node(state: AgentState) -> AgentState:
@@ -49,19 +138,6 @@ def tool_execution_node(state: AgentState) -> AgentState:
             RunController.assert_run_active(state, phase="tool_execution_enter")
         except RunCancelled:
             return merge_state(state, current_node="tool_execution")
-        outline_edit = maybe_run_outline_edit(state)
-        if outline_edit is not None:
-            get_state_store().save(outline_edit)
-            return outline_edit
-        from app.services.writing.revision_executor import (
-            execute_revision_fast_path,
-            is_revision_tool_path,
-        )
-
-        if is_revision_tool_path(state):
-            result = execute_revision_fast_path(state, node_id="tool_execution")
-            get_state_store().save(result)
-            return result
         from app.services.execution_control import (
             CancelRequested,
             PauseRequested,
@@ -82,12 +158,14 @@ def tool_execution_node(state: AgentState) -> AgentState:
                 get_state_store().save(handled)
                 return handled
 
+        # Unified pipeline: planner emitted executable actions → action_executor.
+        from app.services.action_executor import has_planned_actions
+
+        if has_planned_actions(state):
+            return _run_planned_actions(state)
+
         registry = get_tool_registry()
-        tools = [
-            t
-            for t in (state.get("selected_tools") or [])
-            if t not in WRITING_TOOL_NAMES
-        ]
+        tools = [str(t) for t in (state.get("selected_tools") or [])]
         payload = dict(state.get("input_payload") or {})
         user_role = str(payload.get("user_role", "user"))
         goal = str(payload.get("goal") or payload.get("query") or "")
@@ -309,12 +387,6 @@ def tool_execution_node(state: AgentState) -> AgentState:
         from app.services.context_registry import persist_tool_context
 
         updated = persist_tool_context(updated, results)
-        for item in results:
-            updated = maybe_invalidate_intent_on_tool_result(
-                updated,
-                str(item.get("tool") or ""),
-                item,
-            )
         for event_type, subject, detail in pending_events:
             updated = record_turn_event(
                 updated,
@@ -337,11 +409,9 @@ def tool_execution_node(state: AgentState) -> AgentState:
                     error="; ".join(detail.get("issues") or []),
                 )
         updated = attach_turn_facts(updated)
-        from app.services.steer_planning_lifecycle import maybe_complete_steer_planning_after_execute
         from app.services.turn_guard import mark_turn_step_executed
 
         updated = mark_turn_step_executed(updated)
-        updated = maybe_complete_steer_planning_after_execute(updated)
         get_state_store().save(updated)
         return updated
     except Exception as exc:
@@ -369,38 +439,6 @@ def _tool_cfg(payload: dict[str, Any], tool_name: str) -> dict[str, Any]:
         return {}
     entry = raw.get(tool_name)
     return dict(entry) if isinstance(entry, dict) else {}
-
-
-def _revision_tool_params(
-    tool_name: str,
-    state: AgentState,
-    task_id: str,
-    tool_params: dict[str, Any],
-) -> dict[str, Any] | None:
-    payload = state.get("input_payload") or {}
-    if payload.get("thin_execution_profile") != "revision_scoped":
-        return None
-    rev_raw = payload.get("revision_intent")
-    if not isinstance(rev_raw, dict) or not rev_raw:
-        return None
-    from app.services.writing.revision_command import (
-        revision_intent_to_edit_params,
-        revision_intent_to_read_params,
-    )
-
-    if tool_name == "read_text_artifact":
-        params = revision_intent_to_read_params(rev_raw, task_id)
-        params.update({k: v for k, v in tool_params.items() if k not in params})
-        return params
-    if tool_name == "edit_text_artifact":
-        params = revision_intent_to_edit_params(
-            rev_raw,
-            task_id,
-            dry_run=bool(tool_params.get("dry_run", False)),
-        )
-        params.update({k: v for k, v in tool_params.items() if k not in params})
-        return params
-    return None
 
 
 def _artifact_filename(
@@ -462,9 +500,6 @@ def _build_tool_params(tool_name: str, state: AgentState) -> dict[str, Any]:
     ):
         return {"task_id": task_id, **tool_params}
     if tool_name == "edit_text_artifact":
-        rev_params = _revision_tool_params(tool_name, state, task_id, tool_params)
-        if rev_params is not None:
-            return rev_params
         filename = _artifact_filename(state, tool_name=tool_name, tool_params=tool_params)
         return {
             "task_id": task_id,
@@ -493,9 +528,6 @@ def _build_tool_params(tool_name: str, state: AgentState) -> dict[str, Any]:
             },
         }
     if tool_name in ("write_text_artifact", "append_text_artifact", "read_text_artifact"):
-        rev_params = _revision_tool_params(tool_name, state, task_id, tool_params)
-        if rev_params is not None:
-            return {**rev_params, "_agent_state": state}
         require_exists = tool_name == "read_text_artifact" or tool_name == "edit_text_artifact"
         if tool_name in ("write_text_artifact", "append_text_artifact"):
             require_exists = False

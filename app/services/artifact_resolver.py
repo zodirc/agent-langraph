@@ -435,49 +435,6 @@ def manifest_for_planning(state: dict[str, Any], payload: dict[str, Any]) -> dic
     }
 
 
-def maybe_run_outline_edit(state: dict[str, Any]) -> Optional[Any]:
-    """Outline steer without exact anchor → read + plan patch + edit."""
-    from app.runtime.state import AgentState
-
-    payload = _state_payload(state)
-    from app.services.turn_contract import contract_from_payload
-
-    contract = contract_from_payload(payload)
-    if not contract or str(contract.get("primary_op") or "") != "edit_plot":
-        return None
-    from app.services.outline_steer_patch import is_outline_filename, run_outline_edit_via_tools
-    from app.services.writing.state_machine import get_current_command
-
-    command = get_current_command(payload)
-    if command is None or command.action != "edit_plot":
-        return None
-    if not is_outline_filename(command.target_filename) or command.edit_spec.get("old_text"):
-        return None
-    steer = str(
-        command.edit_spec.get("steer_correction")
-        or payload.get("latest_steer_message")
-        or payload.get("goal")
-        or ""
-    )
-    try:
-        target = resolve_artifact_target(
-            state,
-            action="edit_plot",
-            target_hint="outline",
-            require_exists=True,
-        )
-    except ArtifactResolutionError:
-        return None
-    return run_outline_edit_via_tools(
-        state,  # type: ignore[arg-type]
-        spec={
-            **command.edit_spec,
-            "filename": target.filename,
-            "steer_correction": steer,
-        },
-    )
-
-
 def bind_planned_artifact_names(
     payload: dict[str, Any],
     *,
