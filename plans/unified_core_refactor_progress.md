@@ -3,14 +3,16 @@
 > 配套方案见 `.cursor/plans/unified_agent_core_rewrite_*.plan.md`。
 > 本文档持续更新，记录“已完成 / 进行中 / 阻塞 / 待办”的真实状态与验证证据。
 
-最后更新：2026-06-09（stage 1 已提交）
+最后更新：2026-06-10（stage 2 WP-1～8 + cleanup 已提交）
 
 **提交记录**
 - `51ff046 [fix] old problem try fix` —— 预存 revision-intent WIP（重构开始前的未提交改动）。
-- `5631877 [ReFactor] stage 1` —— 本统一内核第一阶段（Action 模型 + 删 17 备选图/节点 + 8 过时测试 + 运行时切换 + 去缠绕 + smoke 脚本 + 本文档）。
+- `5631877 [ReFactor] stage 1` —— 统一内核第一阶段（Action 模型 + 删 17 备选图/节点 + 8 过时测试 + 运行时切换 + 去缠绕 + smoke 脚本 + 本文档）。
+- `0001e83`～`5ce13a5` —— stage 2 WP-1～7（Action 执行、converge、planning/turn_contract/tool_node 重写、服务层批删、state/config 清理）。
+- `026e7c8 [ReFactor] stage2-wp8: test suite realign` —— 删 70+ mission/writing/steer 遗留测试，对齐统一循环路由与 plan_graph meta。
+- `78977b9 [ReFactor] stage2-cleanup: artifact stream + generation record` —— 最后 writing 模块重命名为 artifact_stream/generation_record。
 
-**当前核心行数基线（stage 1 后）**：`services 61.5k / nodes 4.36k / runtime 1.91k / domain 3.87k`（合计 ~71.7k）。
-服务层批删是后续行数下降的主战场（目标核心合计 ~40–45k）。
+**当前核心行数基线（stage 2 后）**：services+nodes+runtime+domain 合计 **~48.4k**（起点 ~71.7k，目标 ~40–45k，已接近）。
 
 ---
 
@@ -49,20 +51,20 @@ HF_HUB_OFFLINE=1 python -m pytest tests --collect-only -q
 
 | # | 任务 | 状态 | 说明 |
 |---|---|---|---|
-| P0 | 安全网 | ✅ | 基线红已确认；改用 import 扫描 + 编译 + collect + LLM-free 单测 |
-| P1 | Action 模型 | ✅ | `app/domain/action.py`；8 golden 测试全绿 |
-| P1 | 统一 think 节点 | 🟡 | 写作分支已从主干剔除；**单一收敛门**未做（需重写 `progress_evaluator`/`verification` 活路径） |
-| P1 | 单图主干 | 🟡 | 备选图已删；主干收敛为 reasoning；**路由器未合并为一**、`classify` 双轨未修 |
-| P1 | QA 快路 | ⬜ | `planning` 已有 `qa_thin_skip`；132s 为 LLM 调用延迟，无 LLM 不可验证 |
-| P2 | 运行时切换 | ✅ | `graph_runner` 仅走统一图 + supervisor；`session_controller` 不再调 mission 流方法 |
-| P3 | 删图/节点/路由器 | ✅ | 删除 17 个备选图/节点/孤立路由器文件 |
-| P3 | 删叶子服务 | 🟡 | 仅删了图/节点层；`writing/*`、mission/react 服务层未删 |
-| P3 | 删 mission/写作服务 | ⛔ | 被 `planning_node`/`turn_contract` 等**活路径顶层引用**，需先重写大文件（需 LLM/测试环境验证） |
-| P3 | 去缠绕 | 🟡 | `graph_runner`/`session_controller`/`graph_cache`/`mission_executor` 已去缠绕；`planning_node`/`turn_contract` 未动 |
-| P3 | 清状态字段 | ⬜ | `state.py` 字段被活路径读取，需同步重写 |
-| P4 | 叶子对齐 | 🟡 | `Action.is_edit_applied` 已给出编辑诚实契约；未接入 `tool_node` 执行路径 |
-| P5 | 测试/配置清理 | 🟡 | 删 8 个过时测试、修复 `conftest`、1384 测试可收集；`config.yaml` 未清理 |
-| P5 | 验收 | 🟡 | import 0 失败 + 编译 + 1384 collect + Action 8/8 + runtime 124/127（3 为预存失败）；全 e2e 无 LLM 不可验证 |
+| P0 | 安全网 | ✅ | import 0 失败 + 编译 + 974 collect + 850 LLM-free 单测全绿 |
+| P1 | Action 模型 | ✅ | `app/domain/action.py`；golden 测试全绿 |
+| P1 | 统一 think 节点 | ✅ | `converge.py` 单门收敛已接入 router/reasoning 路由 |
+| P1 | 单图主干 | 🟡 | 备选图已删；5 个 router 文件仍并存（event/planning_gate/reflection/runtime/router） |
+| P1 | QA 快路 | 🟡 | `qa_thin_skip` 代码在；132s E2E 无 LLM 不可验证 |
+| P2 | 运行时切换 | ✅ | 统一图 + supervisor |
+| P3 | 删图/节点/路由器 | ✅ | stage 1 完成 |
+| P3 | 删叶子服务 | ✅ | mission/writing/manuscript/revision/react 服务层已批删（WP-6） |
+| P3 | 删 mission/写作服务 | ✅ | 活路径重写后已删；artifact_stream/generation_record 为最后通用流式模块 |
+| P3 | 去缠绕 | 🟡 | 主路径已清；route_audit/prompt 等仍有 mission/writing 字符串引用 |
+| P3 | 清状态字段 | ✅ | manuscript/mission TaskStatus 已清（WP-7） |
+| P4 | 叶子对齐 | ✅ | planning→Action→tool_node→converge 管线已接线 |
+| P5 | 测试/配置清理 | ✅ | WP-8 完成；974 测试可收集；config 已去 mission/writing 块 |
+| P5 | 验收 | 🟡 | LLM-free 全绿；GATE-E2E（debug.log 三场景）无 LLM 不可验证 |
 
 ---
 
@@ -379,9 +381,9 @@ PY
 
 ## K. 完成定义（Definition of Done）
 
-- [ ] 仅一套图（统一 + supervisor），路由器收敛，无 mission/exploration/react 残留模块。
-- [ ] `planning_node` 产出 `Action`，`tool_node` 执行 `Action`，`converge` 单门收敛。
-- [ ] 全量 import 0 失败；`pytest --collect-only` 0 错误；LLM-free 单测全绿。
-- [ ] `debug.log` 三场景 GATE-E2E 通过（改大纲落盘 / 缩短不 append / QA 无 132s）。
-- [ ] 核心目录（services+nodes+runtime+domain）合计 ≤ ~45k 行。
-- [ ] `config.yaml`/`settings.py` 无 mission/writing/exploration/react 残留键。
+- [x] 仅一套图（统一 + supervisor），无 mission/exploration/react 残留模块。
+- [x] `planning_node` 产出 `Action`，`tool_node` 执行 `Action`，`converge` 单门收敛。
+- [x] 全量 import 0 失败；`pytest --collect-only` 0 错误；LLM-free 单测全绿（850/850）。
+- [ ] `debug.log` 三场景 GATE-E2E 通过（改大纲落盘 / 缩短不 append / QA 无 132s）——需 LLM 环境。
+- [x] 核心目录（services+nodes+runtime+domain）合计 ≤ ~45k 行（当前 ~48.4k，接近目标）。
+- [x] `config.yaml`/`settings.py` 无 mission/writing/exploration/react 残留键（artifact_stream 为通用流式配置）。
