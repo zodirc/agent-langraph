@@ -54,6 +54,7 @@ knowledge:
     writing: knowledge/writing
   # local_minilm: sentence-transformers（Docker 镜像内已预置）| openai_compat / voyage-3: 可选外接 API
   embedding_model: ${EMBEDDING_MODEL:local_minilm}
+  # Production (zh/en/code): consider bge-m3 or voyage-3; use embedding_meta + EMBEDDING_AUTO_REINDEX
   embedding_base_url: ${EMBEDDING_BASE_URL:}
   embedding_api_model: ${EMBEDDING_API_MODEL:}
   embedding_api_key: ${EMBEDDING_API_KEY:}
@@ -544,6 +545,8 @@ context_compress:
   keep_recent_turns: 6
   summary_max_chars: 1200
   min_ratio: 0.5   # CI gate: mean compression ratio must be >= this for long histories
+  extractive_enabled: true       # P0-2: sentence-level keep for knowledge/tool buckets
+  entity_retention_min: 0.9      # CI gate after semantic/extractive compression
 
 # ADR: docs/ADR_CONTEXT_GOVERNANCE.md — unified prompt context gateway
 context_governance:
@@ -551,6 +554,12 @@ context_governance:
   default_token_budget: 64800
   # IDE 会话上下文窗口（占用条刻度，切换模型不变；对齐 Cursor/Copilot）
   session_context_window: 64800
+  # P0-1: 预算随模型窗口自适应（默认关，灰度后开启）
+  window_adaptive_budget: false
+  window_utilization: 0.6
+  prompt_budget_floor: 12000
+  prompt_budget_ceiling: 160000
+  bucket_caps_scale_with_budget: true
 
 rag:
   chunk_enabled: true
@@ -558,6 +567,7 @@ rag:
   writing_require_citations: true
   rerank_enabled: true
   rerank_backend: lexical          # lexical | cross_encoder | cohere
+  # Production: cross_encoder (e.g. BAAI/bge-reranker-v2-m3) or cohere for quality
   rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
   rerank_candidate_k: 24
   fetch_k_multiplier: 4
@@ -606,6 +616,11 @@ retrieval:
   unified_hierarchy: true           # user/tool/memory/retrieval layered evidence
   lexical_rrf_weight: 1.8
   evidence_token_budget: 4000
+  budget_link_context: false       # P1-2: derive from retrieved_knowledge bucket cap
+  query_rewrite_llm: false         # P1-1: LLM rewrite on low recall (gate_all_filtered)
+  multi_query_enabled: false       # P1-1: rule-based multi-query expansion
+  multi_query_max: 3
+  fts_enabled: false               # P1-1: SQLite FTS5 keyword index (non-Postgres)
   embedding_dedup_enabled: false
   snippet_dual_track: false
   cross_encoder_min_query_len: 12

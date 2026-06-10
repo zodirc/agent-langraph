@@ -98,7 +98,9 @@ def run_evidence_pipeline(
     conflicts = detect_conflicts(admitted)
     conflicts.extend(detect_cross_source_conflicts(admitted, user_pkts, tool_pkts))
     packets = assemble_evidence_packets(admitted, query, decision)
-    budget_tokens = int(getattr(settings, "RETRIEVAL_EVIDENCE_TOKEN_BUDGET", 0))
+    from app.services.retrieval_budget import resolve_evidence_token_budget_for_state
+
+    budget_tokens = resolve_evidence_token_budget_for_state(state)
     packets = apply_token_budget(packets, max_tokens=budget_tokens or None)
     packets = apply_conflict_flags(packets, conflicts)
 

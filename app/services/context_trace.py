@@ -34,6 +34,7 @@ class ContextTraceAction:
 class ContextAssemblyTrace:
     purpose: str
     actions: list[ContextTraceAction] = field(default_factory=list)
+    compression_receipts: list[dict[str, Any]] = field(default_factory=list)
 
     def record_kept(self, item: ContextItem, *, reason: str = "within_budget") -> None:
         self.actions.append(
@@ -54,6 +55,7 @@ class ContextAssemblyTrace:
         reason: str,
         tokens_after: int,
         method: str = "semantic",
+        receipt: dict[str, Any] | None = None,
     ) -> None:
         self.actions.append(
             ContextTraceAction(
@@ -66,6 +68,16 @@ class ContextAssemblyTrace:
                 method=method,
             )
         )
+        if receipt:
+            self.compression_receipts.append(
+                {
+                    "item_id": item.id,
+                    "bucket": item.resolve_bucket(),
+                    "method": method,
+                    "reason": reason,
+                    **receipt,
+                }
+            )
 
     def record_dropped(self, item: ContextItem, *, reason: str) -> None:
         self.actions.append(
@@ -89,6 +101,7 @@ class ContextAssemblyTrace:
             "compressed_count": compressed,
             "dropped_count": dropped,
             "actions": [a.to_dict() for a in self.actions],
+            "compression_receipts": list(self.compression_receipts),
         }
 
 

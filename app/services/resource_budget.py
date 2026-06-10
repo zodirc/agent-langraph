@@ -250,13 +250,21 @@ def record_session_token_usage(
     state["token_budget"] = tb
 
 
+def _clamp_int(value: int, floor: int, ceiling: int) -> int:
+    return max(floor, min(ceiling, value))
+
+
 def resolve_prompt_token_budget(
     state: AgentState | dict[str, Any],
     *,
     policy_default: int,
+    purpose: str = "reasoning",
 ) -> int:
     """
     Unify task BudgetContext with Context Governance envelope budget (ADR §14).
+
+    When ``CONTEXT_WINDOW_ADAPTIVE_BUDGET`` is enabled, derive budget from the
+    model context window instead of the fixed per-purpose policy cap.
     """
     from app.config.settings import settings
 
@@ -266,4 +274,21 @@ def resolve_prompt_token_budget(
     if limit <= 0:
         return policy_default
     remaining = max(512, limit - ctx.tokens_used)
-    return min(policy_default, remaining)
+
+    if not getattr(settings, "CONTEXT_WINDOW_ADAPTIVE_BUDGET", False):
+        return min(policy_default, remaining)
+
+    from app.services.context_meter import resolve_model_context_window
+    from app.services.llm_client import _max_tokens_for_purpose
+
+    window = resolve_model_context_window(state)
+    out_reserve = _max_tokens_for_purpose(purpose)
+    utilization = float(getattr(settings, "CONTEXT_WINDOW_UTILIZATION", 0.6))
+    floor = int(getattr(settings, "CONTEXT_PROMPT_BUDGET_FLOOR", 12000))
+    ceiling = int(getattr(settings, "CONTEXT_PROMPT_BUDGET_CEILING", 160000))
+
+    target = int(window * utilization) - ctx.tokens_used - out_reserve
+    budget = _clamp_int(target, floor, ceiling)
+    if ctx.token_limit > 0:
+        budget = min(budget, remaining)
+    return max(512, budget)

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.config.settings import settings
 from app.services.context_items import ContextBucketName, ContextPurpose
 
 
@@ -381,6 +383,30 @@ def get_prompt_context_policy(purpose: str) -> PromptContextPolicy:
         return _POLICIES["intent_observation"]
     key = purpose if purpose in _POLICIES else "reasoning"
     return _POLICIES[key]  # type: ignore[index]
+
+
+def scale_policy_for_budget(
+    policy: PromptContextPolicy,
+    token_budget: int,
+) -> PromptContextPolicy:
+    """Scale per-bucket caps proportionally when window-adaptive budget is active."""
+    if not getattr(settings, "CONTEXT_BUCKET_CAPS_SCALE_WITH_BUDGET", True):
+        return policy
+    if not getattr(settings, "CONTEXT_WINDOW_ADAPTIVE_BUDGET", False):
+        return policy
+    ref = policy.default_token_budget
+    if ref <= 0 or token_budget <= 0:
+        return policy
+    ratio = token_budget / ref
+    if abs(ratio - 1.0) < 0.01:
+        return policy
+    new_caps: dict[ContextBucketName, int] = {}
+    for bucket, cap in policy.bucket_max_tokens.items():
+        if cap <= 0:
+            new_caps[bucket] = 0
+        else:
+            new_caps[bucket] = max(1, int(cap * ratio))
+    return dataclasses.replace(policy, bucket_max_tokens=new_caps)
 
 
 def resolve_purpose_for_state(state: dict[str, Any] | None, default: str) -> str:

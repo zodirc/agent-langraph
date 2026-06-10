@@ -25,7 +25,7 @@ from app.services.context_items import (
     ContextPurpose,
     new_context_id,
 )
-from app.services.context_policy import get_prompt_context_policy
+from app.services.context_policy import get_prompt_context_policy, scale_policy_for_budget
 
 # Purposes routed through llm_client governance hook when trace_state is present.
 GOVERNED_LLM_PURPOSES: frozenset[str] = frozenset(
@@ -377,13 +377,16 @@ def build_context_envelope(
         from app.services.resource_budget import resolve_prompt_token_budget
 
         budget = resolve_prompt_token_budget(
-            state, policy_default=policy.default_token_budget
+            state,
+            policy_default=policy.default_token_budget,
+            purpose=purpose,
         )
         if budget <= 0:
             budget = int(
                 getattr(settings, "CONTEXT_GOVERNANCE_DEFAULT_BUDGET", 0)
                 or policy.default_token_budget
             )
+    policy = scale_policy_for_budget(policy, budget)
     items = collect_context_items(state, purpose=purpose)
     t0 = time.perf_counter()
     envelope = assemble_context_envelope(

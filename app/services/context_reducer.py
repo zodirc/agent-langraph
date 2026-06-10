@@ -13,6 +13,7 @@ from app.services.context_items import ContextBucketName, ContextItem
 from app.services.context_policy import PromptContextPolicy
 from app.services.context_trace import ContextAssemblyTrace
 from app.services.conversation_context import compress_conversation_history
+from app.services.compression_receipt import build_compression_receipt, extractive_sentences
 from app.services.context_compressor import apply_semantic_context_compress
 
 
@@ -151,13 +152,40 @@ def _compress_memory_item(item: ContextItem, max_tokens: int) -> ContextItem:
     return _clip_content(item, text[: max(80, max_tokens * 4)].rstrip() + "…", method="memory_tail")
 
 
-def _compress_knowledge_item(item: ContextItem, max_tokens: int) -> ContextItem:
+def _query_from_state(state: dict[str, Any] | None) -> str:
+    if not state:
+        return ""
+    payload = state.get("input_payload") or {}
+    if isinstance(payload, dict):
+        for key in ("goal", "query", "question"):
+            if payload.get(key):
+                return str(payload[key])
+    qo = state.get("query_object")
+    if isinstance(qo, dict) and qo.get("standalone_query"):
+        return str(qo["standalone_query"])
+    return ""
+
+
+def _compress_knowledge_item(
+    item: ContextItem,
+    max_tokens: int,
+    *,
+    query: str = "",
+    extractive: bool = True,
+) -> tuple[ContextItem, dict[str, Any] | None]:
     text = item.content or ""
+    budget = max(80, max_tokens * 4)
+    if extractive and getattr(settings, "CONTEXT_COMPRESS_EXTRACTIVE_ENABLED", True):
+        clipped, receipt = extractive_sentences(text, query=query, max_chars=budget)
+        return _clip_content(item, clipped, method="knowledge_extractive"), receipt
+
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
-        return _clip_content(item, text[: max(80, max_tokens * 4)], method="knowledge_tail")
+        clipped = text[:budget]
+        return _clip_content(item, clipped, method="knowledge_tail"), build_compression_receipt(
+            text, clipped
+        )
     kept: list[str] = []
-    budget = max(80, max_tokens * 4)
     for line in lines:
         if line.lower().startswith(("conclusion", "summary", "result", "finding")):
             kept.insert(0, line)
@@ -170,21 +198,35 @@ def _compress_knowledge_item(item: ContextItem, max_tokens: int) -> ContextItem:
     clipped = "\n".join(kept[:6])
     if len(clipped) > budget:
         clipped = clipped[:budget] + "…"
-    return _clip_content(item, clipped, method="knowledge_structured")
+    return _clip_content(item, clipped, method="knowledge_structured"), build_compression_receipt(
+        text, clipped
+    )
 
 
-def _compress_tool_item(item: ContextItem, max_tokens: int) -> ContextItem:
+def _compress_tool_item(
+    item: ContextItem,
+    max_tokens: int,
+    *,
+    query: str = "",
+) -> tuple[ContextItem, dict[str, Any] | None]:
     text = item.content or ""
     match = re.match(r"^\s*\[([^\]]+)\]\s*([^:]+):\s*(.*)$", text, re.DOTALL)
     if match:
         name, status, body = match.groups()
         body_budget = max(40, max_tokens * 3)
         body = (body or "").strip()
-        if len(body) > body_budget:
+        if getattr(settings, "CONTEXT_COMPRESS_EXTRACTIVE_ENABLED", True) and len(body) > body_budget:
+            body, receipt = extractive_sentences(body, query=query, max_chars=body_budget)
+        elif len(body) > body_budget:
             body = body[:body_budget] + "…"
+            receipt = build_compression_receipt(text, body)
+        else:
+            receipt = None
         clipped = f"[{name}] {status.strip()}: {body}"
-        return _clip_content(item, clipped, method="tool_structured")
-    return _clip_content(item, text[: max(80, max_tokens * 4)].rstrip() + "…", method="tool_tail")
+        out = _clip_content(item, clipped, method="tool_structured")
+        return out, receipt
+    clipped = text[: max(80, max_tokens * 4)].rstrip() + "…"
+    return _clip_content(item, clipped, method="tool_tail"), build_compression_receipt(text, clipped)
 
 
 def _compress_diagnostic_item(item: ContextItem, max_tokens: int) -> ContextItem:
@@ -200,23 +242,31 @@ def _compress_diagnostic_item(item: ContextItem, max_tokens: int) -> ContextItem
     return _clip_content(item, clipped, method="diagnostic_structured")
 
 
-def _truncate_item_content(item: ContextItem, max_tokens: int) -> ContextItem:
+def _truncate_item_content(
+    item: ContextItem,
+    max_tokens: int,
+    *,
+    query: str = "",
+) -> tuple[ContextItem, dict[str, Any] | None]:
     if item.estimated_tokens <= max_tokens:
-        return item
+        return item, None
     bucket = item.resolve_bucket()
     if bucket == "retrieved_memory" or item.kind == "episodic_memory":
-        return _compress_memory_item(item, max_tokens)
+        out = _compress_memory_item(item, max_tokens)
+        return out, build_compression_receipt(item.content or "", out.content or "")
     if bucket == "retrieved_knowledge" or item.kind == "knowledge":
-        return _compress_knowledge_item(item, max_tokens)
+        return _compress_knowledge_item(item, max_tokens, query=query)
     if bucket == "tool_observations" or item.kind == "tool_output":
-        return _compress_tool_item(item, max_tokens)
+        return _compress_tool_item(item, max_tokens, query=query)
     if bucket == "diagnostics" or item.kind in ("diagnostic", "test_failure", "terminal_output"):
-        return _compress_diagnostic_item(item, max_tokens)
+        out = _compress_diagnostic_item(item, max_tokens)
+        return out, build_compression_receipt(item.content or "", out.content or "")
     char_budget = max(80, max_tokens * 4)
     clipped = (item.content or "")[:char_budget]
     if len(item.content or "") > len(clipped):
         clipped += "…"
-    return _clip_content(item, clipped, method="token_truncate")
+    out = _clip_content(item, clipped, method="token_truncate")
+    return out, build_compression_receipt(item.content or "", clipped)
 
 
 def _apply_min_bucket_representation(
@@ -224,6 +274,7 @@ def _apply_min_bucket_representation(
     *,
     bucket: ContextBucketName,
     policy: PromptContextPolicy,
+    query: str = "",
 ) -> list[ContextItem]:
     """Keep a minimal required representation instead of the full bucket."""
     min_tokens = policy.min_bucket_tokens.get(bucket)
@@ -243,7 +294,8 @@ def _apply_min_bucket_representation(
             summary = "\n".join(lines)
             out.append(_clip_content(item, summary, method="min_bucket_summary"))
         else:
-            out.append(_truncate_item_content(item, per_item))
+            trimmed, _ = _truncate_item_content(item, per_item, query=query)
+            out.append(trimmed)
     return out
 
 
@@ -259,6 +311,7 @@ def reduce_context_items(
     Return (kept, compressed, dropped) after bucket caps and global budget.
     """
     assembly_trace = trace or ContextAssemblyTrace(purpose=policy.purpose)
+    query_text = _query_from_state(state)
     items = dedupe_items([estimate_item_tokens(i) for i in items])
 
     by_bucket: dict[ContextBucketName, list[ContextItem]] = defaultdict(list)
@@ -288,7 +341,7 @@ def reduce_context_items(
             and bucket in policy.min_bucket_tokens
         ):
             minimized = _apply_min_bucket_representation(
-                bucket_items, bucket=bucket, policy=policy
+                bucket_items, bucket=bucket, policy=policy, query=query_text
             )
             if minimized and sum_item_tokens(minimized) < bucket_tokens:
                 for old in bucket_items:
@@ -317,14 +370,19 @@ def reduce_context_items(
                 continue
             if bucket in policy.compressible_buckets and bucket != "recent_transcript":
                 victim = bucket_items[-1]
-                trimmed = _truncate_item_content(victim, max(32, cap // max(1, len(bucket_items))))
+                trimmed, receipt = _truncate_item_content(
+                    victim,
+                    max(32, cap // max(1, len(bucket_items))),
+                    query=query_text,
+                )
                 compressed.append(victim)
                 bucket_items[-1] = trimmed
                 assembly_trace.record_compressed(
                     victim,
                     reason=f"bucket_cap_truncate:{bucket}",
                     tokens_after=trimmed.estimated_tokens,
-                    method="token_truncate",
+                    method=trimmed.meta.get("compress_method", "token_truncate"),
+                    receipt=receipt,
                 )
                 bucket_tokens = sum_item_tokens(bucket_items)
                 continue
@@ -362,10 +420,19 @@ def reduce_context_items(
                 break
             if not item.droppable or bucket in policy.preserve_fidelity_buckets:
                 if item.compressible:
-                    trimmed = _truncate_item_content(item, max(32, item.estimated_tokens // 2))
+                    trimmed, receipt = _truncate_item_content(
+                        item, max(32, item.estimated_tokens // 2), query=query_text
+                    )
                     compressed.append(item)
                     kept.remove(item)
                     kept.append(trimmed)
+                    assembly_trace.record_compressed(
+                        item,
+                        reason=f"global_budget_truncate:{bucket}",
+                        tokens_after=trimmed.estimated_tokens,
+                        method=trimmed.meta.get("compress_method", "token_truncate"),
+                        receipt=receipt,
+                    )
                     total = sum_item_tokens(kept)
                 continue
             kept.remove(item)

@@ -91,6 +91,11 @@ retrieval:
   unified_hierarchy: true
   lexical_rrf_weight: 1.8
   evidence_token_budget: 4000
+  budget_link_context: false
+  query_rewrite_llm: false
+  multi_query_enabled: false
+  multi_query_max: 3
+  fts_enabled: false
   rerank_timeout_sec: 8.0
   citation_check_strictness: basic
   snippet_max_chars: 2000
@@ -166,6 +171,11 @@ session:
 context_governance:
   enabled: true
   default_token_budget: 64800
+  window_adaptive_budget: true
+  window_utilization: 0.6
+  prompt_budget_floor: 12000
+  prompt_budget_ceiling: 160000
+  bucket_caps_scale_with_budget: true
 
 performance:
   fast_reasoning_enabled: false

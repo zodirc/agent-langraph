@@ -53,6 +53,12 @@
 - 如何将知识与记忆结果合并
 - 如何将证据送入后续上下文治理
 
+检索链路默认走**混合召回**（语义 + 关键词/BM25）→ **RRF 合并** → **重排与 relevance 准入** → **证据管线**（去重、来源多样性、冲突检测、token 预算、失败归因）。关键词路径在开启 FTS 开关时可走倒排索引（SQLite FTS5），否则为内存 BM25 全表扫描。
+
+查询整理默认含**正则代词消解**；可选开关启用 **LLM 查询改写**与 **multi-query**（通常在准入全过滤、低召回重试时触发）。
+
+证据 token 预算默认独立常量；开启 **`budget_link_context`** 后从上下文治理的 `retrieved_knowledge` 桶 cap 推导，并与 envelope trace 中的**证据保真率**对齐，避免检索层与上下文层双层裁剪打架。
+
 这一层的目标是给规划、推理、工程判断和结果生成提供知识支撑。
 
 ## 2.4 工具与执行层
@@ -92,6 +98,21 @@
 - 管理工作记忆和摘要
 - 在任务结束后把可复用信息写回长期记忆
 - 将过程状态沉淀为后续评测与恢复可用信息
+
+上下文治理经**统一 prompt 上下文网关**完成：按 **purpose**（planning / reasoning / writing 等）加载策略 → 收集多源 **ContextItem** → 解析 **prompt token 预算** → 组装 **envelope** → **分桶裁剪 / 压缩 / 丢弃 / 降级**，并产出 **composition_view**、桶分配、压缩回执与证据保真率等 trace。
+
+**七桶预算**（system_policy / recent_messages / working_memory / retrieval_evidence / tool_results / file_slices / response_reserve）带 soft(0.85) / hard(0.95) / emergency 阈值，用于任务级占用跟踪；与单次 LLM 调用的 envelope 预算相互关联但不完全等同。
+
+**单次 prompt 预算**（决定「这次模型可见上下文塞多少」）：
+
+| 模式 | 行为 |
+|---|---|
+| `window_adaptive_budget: false`（仓库默认） | `min(purpose 策略 cap, 任务剩余)`，reasoning 等通常 ~24K–36K |
+| `window_adaptive_budget: true`（可灰度，如 Docker 部署） | `clamp(模型窗口 × utilization − 已用 − 输出预留, floor, ceiling)`；桶 cap 可按 budget 等比放大 |
+
+`default_token_budget: 64800` 与 `session_context_window` 主要服务**会话占用条刻度**、七桶初始化默认值、API 可选 `token_budget` 上限；在 adaptive 开启且未显式传任务 `token_budget` 时，**不**作为单次 prompt 注入上限。模型窗口由 catalog / 模型名推断 / `model.context_window` 解析，须与模型真实能力一致（详见 §4.6）。
+
+**压缩**：超 cap 时按桶走结构化裁剪；`extractive_enabled` 对知识/工具桶做抽取式句子保留；可选语义压缩（默认关）；压缩产出 **dropped_entities / kept_anchors** 等回执写入 trace。
 
 这一层是整个系统保持连续性与稳定性的关键。
 
@@ -249,10 +270,10 @@
                         v
               +------------------------+
               | 上下文治理阶段          |
-              | - 预算控制              |
-              | - 材料裁剪              |
-              | - 证据排序              |
-              | - 历史/结果合并         |
+              | - 预算解析              |
+              | - 分桶裁剪/压缩         |
+              | - envelope 装配         |
+              | - trace（回执/保真率）  |
               +------------+-----------+
                            |
                            v
@@ -340,7 +361,7 @@
                              v                       v
 ┌──────────────────────────────────────────────────────────────────────┐
 │                      上下文工程与记忆层                              │
-│    历史整理 → 预算控制 → 材料裁剪 → 证据排序 → 统一上下文装配         │
+│    历史整理 → 预算解析 → 分桶裁剪/压缩 → 证据排序 → 统一 envelope 装配   │
 └──────────────────────────────────────────────────────────────────────┘
                                │
                                v
@@ -385,7 +406,7 @@
 | 检索阶段 | 检索与证据准备层 | 查询整理、知识召回、证据组织、记忆补充 |
 | 工具执行阶段 | 工具与环境交互层 | 调用工具、执行动作、沉淀事实 |
 | 工程执行路径 | 工具与环境交互层 | 产物生成、校验修复、工程交付 |
-| 上下文治理阶段 | 上下文工程与记忆层 | 预算控制、裁剪、排序、统一装配 |
+| 上下文治理阶段 | 上下文工程与记忆层 | 预算解析、分桶裁剪/压缩、envelope 装配、trace |
 | 推理与结果生成阶段 | 推理与结果综合层 | 形成回答、解释、总结和交付说明 |
 | 验证与策略检查阶段 | 验证、护栏与审核层 | 结果校验、风险控制、审核决策 |
 | 最终输出阶段 | 持久化与记忆写回层 | 向用户返回结果并完成状态收束 |
@@ -517,9 +538,10 @@
 ### 检索阶段的主要工作
 
 - 判断检索目的
-- 整理查询对象
-- 执行混合召回
-- 裁剪命中结果
+- 整理查询对象（含可选 LLM 改写 / multi-query）
+- 执行混合召回（向量 + 关键词/BM25 或 FTS）
+- 重排、relevance 准入与证据管线整理
+- 裁剪命中结果、冲突检测与证据 token 预算
 - 形成证据材料
 - 补充历史记忆命中
 - 将检索结果输送给上下文治理
@@ -587,6 +609,20 @@
 ### 检索的目标
 
 检索的核心目标不是尽量多找，而是尽量找对，并把可用证据组织好。最终真正进入模型上下文的内容，会经过后续上下文治理再次筛选和裁剪。
+
+### 检索可选增强（配置开关，默认关）
+
+以下能力已实现且可独立灰度，不改变默认运行时行为：
+
+| 开关 | 作用 |
+|---|---|
+| `retrieval.fts_enabled` | SQLite 存储下关键词召回走 FTS5 倒排索引，替代全表 BM25 扫描 |
+| `retrieval.query_rewrite_llm` | 准入全过滤或低召回时，LLM 改写查询并重试召回 |
+| `retrieval.multi_query_enabled` | 规则/LLM 扩展多条子查询合并召回 |
+| `retrieval.budget_link_context` | 证据 token 预算从上下文 `retrieved_knowledge` 桶 cap 推导 |
+| `rag.rerank_backend: cross_encoder \| cohere` | 升级重排（默认仍为 `lexical`） |
+
+证据管线在 envelope 组装时可写入 **evidence_fidelity**（检索层保留的高分证据 vs 最终进入 prompt 的比例），供观测与 CI 回归。RAG 链路细节见 `docs/rag_skills.md` §4。
 
 ---
 
@@ -737,6 +773,118 @@
 
 ---
 
+## 4.6 上下文治理阶段
+
+检索、工具与工程执行完成后，系统在进入推理生成前会经过**上下文治理阶段**。该阶段不替代检索或记忆，而是决定「哪些材料以何种优先级进入模型可见上下文」。
+
+### 上下文治理阶段的主要工作
+
+- 按当前 **purpose** 加载上下文策略（桶 cap、必保留桶、可丢弃桶、降级顺序）
+- 从会话、记忆、检索证据、工具结果、文件片段等多源**收集 ContextItem**
+- 解析本次 LLM 调用的 **prompt token 预算**（固定 purpose cap 或窗口自适应，见 §2.6）
+- **组装 envelope**：分桶分配 → 超 cap 压缩 → 丢弃 → 全局降级
+- 产出 **composition_view**、桶 trace、**compression_receipts**、**evidence_fidelity** 等可观测字段
+
+### 上下文治理阶段的结构
+
+```text
++------------------------+
+| 上下文治理入口          |
+| （检索/工具/记忆已就绪）|
++------------+-----------+
+             |
+             v
++------------------------+
+| 收集 ContextItem        |
+| - 系统策略              |
+| - 近期消息/转写         |
+| - 工作记忆              |
+| - 检索证据              |
+| - 工具观测              |
+| - 文件切片              |
++------------+-----------+
+             |
+             v
++------------------------+
+| 解析 prompt 预算        |
+| - 默认：purpose cap      |
+| - 可选：窗口 × 占用率    |
+| - 桶 cap 等比缩放（可选）|
++------------+-----------+
+             |
+             v
++------------------------+
+| 组装与裁剪              |
+| - 分桶 cap              |
+| - 结构化/抽取式压缩     |
+| - 丢弃与降级顺序        |
+| - 最小桶代表            |
++------------+-----------+
+             |
+             v
++------------------------+
+| 输出 envelope + trace   |
+| → 推理与结果生成阶段    |
++------------------------+
+```
+
+### 预算与配置要点
+
+**配置位置**：`config.yaml` → `context_governance`；Docker 部署可用 `config.docker.yaml` 覆盖。
+
+| 配置项 | 默认（仓库） | 作用 |
+|---|---|---|
+| `window_adaptive_budget` | `false` | 关：purpose 固定 cap；开：按模型窗口推导 prompt 预算 |
+| `window_utilization` | `0.6` | 窗口可用比例（预留输出与安全边际） |
+| `prompt_budget_floor` / `prompt_budget_ceiling` | `12000` / `160000` | 单次 prompt 预算上下限 |
+| `bucket_caps_scale_with_budget` | `true` | adaptive 开时按 budget 等比放大各桶 cap |
+| `default_token_budget` | `64800` | 七桶初始化、会话占用条、API `token_budget` 上限；**非** adaptive 下单次 prompt 上限 |
+
+**窗口自适应公式**：
+
+```
+budget = clamp(window × window_utilization − tokens_used − output_reserve, floor, ceiling)
+```
+
+仅当请求显式传入 `token_budget`（state 中 `token_limit > 0`）时，再执行 `budget = min(budget, token_limit − tokens_used)`。典型路径未传 `token_budget` 时，adaptive 结果**不受 64800 封顶**，只受 ceiling 与窗口公式约束。
+
+**数值示例**（200K 窗口、`utilization=0.6`、reasoning、输出预留约 8192、尚未消耗）：
+
+```
+budget ≈ clamp(200000 × 0.6 − 8192, 12000, 160000) ≈ 111808
+```
+
+这不是「整窗 200K 全给 prompt」；总窗口仍由 prompt、输出与历史消耗共享。
+
+**模型窗口 `window` 解析优先级**：
+
+1. 模型 catalog 的 `context_window_tokens`
+2. 按 `MODEL_NAME` 推断（如含 `opus` / `claude-4` → 200000；`gpt-4` → 128000）
+3. `model.context_window`
+4. 均无时 → 128000
+
+操作原则：模型确支持 200K 且 catalog/名称可识别时，**不必**强行写死配置；模型**不支持** 200K 时**不要**虚配 `200000`，否则 budget 偏大可能导致 API 拒收或截断；自定义 endpoint/别名模型应在 catalog 或 `model.context_window` 写明**真实**窗口。
+
+**64800 在 adaptive 开启后仍用于**：会话占用条分母、七桶 `total_budget` 初始化、API 校验、预算解析异常时的 gateway 回退；purpose 策略中的 `default_token_budget`（如 reasoning 32000）仅作桶 cap **缩放比例参考**，不再直接 cap 单次 prompt。
+
+**压缩相关**（`context_compress`）：`extractive_enabled` 默认开（知识/工具桶抽取式句子保留）；`semantic_enabled` 默认关；压缩回执写入 `compression_receipts` trace。
+
+**回滚**：关 `window_adaptive_budget` 即恢复 purpose 固定 cap；其余 RAG/检索开关（FTS、LLM 改写、`budget_link_context` 等）与 P0-1 独立，可逐项关闭。
+
+### 灰度与 CI 回归
+
+长上下文与 RAG 增强均走配置开关，**默认不改变现有行为**。灰度时建议观察 envelope trace 中的 `token_budget_total`、延迟与 token 成本，再考虑改仓库默认值。
+
+| 回归门 | 覆盖 |
+|---|---|
+| `tests/eval/test_long_context_governance.py` | 窗口自适应预算档、NIH 类用例、预算-保真 |
+| `tests/eval/test_context_governance_dod.py` | 32k/64k/128k/200k 分档与 adaptive 利用率 |
+| `tests/eval/test_context_compress_gate.py` | 压缩比与实体保留 |
+| `tests/eval/test_evidence_conflict_gate.py` | 冲突证据标记 |
+| `tests/eval/open_rag` + `eval_thresholds` | RAG recall/MRR/faithfulness 基线不回退 |
+
+---
+
 ## 5. 多模式执行方式
 
 当前项目不是为每个任务类型单独维护一套完全不同的用户入口，而是在统一运行时下表现出不同执行形态。
@@ -855,4 +1003,4 @@
 
 当前项目的本质，不是一个单纯“问一句答一句”的聊天系统，而是一个统一的 Agent Runtime。
 
-它通过事件分类、前台反馈、中断控制、增量规划、检索、工具执行、工程交付、上下文治理、推理生成、验证检查、输出收束和记忆沉淀，把用户任务组织成完整、稳定、可治理的执行闭环。
+它通过事件分类、前台反馈、中断控制、增量规划、检索（混合召回与证据管线）、工具执行、工程交付、上下文治理（统一 envelope、可选窗口自适应预算与压缩回执）、推理生成、验证检查、输出收束和记忆沉淀，把用户任务组织成完整、稳定、可治理的执行闭环。上下文治理预算语义、可选 RAG 开关与 CI 回归见 §2.6、§4.3、§4.6。

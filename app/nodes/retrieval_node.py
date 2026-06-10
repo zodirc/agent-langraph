@@ -37,7 +37,11 @@ def retrieval_node(state: AgentState) -> AgentState:
             pipeline_audit_extra,
             run_evidence_pipeline,
         )
-        from app.services.query_builder import build_query_object
+        from app.services.query_builder import (
+            build_query_object,
+            expand_multi_queries,
+            rewrite_query_with_llm,
+        )
         from app.services.retrieval_decision import build_retrieval_decision
 
         decision = build_retrieval_decision(state)
@@ -52,27 +56,36 @@ def retrieval_node(state: AgentState) -> AgentState:
             if evidence_pipeline_enabled():
                 pipeline_patch = run_evidence_pipeline(state, [])
         else:
-            raw_hits = sanitize_retrieved_batch(
-                get_knowledge_store().hybrid_search(
-                    query,
-                    domains=domains,
-                    query_object=query_obj,
-                    retrieval_decision=decision,
+            search_queries = expand_multi_queries(query_obj)
+            raw_hits: list[dict] = []
+            for sq in search_queries:
+                batch = sanitize_retrieved_batch(
+                    get_knowledge_store().hybrid_search(
+                        sq,
+                        domains=domains,
+                        query_object=query_obj,
+                        retrieval_decision=decision,
+                    )
                 )
-            )
+                seen = {h.get("doc_id") for h in raw_hits}
+                for hit in batch:
+                    if hit.get("doc_id") not in seen:
+                        raw_hits.append(hit)
+                        seen.add(hit.get("doc_id"))
             if evidence_pipeline_enabled():
                 pipeline_patch = run_evidence_pipeline(state, raw_hits)
                 trace = pipeline_patch.get("retrieval_trace") or {}
-                if (
-                    "gate_all_filtered" in (trace.get("failure_tags") or [])
-                    and query_obj.must_have_terms
-                ):
+                if "gate_all_filtered" in (trace.get("failure_tags") or []):
                     max_retries = int(getattr(settings, "RETRIEVAL_QUERY_REWRITE_MAX_RETRIES", 1))
-                    if max_retries > 0:
-                        expanded = f"{query} {' '.join(query_obj.must_have_terms[:6])}".strip()
+                    retry_query: str | None = None
+                    if max_retries > 0 and getattr(settings, "RETRIEVAL_QUERY_REWRITE_LLM", False):
+                        retry_query = rewrite_query_with_llm(query, state)
+                    if not retry_query and query_obj.must_have_terms:
+                        retry_query = f"{query} {' '.join(query_obj.must_have_terms[:6])}".strip()
+                    if retry_query:
                         retry_hits = sanitize_retrieved_batch(
                             get_knowledge_store().hybrid_search(
-                                expanded,
+                                retry_query,
                                 domains=domains,
                                 query_object=query_obj,
                                 retrieval_decision=decision,
@@ -82,6 +95,7 @@ def retrieval_node(state: AgentState) -> AgentState:
                         rt = pipeline_patch.get("retrieval_trace")
                         if isinstance(rt, dict):
                             rt["query_retry"] = True
+                            rt["query_retry_text"] = retry_query[:200]
                 knowledge = pipeline_patch.get("retrieved_knowledge") or raw_hits
             else:
                 knowledge = raw_hits

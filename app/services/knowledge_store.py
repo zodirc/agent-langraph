@@ -321,6 +321,17 @@ class KnowledgeStore:
                 )
                 """
             )
+            if getattr(settings, "RETRIEVAL_FTS_ENABLED", False):
+                conn.execute(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_docs_fts USING fts5(
+                        doc_id UNINDEXED,
+                        title,
+                        content,
+                        tokenize='unicode61'
+                    )
+                    """
+                )
             conn.commit()
 
     def _fetchall(self, query: str, params: tuple[Any, ...] = ()) -> list[Any]:
@@ -373,6 +384,18 @@ class KnowledgeStore:
                     """,
                     params,
                 )
+                if getattr(settings, "RETRIEVAL_FTS_ENABLED", False):
+                    conn.execute(
+                        "DELETE FROM knowledge_docs_fts WHERE doc_id = ?",
+                        (doc_id,),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO knowledge_docs_fts (doc_id, title, content)
+                        VALUES (?, ?, ?)
+                        """,
+                        (doc_id, title, content),
+                    )
                 conn.commit()
         if index_vector and self._vector and getattr(self._vector, "available", False):
             self._vector.upsert(doc_id, title, content, metadata)
@@ -388,6 +411,8 @@ class KnowledgeStore:
         else:
             with self._connect() as conn:
                 cursor = conn.execute("DELETE FROM knowledge_docs WHERE doc_id = ?", (doc_id,))
+                if getattr(settings, "RETRIEVAL_FTS_ENABLED", False):
+                    conn.execute("DELETE FROM knowledge_docs_fts WHERE doc_id = ?", (doc_id,))
                 conn.commit()
                 deleted = cursor.rowcount > 0
         if deleted and self._vector and getattr(self._vector, "available", False):
@@ -597,6 +622,35 @@ class KnowledgeStore:
             "created_at": row["created_at"],
         }
 
+    def _keyword_search_fts(
+        self,
+        query: str,
+        *,
+        domains: Optional[set[str]] = None,
+        limit: int,
+    ) -> list[Any] | None:
+        if uses_postgres() or not getattr(settings, "RETRIEVAL_FTS_ENABLED", False):
+            return None
+        fts_query = " OR ".join(f'"{t}"' for t in _tokenize_text(query)[:12])
+        if not fts_query:
+            return None
+        try:
+            with self._connect() as conn:
+                return conn.execute(
+                    """
+                    SELECT d.doc_id, d.title, d.content, d.metadata, d.created_at,
+                           bm25(knowledge_docs_fts) AS fts_rank
+                    FROM knowledge_docs_fts f
+                    JOIN knowledge_docs d ON d.doc_id = f.doc_id
+                    WHERE knowledge_docs_fts MATCH ?
+                    ORDER BY fts_rank
+                    LIMIT ?
+                    """,
+                    (fts_query, max(limit * 4, limit)),
+                ).fetchall()
+        except Exception:
+            return None
+
     def keyword_search(
         self,
         query: str,
@@ -606,7 +660,11 @@ class KnowledgeStore:
     ) -> list[dict[str, Any]]:
         limit = top_k or settings.RETRIEVAL_TOP_K
         query_tokens = _tokenize_text(query)
-        rows = self._fetchall("SELECT * FROM knowledge_docs")
+        fts_rows = self._keyword_search_fts(query, domains=domains, limit=limit)
+        if fts_rows:
+            rows = fts_rows
+        else:
+            rows = self._fetchall("SELECT * FROM knowledge_docs")
         filtered_rows: list[Any] = []
         corpus_tokens: list[list[str]] = []
         doc_freq: dict[str, int] = {}
@@ -621,7 +679,9 @@ class KnowledgeStore:
             if not _domain_matches(meta, domains):
                 continue
             filtered_rows.append(row)
-            row_tokens = _tokenize_text(f"{row['title']} {row['content']}")
+            title = row["title"] if "title" in row.keys() else row[1]
+            content = row["content"] if "content" in row.keys() else row[2]
+            row_tokens = _tokenize_text(f"{title} {content}")
             corpus_tokens.append(row_tokens)
             avg_doc_len += len(row_tokens)
             for token in set(row_tokens):

@@ -100,6 +100,12 @@ def assemble_context_envelope(
     final_tokens = sum_item_tokens(kept)
 
     trace_dict = trace.to_dict()
+    if state:
+        from app.services.evidence_fidelity import compute_evidence_fidelity
+
+        fidelity = compute_evidence_fidelity(state, kept)
+        trace_dict["evidence_fidelity"] = fidelity
+
     composition = build_prompt_composition_view(
         purpose=purpose,
         bucket_allocations=[

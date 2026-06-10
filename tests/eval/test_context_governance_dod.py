@@ -30,7 +30,14 @@ def test_dod_five_context_kinds_in_collect(monkeypatch):
         "session_id": "dod-1",
         "input_payload": {"goal": "test"},
         "conversation_history": [{"role": "user", "content": "hi", "at": "t"}],
-        "retrieved_knowledge": [{"content": "doc fact", "doc_id": "d1"}],
+        "retrieved_knowledge": [
+            {
+                "content": "doc fact",
+                "doc_id": "d1",
+                "relevance_score": 0.9,
+                "relevance_passed": True,
+            }
+        ],
         "memory_hits": [{"summary": "past episode"}],
         "turn_facts": {"tools_executed": [{"tool": "echo", "status": "ok"}]},
         "plan": ["step"],
@@ -200,6 +207,76 @@ def test_boundary_matrix_high_retrieval_dedupes():
     )
     kept, _, dropped = reduce_context_items([dup, dup2], policy, token_budget_total=8000)
     assert len(kept) <= 2
+
+
+def test_window_adaptive_budget_utilization_bounds(monkeypatch):
+    """P0-1: adaptive budget stays within [floor, ceiling] and below window×utilization."""
+    monkeypatch.setattr(
+        "app.services.resource_budget.settings.CONTEXT_WINDOW_ADAPTIVE_BUDGET",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.services.prompt_context_gateway.settings.CONTEXT_WINDOW_ADAPTIVE_BUDGET",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.services.context_policy.settings.CONTEXT_WINDOW_ADAPTIVE_BUDGET",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.services.resource_budget.settings.CONTEXT_BUCKET_CAPS_SCALE_WITH_BUDGET",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.services.context_policy.settings.CONTEXT_BUCKET_CAPS_SCALE_WITH_BUDGET",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.services.prompt_context_gateway.settings.CONTEXT_BUCKET_CAPS_SCALE_WITH_BUDGET",
+        True,
+    )
+    utilization = 0.6
+    floor = 12000
+    ceiling = 160000
+    monkeypatch.setattr(
+        "app.services.resource_budget.settings.CONTEXT_WINDOW_UTILIZATION",
+        utilization,
+    )
+    monkeypatch.setattr(
+        "app.services.resource_budget.settings.CONTEXT_PROMPT_BUDGET_FLOOR",
+        floor,
+    )
+    monkeypatch.setattr(
+        "app.services.resource_budget.settings.CONTEXT_PROMPT_BUDGET_CEILING",
+        ceiling,
+    )
+    monkeypatch.setattr(
+        "app.services.context_compressor.settings.CONTEXT_COMPRESS_SEMANTIC_ENABLED",
+        False,
+    )
+    for window in (32000, 64000, 128000, 200000):
+        monkeypatch.setattr(
+            "app.services.context_meter.resolve_model_context_window",
+            lambda _state, _mid=None, w=window: w,
+        )
+        state = {
+            "task_id": f"adapt-{window}",
+            "session_id": f"adapt-{window}",
+            "input_payload": {"goal": "test"},
+            "token_budget": {"limit": 0, "used": 0},
+        }
+        env = build_context_envelope(state, purpose="reasoning")
+        resolved = resolve_prompt_token_budget(
+            state,
+            policy_default=get_prompt_context_policy("reasoning").default_token_budget,
+            purpose="reasoning",
+        )
+        assert floor <= resolved <= ceiling
+        max_target = max(floor, int(window * utilization) - 8192)
+        assert resolved <= max_target + 512
+        assert env.token_budget_total == resolved
+        kept_tokens = sum(i.estimated_tokens for i in env.items_kept)
+        assert kept_tokens <= resolved + 512
 
 
 def test_boundary_matrix_multi_round_interrupt_budget():

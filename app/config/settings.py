@@ -401,6 +401,17 @@ class Settings:
         )
         self.RETRIEVAL_LEXICAL_RRF_WEIGHT = float(retrieval.get("lexical_rrf_weight", 1.8))
         self.RETRIEVAL_EVIDENCE_TOKEN_BUDGET = int(retrieval.get("evidence_token_budget", 4000))
+        self.RETRIEVAL_BUDGET_LINK_CONTEXT = _coerce_bool(
+            retrieval.get("budget_link_context", False)
+        )
+        self.RETRIEVAL_QUERY_REWRITE_LLM = _coerce_bool(
+            retrieval.get("query_rewrite_llm", False)
+        )
+        self.RETRIEVAL_MULTI_QUERY_ENABLED = _coerce_bool(
+            retrieval.get("multi_query_enabled", False)
+        )
+        self.RETRIEVAL_MULTI_QUERY_MAX = int(retrieval.get("multi_query_max", 3))
+        self.RETRIEVAL_FTS_ENABLED = _coerce_bool(retrieval.get("fts_enabled", False))
         self.RETRIEVAL_EMBEDDING_DEDUP_ENABLED = _coerce_bool(
             retrieval.get("embedding_dedup_enabled", False)
         )
@@ -721,6 +732,12 @@ class Settings:
         self.CONTEXT_COMPRESS_MIN_RATIO = float(
             ctx_compress.get("min_ratio", 0.5)
         )
+        self.CONTEXT_COMPRESS_EXTRACTIVE_ENABLED = _coerce_bool(
+            ctx_compress.get("extractive_enabled", True)
+        )
+        self.CONTEXT_COMPRESS_ENTITY_RETENTION_MIN = float(
+            ctx_compress.get("entity_retention_min", 0.9)
+        )
 
         ctx_gov = raw.get("context_governance", {})
         if not isinstance(ctx_gov, dict):
@@ -733,6 +750,21 @@ class Settings:
         self.SESSION_CONTEXT_WINDOW = int(
             ctx_gov.get("session_context_window", 0)
             or ctx_gov.get("default_token_budget", 64800)
+        )
+        self.CONTEXT_WINDOW_ADAPTIVE_BUDGET = _coerce_bool(
+            ctx_gov.get("window_adaptive_budget", False)
+        )
+        self.CONTEXT_WINDOW_UTILIZATION = float(
+            ctx_gov.get("window_utilization", 0.6)
+        )
+        self.CONTEXT_PROMPT_BUDGET_FLOOR = int(
+            ctx_gov.get("prompt_budget_floor", 12000)
+        )
+        self.CONTEXT_PROMPT_BUDGET_CEILING = int(
+            ctx_gov.get("prompt_budget_ceiling", 160000)
+        )
+        self.CONTEXT_BUCKET_CAPS_SCALE_WITH_BUDGET = _coerce_bool(
+            ctx_gov.get("bucket_caps_scale_with_budget", True)
         )
 
         self.CHECKPOINT_CORRUPTION_DETECTION_ENABLED = _coerce_bool(

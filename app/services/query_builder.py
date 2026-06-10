@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -100,6 +101,53 @@ def _history_constraints(state: AgentState | dict[str, Any]) -> list[str]:
             constraints.append(f"entity:{ent}")
         break
     return constraints
+
+
+def rewrite_query_with_llm(text: str, state: AgentState | dict[str, Any]) -> str | None:
+    """Optional LLM standalone rewrite (P1-1); disabled by default."""
+    if not getattr(settings, "RETRIEVAL_QUERY_REWRITE_LLM", False):
+        return None
+    if not text.strip() or not settings.MODEL_ENABLED:
+        return None
+    try:
+        from app.services.llm_client import invoke_llm
+
+        history = conversation_history_for_llm(conversation_history_from_state(state))
+        recent = history[-6:]
+        system = (
+            "Rewrite the user query into a standalone search query. "
+            "Resolve pronouns using conversation context. Return only the rewritten query."
+        )
+        user = json.dumps(
+            {"query": text, "recent_turns": recent},
+            ensure_ascii=False,
+        )[:8000]
+        out = invoke_llm(
+            "routing",
+            system,
+            user,
+            trace_state=state if isinstance(state, dict) else None,
+        )
+        rewritten = str(out or "").strip()
+        return rewritten[:2000] if rewritten else None
+    except Exception:
+        return None
+
+
+def expand_multi_queries(query_obj: QueryObject) -> list[str]:
+    """Rule-based multi-query expansion when enabled (P1-1)."""
+    if not getattr(settings, "RETRIEVAL_MULTI_QUERY_ENABLED", False):
+        return [query_obj.standalone_query]
+    queries = [query_obj.standalone_query]
+    if query_obj.must_have_terms:
+        alt = f"{' '.join(query_obj.must_have_terms[:6])} {query_obj.original_query}".strip()
+        if alt and alt not in queries:
+            queries.append(alt[:2000])
+    for soft in query_obj.soft_terms[:2]:
+        alt = f"{soft} {query_obj.standalone_query}".strip()
+        if alt not in queries:
+            queries.append(alt[:2000])
+    return queries[: int(getattr(settings, "RETRIEVAL_MULTI_QUERY_MAX", 3))]
 
 
 def _standalone_rewrite(text: str, state: AgentState | dict[str, Any]) -> str:

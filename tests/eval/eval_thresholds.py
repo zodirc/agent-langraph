@@ -68,19 +68,27 @@ def check_context_compress_thresholds(
     snapshot: dict[str, dict[str, float]],
     *,
     min_ratio: float | None = None,
+    min_entity_retention: float | None = None,
 ) -> list[str]:
     """Fail when recorded context compression ratios fall below min_ratio."""
-    if min_ratio is None:
-        return []
     errors: list[str] = []
     ratios: list[float] = []
+    retentions: list[float] = []
     for task_id, metrics in snapshot.items():
         if "compress" not in task_id and "ratio" not in metrics:
             continue
         if "ratio" in metrics:
             ratios.append(float(metrics["ratio"]))
-    if ratios:
+        if "entity_retention" in metrics:
+            retentions.append(float(metrics["entity_retention"]))
+    if min_ratio is not None and ratios:
         avg = _mean(ratios)
         if avg < min_ratio:
             errors.append(f"mean context compress ratio {avg:.3f} < min {min_ratio}")
+    if min_entity_retention is not None and retentions:
+        avg_ret = _mean(retentions)
+        if avg_ret < min_entity_retention:
+            errors.append(
+                f"mean entity retention {avg_ret:.3f} < min {min_entity_retention}"
+            )
     return errors
