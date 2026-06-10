@@ -3785,7 +3785,7 @@ async function stopAllInFlightMissions({ limit = 100 } = {}) {
   const tasks = Array.isArray(data.tasks) ? data.tasks : [];
   const inflight = tasks.filter((t) => {
     const st = String(t.status || "");
-    return st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
+    return st === "RUNNING" || st === "PAUSED" || st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
   });
   let stopped = 0;
   let limited = false;
@@ -4277,7 +4277,7 @@ function handleStreamEvent(eventType, payload, taskIdRef, streamOpts = {}) {
       if (!gatePending) {
         const st = String(payload.status || "");
         appendLine(`重规划完成: ${st}`, "system");
-        sessionHasInFlightMission = st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
+        sessionHasInFlightMission = st === "RUNNING" || st === "PAUSED" || st === "MISSION_RUNNING" || st === "MISSION_PAUSED";
         updateStopButtonState();
       }
       refreshFlowPanel(taskIdRef.id || payload.task_id || activeTaskId);
@@ -6274,8 +6274,8 @@ async function hydrateSessionContent(taskId, { fromPageLoad = false } = {}) {
   if (fromPageLoad) {
     const hasMission =
       resolvedExecutorActive ||
-      resolvedSt === "MISSION_RUNNING" ||
-      resolvedSt === "MISSION_PAUSED" ||
+      resolvedSt === "RUNNING" ||
+      resolvedSt === "PAUSED" ||
       mergedFlow.length > 0 ||
       (resolvedStatus.node_history && resolvedStatus.node_history.length > 0);
     if (hasMission && resolvedStatus.latest_steer_message) {
@@ -6286,7 +6286,7 @@ async function hydrateSessionContent(taskId, { fromPageLoad = false } = {}) {
     }
   }
 
-  if (resolvedSt === "MISSION_PAUSED" && fromPageLoad) {
+  if ((resolvedSt === "PAUSED" || resolvedSt === "MISSION_PAUSED") && fromPageLoad) {
     const hasMission =
       mergedFlow.length > 0 ||
       (resolvedStatus.node_history && resolvedStatus.node_history.length > 0);
@@ -6298,7 +6298,7 @@ async function hydrateSessionContent(taskId, { fromPageLoad = false } = {}) {
       );
     } else if (hasMission) {
       appendLine(
-        `Note: session ${tid.slice(0, 8)}… is MISSION_PAUSED (node ${resolvedStatus.current_node}). ` +
+        `Note: session ${tid.slice(0, 8)}… is PAUSED (node ${resolvedStatus.current_node}). ` +
           "直接输入「继续写作」等即可，由规划/会话策略理解意图；待确认时用 /confirm，不必先 /resume。",
         "system"
       );

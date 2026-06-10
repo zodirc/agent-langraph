@@ -91,7 +91,6 @@ class AgentStateModel(BaseModel):
     trace_context: Optional[dict[str, Any]] = None
     engineering_spans: Optional[list[dict[str, Any]]] = None
     trace_active_span: Optional[dict[str, Any]] = None
-    manuscript: Optional[dict[str, Any]] = None
     audit_log: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     retry_count: int = 0

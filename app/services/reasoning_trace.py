@@ -567,41 +567,6 @@ def report_policy_trace(state: dict[str, Any]) -> None:
     report_block("policy", "done", "\n".join(lines), field="policy")
 
 
-def report_mission_snapshot_trace(state: dict[str, Any]) -> None:
-    """Structured one-line mission snapshot for diagnostics (answer.log style)."""
-    if not trace_enabled():
-        return
-    import json
-
-    obs = state.get("observation") or state.get("turn_facts") or {}
-    metrics = obs.get("progress_metrics") or (state.get("progress") or {}).get("metrics") or {}
-    manuscript = obs.get("manuscript") or state.get("manuscript") or {}
-    intent = obs.get("writing_intent") or (state.get("input_payload") or {}).get(
-        "writing_intent"
-    ) or {}
-    snapshot = {
-        "turn": obs.get("turn") or state.get("session_turn"),
-        "mission_step": obs.get("mission_step") or state.get("mission_step"),
-        "body_bytes": manuscript.get("body_bytes"),
-        "outline_bytes": manuscript.get("outline_bytes"),
-        "outline_path": manuscript.get("outline_path"),
-        "written_chars": metrics.get("written_chars"),
-        "progress_pct": metrics.get("progress_pct"),
-        "chapter_cursor": manuscript.get("chapter_cursor"),
-        "chapter_index": intent.get("chapter_index"),
-        "last_chapter_index": manuscript.get("last_chapter_index"),
-        "revision": manuscript.get("revision"),
-        "writing_command": (state.get("input_payload") or {}).get("writing_command"),
-        "action": intent.get("action"),
-    }
-    report_block(
-        "mission",
-        "snapshot",
-        json.dumps(snapshot, ensure_ascii=False),
-        field="mission_snapshot",
-    )
-
-
 def emit_final_artifact_fences(structured: dict[str, Any] | None) -> None:
     """Append fenced code blocks once at end (composed_at_end stream policy)."""
     if not answer_stream_enabled() or not isinstance(structured, dict):
@@ -685,28 +650,11 @@ def report_reasoning_result_trace(state: dict[str, Any], *, source: str) -> None
     report_block("reasoning", "result", "\n".join(lines), field="result", level="detail")
 
 
-_MISSION_QUIET_TRACE_NODES = frozenset(
-    {
-        "mission_init",
-        "mission_decide",
-        "mission_act",
-        "mission_observe",
-        "mission_eval",
-    }
-)
-
-
 def trace_after_node(node_name: str, state: dict[str, Any]) -> None:
     """Emit post-node snapshot traces (called from graph_runner SSE loop)."""
     if not trace_enabled():
         return
     status = str(state.get("status", ""))
-    if node_name in _MISSION_QUIET_TRACE_NODES and status not in (
-        "FAILED",
-        "WRITING_FAILED",
-        "DEAD_LETTER",
-    ):
-        return
     report_boundary(node_name, "exit", status)
 
     if node_name == "retrieval":
@@ -715,10 +663,6 @@ def trace_after_node(node_name: str, state: dict[str, Any]) -> None:
         report_tool_trace(state)
     elif node_name == "policy":
         report_policy_trace(state)
-    elif node_name == "writing":
-        report_mission_snapshot_trace(state)
-    elif node_name == "mission_observe":
-        report_mission_snapshot_trace(state)
     elif node_name == "reasoning":
         audit = state.get("audit_log") or []
         source = "unknown"

@@ -115,8 +115,6 @@ session:
   compress_enabled: true
   turn_policy:
     enabled: true
-    default_suspend_when_mission_active: true
-    resume_on_kinds: [manuscript]
     isolate_on_kinds: [qa, code, interactive_app, small_project]
     min_kind_confidence: 0.35
     isolate_when_empty_goal: true
@@ -128,10 +126,6 @@ checkpoint:
   cleanup_enabled: false
 memory_compress:
   enabled: false
-mission_micro_reflect:
-  enabled: false
-exploration:
-  llm_score_enabled: false
 graph_runner:
   backpressure_enabled: true
   max_concurrent: 32
@@ -140,11 +134,6 @@ llm:
   circuit_breaker_enabled: false
 context_compress:
   semantic_enabled: false
-react_loop:
-  enabled: false
-  max_steps: 4
-  replan_enabled: true
-  llm_decide: false
 skill:
   enabled: true
   runtime_policy_enabled: true

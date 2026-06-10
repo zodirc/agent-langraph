@@ -143,7 +143,7 @@ def sync_fsm_state(state: AgentState) -> AgentState:
             and derived == FSM_IDLE
             and (
                 status.endswith("FAILED")
-                or status in ("FAILED", "TOOL_FAILED", "REASON_FAILED", "WRITING_FAILED", "CANCELLED")
+                or status in ("FAILED", "TOOL_FAILED", "REASON_FAILED", "CANCELLED")
             )
         ):
             current = FSM_IDLE

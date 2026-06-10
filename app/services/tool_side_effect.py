@@ -12,7 +12,6 @@ READ_ONLY_TOOLS = frozenset(
         "read_file",
         "grep_file",
         "read_text_artifact",
-        "get_manuscript_context",
         "verify_backend",
         "list_task_artifacts",
     }

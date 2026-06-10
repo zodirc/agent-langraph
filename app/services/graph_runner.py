@@ -168,7 +168,7 @@ def _preempt_inflight_execution(task_id: str, *, reason: str = "new_stream") -> 
     if not stored:
         return
     status = str(stored.get("status") or "")
-    if status == TaskStatus.MISSION_RUNNING.value or get_active_run_id(tid):
+    if status == TaskStatus.RUNNING.value or get_active_run_id(tid):
         from app.services.foreground_execution import trigger_foreground_preempt
 
         try:
@@ -762,7 +762,7 @@ class GraphRunner:
             if get_fsm_state(state) == FSM_REPLANNING or reason.startswith("unexecuted_contract"):
                 state = set_fsm_state(state, FSM_REPLANNING)
                 if str(state.get("status") or "") == TaskStatus.COMPLETED.value:
-                    state = merge_state(state, status=TaskStatus.MISSION_PAUSED.value)
+                    state = merge_state(state, status=TaskStatus.PAUSED.value)
         from app.services.close_turn_async import close_turn_async
 
         close_turn_async(state)
@@ -1472,7 +1472,7 @@ class GraphRunner:
         from app.services.skill_metrics import record_skill_task_finished
 
         record_skill_task_finished(latest)
-        if latest.get("status") == TaskStatus.MISSION_PAUSED.value:
+        if latest.get("status") == TaskStatus.PAUSED.value:
             from app.services.client_display import build_mission_paused_payload
 
             paused_body = build_mission_paused_payload(latest)

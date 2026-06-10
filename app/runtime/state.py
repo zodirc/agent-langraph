@@ -20,15 +20,13 @@ class TaskStatus(str, Enum):
     PLANNED = "PLANNED"
     RETRIEVED = "RETRIEVED"
     TOOL_EXECUTED = "TOOL_EXECUTED"
-    WRITTEN = "WRITTEN"
-    WRITING_FAILED = "WRITING_FAILED"
     REASONED = "REASONED"
     POLICY_CHECKED = "POLICY_CHECKED"
     WAITING_REVIEW = "WAITING_REVIEW"
     REVIEW_RESOLVED = "REVIEW_RESOLVED"
     COMPLETED = "COMPLETED"
-    MISSION_RUNNING = "MISSION_RUNNING"
-    MISSION_PAUSED = "MISSION_PAUSED"
+    RUNNING = "RUNNING"
+    PAUSED = "PAUSED"
     REJECTED = "REJECTED"
     FAILED = "FAILED"
     TOOL_FAILED = "TOOL_FAILED"
@@ -87,7 +85,6 @@ class AgentState(TypedDict):
     trace_context: Optional[dict[str, Any]]
     engineering_spans: Optional[list[dict[str, Any]]]
     trace_active_span: Optional[dict[str, Any]]
-    manuscript: Optional[dict[str, Any]]
     audit_log: list[dict[str, Any]]
     errors: list[str]
     retry_count: int
@@ -184,7 +181,6 @@ def create_initial_state(
             "trace_context": None,
             "engineering_spans": None,
             "trace_active_span": None,
-            "manuscript": None,
             "audit_log": [],
             "errors": [],
             "retry_count": 0,
@@ -239,7 +235,6 @@ def merge_state(state: AgentState, **updates: Any) -> AgentState:
         if (
             key in (
                 "input_payload",
-                "manuscript",
                 "observation",
             )
             and isinstance(value, dict)

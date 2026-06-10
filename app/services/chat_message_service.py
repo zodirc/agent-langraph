@@ -366,7 +366,7 @@ class ChatMessageService:
             TaskStatus.REJECTED.value,
         ):
             return MESSAGE_STATUS_FAILED
-        if status in (TaskStatus.WAITING_REVIEW.value, TaskStatus.MISSION_PAUSED.value):
+        if status in (TaskStatus.WAITING_REVIEW.value, TaskStatus.PAUSED.value):
             return MESSAGE_STATUS_INTERRUPTED
         return MESSAGE_STATUS_COMPLETED
 

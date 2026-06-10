@@ -332,7 +332,7 @@ def finalize_control_outcome(state: AgentState, control: TaskControl | None) -> 
     """
     Settle pause/cancel at graph turn end.
 
-    Pause → MISSION_PAUSED with user_requested_pause reason.
+    Pause → PAUSED with user_requested_pause reason.
     Cancel → CANCELLED, preserve committed artifacts.
     """
     ctx = ensure_interrupt_context(state)
@@ -359,7 +359,7 @@ def finalize_control_outcome(state: AgentState, control: TaskControl | None) -> 
     if paused:
         updated = merge_state(
             state,
-            status=TaskStatus.MISSION_PAUSED.value,
+            status=TaskStatus.PAUSED.value,
             mission_control={
                 "pause_reason": PAUSE_USER_REQUESTED_PAUSE,
                 "reason": control.reason if control else ctx.get("last_control_event", {}).get("reason"),
@@ -532,7 +532,7 @@ def handle_control_exception(state: AgentState, exc: BaseException) -> AgentStat
         observe_control_executed(str(state["task_id"]), snapshot_task_control(str(state["task_id"])), started_at_iso=None, event="pause")
         return merge_state(
             state,
-            status=TaskStatus.MISSION_PAUSED.value,
+            status=TaskStatus.PAUSED.value,
             mission_control={"pause_reason": PAUSE_USER_REQUESTED_PAUSE, "reason": str(exc)},
             audit_log=append_audit(state, "task_control", "task_pause_observed", {"detail": str(exc)}),
         )

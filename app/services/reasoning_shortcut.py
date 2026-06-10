@@ -31,7 +31,7 @@ def turn_had_execution(state: AgentState | dict[str, Any], turn_facts: dict[str,
     if state.get("tool_results"):
         return True
     status = str(state.get("status") or "")
-    if status in (TaskStatus.WRITTEN.value, TaskStatus.TOOL_EXECUTED.value):
+    if status == TaskStatus.TOOL_EXECUTED.value:
         return True
     if turn_facts.get("tools_executed"):
         return True
@@ -39,10 +39,6 @@ def turn_had_execution(state: AgentState | dict[str, Any], turn_facts: dict[str,
         text = str(action)
         if text.startswith("writing:") or text.startswith("tool:"):
             return True
-    payload = state.get("input_payload") or {}
-    intent = payload.get("writing_intent") or {}
-    if intent.get("enabled") and status == TaskStatus.WRITTEN.value:
-        return True
     return False
 
 

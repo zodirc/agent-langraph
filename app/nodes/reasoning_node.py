@@ -371,7 +371,7 @@ def reasoning_node(state: AgentState) -> AgentState:
         if isinstance(exc, PauseRequested):
             updated = merge_state(
                 state,
-                status=TaskStatus.MISSION_PAUSED.value,
+                status=TaskStatus.PAUSED.value,
                 current_node="reasoning",
                 mission_control={"pause_reason": PAUSE_USER_REQUESTED_PAUSE, "reason": str(exc)},
                 audit_log=append_audit(

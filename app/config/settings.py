@@ -517,50 +517,6 @@ class Settings:
         self.ARTIFACT_MAX_CHARS_PER_TURN = int(artifacts.get("max_chars_per_turn", 14000))
         self.ARTIFACT_MAX_READS_SAME_FILE = int(artifacts.get("max_reads_same_file", 5))
 
-        manuscript = raw.get("manuscript", {})
-        self.MANUSCRIPT_DEFAULT_BODY = str(manuscript.get("default_body", "novel.txt"))
-        self.MANUSCRIPT_DEFAULT_OUTLINE = str(manuscript.get("default_outline", "outline.txt"))
-        self.MANUSCRIPT_MIN_BODY_CHARS = int(manuscript.get("min_body_chars", 200))
-        self.MANUSCRIPT_MIN_OUTLINE_CHARS = int(manuscript.get("min_outline_chars", 80))
-        self.MANUSCRIPT_TAIL_EXCERPT_CHARS = int(manuscript.get("tail_excerpt_chars", 2400))
-        self.MANUSCRIPT_HEAD_EXCERPT_CHARS = int(manuscript.get("head_excerpt_chars", 1200))
-        self.MANUSCRIPT_APPEND_DEDUP_RATIO = float(
-            manuscript.get("append_dedup_ratio", 0.82)
-        )
-        self.WRITING_QUALITY_GATE_THRESHOLD = float(
-            manuscript.get("quality_gate_threshold", 0.65)
-        )
-        self.WRITING_QUALITY_SCORE_USE_LLM = bool(
-            manuscript.get("quality_score_use_llm", True)
-        )
-        self.WRITING_QUALITY_SCORE_LLM_MIN_CHARS = int(
-            manuscript.get("quality_score_llm_min_chars", 80)
-        )
-        self.WRITING_CHAPTER_OUTCOME_USE_LLM = bool(
-            manuscript.get("chapter_outcome_use_llm", False)
-        )
-        self.WRITING_L2_TOKEN_BUDGET = int(manuscript.get("l2_token_budget", 1500))
-        self.WRITING_L3_TOKEN_BUDGET = int(manuscript.get("l3_token_budget", 1200))
-        self.WRITING_ALIGNMENT_RECENT_WINDOW = int(
-            manuscript.get("alignment_recent_window", 2)
-        )
-        self.WRITING_ALIGNMENT_PATCH_MAX_CHAPTERS = int(
-            manuscript.get("alignment_patch_max_chapters", 3)
-        )
-        self.WRITING_BRIDGE_DEFAULT_CHARS = int(
-            manuscript.get("bridge_default_chars", 600)
-        )
-        self.WRITING_RECONCILE_MAX_PATCHES = int(
-            manuscript.get("reconcile_max_patches", 3)
-        )
-        self.WRITING_RECONCILE_MIN_PATCH_CHARS = int(
-            manuscript.get("reconcile_min_patch_chars", 80)
-        )
-        patterns = manuscript.get("placeholder_patterns")
-        self.MANUSCRIPT_PLACEHOLDER_PATTERNS = (
-            tuple(patterns) if isinstance(patterns, list) else None
-        )
-
         memory_cfg = raw.get("memory", {})
         self.MEMORY_TASK_BOOST = float(memory_cfg.get("task_boost", 0.35))
         self.MEMORY_SESSION_BOOST = float(memory_cfg.get("session_boost", 0.25))
@@ -580,83 +536,8 @@ class Settings:
             code_artifact_cfg if isinstance(code_artifact_cfg, dict) else {}
         )
 
-        mission_cfg = raw.get("mission", {})
-        if not isinstance(mission_cfg, dict):
-            mission_cfg = {}
-        self.MISSION_AUTO_FROM_PLANNING = _coerce_bool(
-            mission_cfg.get(
-                "auto_from_planning",
-                performance.get("mission_auto_from_planning", True),
-            )
-        )
-        self.MISSION_AUTO_MIN_TOTAL_CHARS = int(
-            mission_cfg.get("auto_min_total_chars", 50000)
-        )
-        self.MISSION_CHARS_PER_STEP = int(mission_cfg.get("chars_per_step", 4000))
-        self.MISSION_STEPS_HARD_CAP = int(mission_cfg.get("steps_hard_cap", 500))
-        self.MISSION_MAX_STEPS = int(mission_cfg.get("max_steps", 500))
-        self.MISSION_BATCH_UNIT_MAX_PER_PLAN = int(
-            mission_cfg.get("batch_unit_max_per_plan", 12)
-        )
-        self.MISSION_MAX_WALL_SEC = int(mission_cfg.get("max_wall_sec", 3600))
-        self.MISSION_MAX_FAILURES = int(mission_cfg.get("max_failures", 3))
-        self.MISSION_STALL_BUDGET = int(mission_cfg.get("stall_budget", 2))
-        self.MISSION_STALL_MIN_BYTE_DELTA = int(mission_cfg.get("stall_min_byte_delta", 200))
-        self.MISSION_INTERACTIVE_STEER_MAX_SEC = int(
-            mission_cfg.get("interactive_steer_max_sec", 120)
-        )
-        self.STEER_PLANNING_LLM_MAX_CALLS = int(mission_cfg.get("steer_planning_llm_max_calls", 2))
-        self.STEER_CLARIFICATION_CONFIDENCE = float(
-            mission_cfg.get("steer_clarification_confidence", 0.3)
-        )
-        self.MISSION_WRITING_MAX_STEPS = int(mission_cfg.get("writing_max_steps", 500))
-        self.MISSION_OUTLINE_MAX_CHARS = int(mission_cfg.get("outline_max_chars", 12000))
-        self.MISSION_LLM_DECIDE = _coerce_bool(mission_cfg.get("llm_decide", False))
-        self.MISSION_WRITING_REVIEW_EVERY_CHAPTERS = int(
-            mission_cfg.get("writing_review_every_chapters", 0)
-        )
-        self.MISSION_ORCHESTRATION_MIN_CHARS = int(
-            mission_cfg.get("orchestration_min_chars", 8000)
-        )
-        self.MISSION_EXECUTION_MODE = str(
-            mission_cfg.get("execution_mode", "mission_oma")
-        ).lower()
-        self.MISSION_OMA_DEFAULT_FOR_WRITING = _coerce_bool(
-            mission_cfg.get("oma_default_for_writing", True)
-        )
-        self.MISSION_REVIEW_MAX_PARALLEL = int(
-            mission_cfg.get("review_max_parallel", 3)
-        )
-        self.MISSION_UNIT_LOOP = str(mission_cfg.get("unit_loop", "chapter_unit"))
-        worker_retrieval = mission_cfg.get("worker_retrieval") or {}
-        if not isinstance(worker_retrieval, dict):
-            worker_retrieval = {}
-        self.MISSION_OMA_WORKER_RETRIEVAL_ENABLED = _coerce_bool(
-            worker_retrieval.get("enabled", True)
-        )
-        self.MISSION_OMA_WORKER_RETRIEVAL_DOMAINS = [
-            str(d) for d in (worker_retrieval.get("domains") or ["writing", "common"])
-        ]
-        self.MISSION_OMA_WORKER_RETRIEVAL_TOP_K = int(worker_retrieval.get("top_k", 8))
-        self.MISSION_OMA_REQUIRE_FACT_BUNDLE = _coerce_bool(
-            worker_retrieval.get("require_fact_bundle", True)
-        )
-        self.MISSION_REQUIRE_FACT_BUNDLE = _coerce_bool(
-            mission_cfg.get(
-                "require_fact_bundle",
-                self.MISSION_OMA_REQUIRE_FACT_BUNDLE,
-            )
-        )
-        self.MISSION_REQUIRE_REVIEW_VERDICT = _coerce_bool(
-            mission_cfg.get("require_review_verdict", True)
-        )
-        worker_react = mission_cfg.get("worker_react") or {}
-        if not isinstance(worker_react, dict):
-            worker_react = {}
-        self.MISSION_OMA_WORKER_REACT = worker_react
-        self.MISSION_OMA_WORKER_REACT_ENABLED = _coerce_bool(
-            worker_react.get("enabled", True)
-        )
+        self.STEER_PLANNING_LLM_MAX_CALLS = 2
+        self.STEER_CLARIFICATION_CONFIDENCE = 0.3
         rag_cfg = raw.get("rag", {})
         if not isinstance(rag_cfg, dict):
             rag_cfg = {}
@@ -687,9 +568,6 @@ class Settings:
             intent_obs_cfg if isinstance(intent_obs_cfg, dict) else {}
         )
 
-        revision_cfg = raw.get("revision", {})
-        self.REVISION_CONFIG = revision_cfg if isinstance(revision_cfg, dict) else {}
-
         mode_routing_cfg = raw.get("mode_routing", {})
         self.MODE_ROUTING_CONFIG = (
             mode_routing_cfg if isinstance(mode_routing_cfg, dict) else {}
@@ -708,39 +586,15 @@ class Settings:
             else True
         )
 
-        confirmation_gates_cfg = raw.get("confirmation_gates", {})
-        self.CONFIRMATION_GATES_CONFIG = (
-            confirmation_gates_cfg if isinstance(confirmation_gates_cfg, dict) else {}
-        )
-
         reflection_cfg = raw.get("reflection", {})
         self.REFLECTION_ENABLED = _coerce_bool(reflection_cfg.get("enabled", True))
         self.REFLECTION_MAX_ROUNDS = int(reflection_cfg.get("max_rounds", 2))
-        self.REFLECTION_WRITING_ONLY = _coerce_bool(reflection_cfg.get("writing_only", True))
         self.REFLECTION_ROUTE_AUDIT_ON_MISROUTE = _coerce_bool(
             reflection_cfg.get("route_audit_on_misroute", True)
         )
 
         reasoning_cfg = raw.get("reasoning", {})
         self.REASONING_MODE = str(reasoning_cfg.get("mode", "direct")).lower()
-
-        react_cfg = raw.get("react_loop", {})
-        if not isinstance(react_cfg, dict):
-            react_cfg = {}
-        self.REACT_LOOP_ENABLED = _coerce_bool(react_cfg.get("enabled", False))
-        self.REACT_LOOP_MAX_STEPS = int(react_cfg.get("max_steps", 4))
-        self.REACT_LOOP_MAX_STEPS_COMPLEX = int(react_cfg.get("max_steps_complex", 6))
-        self.REACT_LOOP_MAX_REPLAN = int(react_cfg.get("max_replan", 2))
-        self.REACT_LOOP_MAX_FAILURES = int(react_cfg.get("max_failures", 2))
-        self.REACT_LOOP_REPLAN_ENABLED = _coerce_bool(react_cfg.get("replan_enabled", True))
-        self.REACT_LOOP_LLM_DECIDE = _coerce_bool(react_cfg.get("llm_decide", False))
-        allowed_raw = react_cfg.get("allowed_actions")
-        self.REACT_LOOP_ALLOWED_ACTIONS = (
-            [str(a) for a in allowed_raw] if isinstance(allowed_raw, list) else []
-        )
-        self.REACT_ROUTE_RECOMMEND_MIN_CONFIDENCE = float(
-            react_cfg.get("route_recommend_min_confidence", 0.75)
-        )
 
         resource_cfg = raw.get("resource", {})
         self.DEFAULT_TOKEN_BUDGET = int(resource_cfg.get("default_token_budget", 0))
@@ -803,13 +657,6 @@ class Settings:
         self.A2A_HTTP_FORWARD_ENABLED = _coerce_bool(a2a_cfg.get("http_forward_enabled", True))
         self.A2A_REGISTRY_TTL_SEC = int(a2a_cfg.get("registry_ttl_sec", 300))
         self.A2A_SELF_URL = str(a2a_cfg.get("self_url", "")).strip()
-
-        mission_reflect = raw.get("mission_micro_reflect", {})
-        self.MISSION_MICRO_REFLECT_ENABLED = _coerce_bool(mission_reflect.get("enabled", True))
-        self.MISSION_MICRO_REFLECT_THRESHOLD = float(mission_reflect.get("confidence_threshold", 0.5))
-
-        explore_cfg = raw.get("exploration", {})
-        self.EXPLORATION_LLM_SCORE_ENABLED = _coerce_bool(explore_cfg.get("llm_score_enabled", True))
 
         tenant_cfg = raw.get("tenant", {})
         if not isinstance(tenant_cfg, dict):

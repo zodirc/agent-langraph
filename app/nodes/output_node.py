@@ -1,7 +1,7 @@
 """输出节点
 
 Output: compose final_answer + artifacts from reasoning/tools/RAG.
-Then: output → END; memory/eval run async via close_turn_async; mission may stay MISSION_PAUSED."""
+Then: output → END; memory/eval run async via close_turn_async; unfulfilled contracts stay PAUSED."""
 
 from __future__ import annotations
 
@@ -27,12 +27,12 @@ def _resolve_output_status(state: AgentState) -> str:
     if contract_requires_side_effects(payload, state=state) and not is_turn_contract_fulfilled(
         state
     ):
-        return TaskStatus.MISSION_PAUSED.value
+        return TaskStatus.PAUSED.value
 
     if state.get("status") == TaskStatus.REJECTED.value:
         return TaskStatus.REJECTED.value
-    if state.get("status") == TaskStatus.MISSION_PAUSED.value:
-        return TaskStatus.MISSION_PAUSED.value
+    if state.get("status") == TaskStatus.PAUSED.value:
+        return TaskStatus.PAUSED.value
     return TaskStatus.COMPLETED.value
 
 
@@ -98,7 +98,7 @@ def output_node(state: AgentState) -> AgentState:
             state
         ):
             payload_out = invalidate_turn_contract_payload(payload_out, REASON_INCONSISTENT)
-            status_override = TaskStatus.MISSION_PAUSED.value
+            status_override = TaskStatus.PAUSED.value
 
         file_artifacts = collect_file_artifacts(state.get("tool_results"))
         artifacts: list[dict[str, Any]] = [

@@ -66,7 +66,6 @@ def _build_turn_facts_snapshot(state: AgentState) -> dict[str, Any]:
     payload = state.get("input_payload") or {}
     tool_lines = [_tool_outcome_line(item) for item in (state.get("tool_results") or [])]
     writing_intent = payload.get("writing_intent") or {}
-    manuscript = state.get("manuscript") or {}
 
     nodes_executed: list[dict[str, Any]] = []
     for entry in state.get("node_history") or []:
@@ -82,28 +81,12 @@ def _build_turn_facts_snapshot(state: AgentState) -> dict[str, Any]:
     for line in tool_lines:
         if line.get("status") in ("ok", "success") or line.get("output") or line.get("path"):
             executed_actions.append(f"tool:{line['tool']}")
-    if state.get("status") in ("WRITTEN", "TOOL_EXECUTED") and writing_intent.get("enabled"):
-        executed_actions.append(f"writing:{writing_intent.get('action', 'write')}")
-    if manuscript.get("body_path") and manuscript.get("body_bytes"):
-        executed_actions.append(
-            f"artifact:{manuscript['body_path']}:{manuscript['body_bytes']}B"
-        )
+        if line.get("tool") in ("write_text_artifact", "append_text_artifact", "edit_text_artifact") and line.get(
+            "status"
+        ) in ("ok", "success"):
+            executed_actions.append(f"writing:{line['tool']}")
 
     bundle = payload.get("fact_bundle") or {}
-    rag_state = state.get("oma_rag_state") or {}
-    react_loop = state.get("react_loop") or {}
-    oma: dict[str, Any] = {
-        "fact_bundle_id": bundle.get("fact_bundle_id") or payload.get("fact_bundle_id"),
-        "rag_hit_count": int(bundle.get("rag_hit_count") or rag_state.get("rag_hit_count") or 0),
-        "rag_domains": bundle.get("rag_domains") or rag_state.get("rag_domains") or [],
-        "react_used": bool(react_loop.get("enabled")) or bool(payload.get("react_steps")),
-        "react_steps": int(payload.get("react_steps") or react_loop.get("step_index") or 0),
-        "tools_used": bool(tool_lines),
-        "fallback_used": bool(payload.get("react_session_id") and react_loop.get("exit_path")),
-    }
-    dispatch = payload.get("turn_envelope") or {}
-    if dispatch:
-        oma["dispatch"] = dispatch.get("dispatch")
 
     return {
         "turn": int(state.get("session_turn") or 1),
@@ -115,8 +98,6 @@ def _build_turn_facts_snapshot(state: AgentState) -> dict[str, Any]:
         "nodes_executed": nodes_executed,
         "tools_executed": tool_lines,
         "writing_intent": writing_intent if writing_intent.get("enabled") else None,
-        "manuscript": manuscript or None,
-        "progress_metrics": (state.get("progress") or {}).get("metrics"),
         "executed_actions": executed_actions,
         "tool_count": len(tool_lines),
         "has_failures": any(
@@ -125,14 +106,10 @@ def _build_turn_facts_snapshot(state: AgentState) -> dict[str, Any]:
         ),
         "built_at": datetime.now(timezone.utc).isoformat(),
         "engineering_trace": _engineering_trace_digest(state),
-        "oma": oma,
-        "fact_bundle_id": oma.get("fact_bundle_id"),
-        "rag_hit_count": oma.get("rag_hit_count"),
-        "rag_domains": oma.get("rag_domains"),
-        "react_used": oma.get("react_used"),
-        "react_steps": oma.get("react_steps"),
-        "tools_used": oma.get("tools_used"),
-        "fallback_used": oma.get("fallback_used"),
+        "fact_bundle_id": bundle.get("fact_bundle_id") or payload.get("fact_bundle_id"),
+        "rag_hit_count": int(bundle.get("rag_hit_count") or 0),
+        "rag_domains": bundle.get("rag_domains") or [],
+        "tools_used": bool(tool_lines),
     }
 
 
@@ -186,7 +163,6 @@ def reasoning_context_from_state(state: AgentState) -> dict[str, Any]:
         "memory_hits": memory_hits[:5],
         "runtime_capabilities": build_runtime_capabilities(),
         "writing_intent": payload.get("writing_intent"),
-        "mission": state.get("mission") or payload.get("mission"),
         "instructions": reasoning_instructions_for_state(state),
     }
 
@@ -227,46 +203,8 @@ def validate_reasoning_summary(
         total_bytes = sum(
             int(t.get("appended_bytes") or t.get("bytes") or 0) for t in tools
         )
-        body_bytes = int((turn_facts.get("manuscript") or {}).get("body_bytes") or 0)
-        if total_bytes < 500 and body_bytes < 1000 and ("已写" in summary or "写入" in summary):
+        if total_bytes < 500 and ("已写" in summary or "写入" in summary):
             warnings.append("summary claims substantial write but turn_facts bytes are small")
-
-    manuscript = turn_facts.get("manuscript") or {}
-    progress_metrics = turn_facts.get("progress_metrics") or {}
-    body_bytes = int(manuscript.get("body_bytes") or 0)
-    written_chars = int(progress_metrics.get("written_chars") or 0)
-    if body_bytes > 1000 and written_chars > 0:
-        drift = abs(body_bytes - written_chars) / max(body_bytes, 1)
-        if drift > 0.35 and ("进度" in summary or "完成" in summary or "%" in summary):
-            warnings.append(
-                f"progress_metrics written_chars ({written_chars}) diverges from body_bytes ({body_bytes})"
-            )
-
-    intent = turn_facts.get("writing_intent") or {}
-    intent_ch = int(intent.get("chapter_index") or 0)
-    cursor = int(manuscript.get("chapter_cursor") or 0)
-    last_ch = int(manuscript.get("last_chapter_index") or 0)
-    if intent_ch > 0 and cursor > 0 and abs(intent_ch - cursor) > 1:
-        warnings.append(
-            f"chapter_index mismatch: writing_intent={intent_ch} manuscript.cursor={cursor}"
-        )
-    if intent_ch > 0 and last_ch > 0 and intent_ch < last_ch:
-        warnings.append(
-            f"writing_intent chapter {intent_ch} behind last_chapter_index {last_ch}"
-        )
-
-    import re
-
-    claimed_chapters = re.findall(r"(\d+)\s*章", summary)
-    if claimed_chapters and last_ch > 0:
-        try:
-            claimed_max = max(int(x) for x in claimed_chapters)
-            if claimed_max > last_ch + 1:
-                warnings.append(
-                    f"summary claims chapter {claimed_max} but last_chapter_index is {last_ch}"
-                )
-        except ValueError:
-            pass
 
     return warnings
 

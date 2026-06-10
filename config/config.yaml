@@ -154,14 +154,6 @@ performance:
     buffer_stall_preview_chars: 200
     partial_commit_on_disconnect: true  # 断流时若有 partial content 则提交
 
-mission:
-  auto_from_planning: true              # 规划 LLM 可自动写入 mission 合同（可被显式覆盖）
-  auto_min_total_chars: 50000           # 自动启用时 total_target_chars 下限
-  chars_per_step: 4000
-  db_save_max_retries: 3
-  db_save_retry_base_delay: 0.05
-  llm_retry_base_delay: 0.5
-
 memory:
   task_boost: 0.35
   session_boost: 0.25
@@ -178,11 +170,6 @@ display:
   stream:
     include_artifact_code: true   # used when code_artifact.enabled=false
     max_artifact_stream_chars: 32000
-  writing_actions:
-    append_body: 继续生成下一章
-    write_outline: 生成/更新大纲
-    review_chapter: 审阅当前章节
-    polish_chapter: 润色当前章节
 
 # Code artifact pipeline: compile verify + LLM repair (compiler stderr only; no style/indent hardcoding).
 # See docs/CODE_ARTIFACT_PIPELINE.md
@@ -241,97 +228,8 @@ delivery:
       preserve_whitespace: true
       rewrite_manuscript_filenames: true
       forbid_routes: [writing_manuscript, writing_artifact, mission_writing]
-    manuscript:
-      primary: writing_gateway
-      secondary: mission_steps
     qa:
       primary: reasoning_summary
-
-mission:
-  steps_hard_cap: 500        # absolute ceiling for budget.max_steps
-  max_steps: 500              # fallback when planner omits budget (non-writing)
-  max_wall_sec: 3600
-  max_failures: 3
-  stall_budget: 2               # identical plan signatures before pause/clarify
-  stall_min_byte_delta: 200     # |Δbytes| below this counts as no progress
-  interactive_steer_max_sec: 120  # soft wall per steer turn (writing missions)
-  steer_planning_llm_max_calls: 2
-  steer_clarification_confidence: 0.3
-  writing_max_steps: 500      # legacy alias; writing uses estimate or planner budget
-  execution_mode: mission_oma
-  require_fact_bundle: true
-  require_review_verdict: true
-  review_max_parallel: 3
-  unit_loop: chapter_unit
-  oma_default_for_writing: true
-  worker_retrieval:
-    enabled: true
-    domains: [writing, common]
-    top_k: 8
-    require_fact_bundle: true
-  worker_react:
-    enabled: true
-    default_max_steps: 3
-    reviewer_allowed_actions: [retrieve_knowledge, retrieve_memory, reason, finish]
-    writer_allowed_actions: [retrieve_knowledge, call_tool, reason, finish]
-    editor_allowed_actions: [retrieve_knowledge, reason, finish]
-    planner_allowed_actions: [retrieve_knowledge, retrieve_memory, replan, reason, finish]
-    max_failures: 2
-    max_replan: 1
-  outline_max_chars: 12000
-  writing_review_every_chapters: 5   # 0 = disabled; rule fallback may pause every N chapters
-  batch_unit_max_per_plan: 12
-  orchestration_min_chars: 8000      # auto decompose long writing missions into work items
-  llm_decide: ${MISSION_LLM_DECIDE:false}
-
-# Steer intent/outcome confirmation gates (see docs/CONFIRMATION_GATES.md)
-confirmation_gates:
-  enabled: true
-  excerpt_max_chars: 4500
-  delta_max_chars: 2000
-  plan_gate_min_prepend_items: 3
-  material_intervention_actions:
-    - rewrite_outline
-    - reset_body
-    - edit_plot
-    - review_outline
-    - enqueue_work
-    - batch_unit_quality
-  outcome_work_item_kinds:
-    - write_outline
-    - edit_plot
-    - reset_body
-    - append_body
-    - append_chapter
-    - write_body
-  intervention_watch_actions:
-    - rewrite_outline
-    - reset_body
-    - edit_plot
-  preview_defaults:
-    write_outline:
-      mode: full
-      max_chars: 4500
-    edit_plot:
-      mode: range
-      max_chars: 4500
-    reset_body:
-      mode: delta
-      max_chars: 2000
-    append_body:
-      mode: delta
-      max_chars: 2000
-    append_chapter:
-      mode: delta
-      max_chars: 2000
-    write_body:
-      mode: tail
-      max_chars: 4500
-  cancel_on_intervention:
-    reset_body: [append_chapter, append_body, write_body]
-    rewrite_outline: [append_chapter, append_body, write_outline]
-    edit_plot: [write_outline]
-    batch_unit_quality: [append_chapter, append_body, write_body]
 
 # Intent observation (pre-planning L2 model layer — see docs/INTENT_OBSERVATION_AND_OMAW_MIGRATION_PLAN.md)
 intent_observation:
@@ -340,29 +238,6 @@ intent_observation:
   low_confidence_threshold: 0.55
   primary_model: ""
   fallback_model: ""
-
-# Revision fast path — scoped read/edit, loop guards, edit verb table
-revision:
-  read_loop_max: 2
-  intent_recompute_max: 1
-  scope_clarification_threshold: 0.45
-  edit_verbs:
-    - 润色
-    - 修改
-    - 改
-    - 重写
-    - 压缩
-    - 换
-    - 收
-    - 调
-    - polish
-    - revise
-    - rewrite
-    - retone
-    - edit
-    - fix
-    - compress
-    - refine
 
 # Post-planning route alignment (see docs/ROUTE_AUDIT.md): kinds + conflicts, not per-user-string hacks
 route_audit:
@@ -478,24 +353,6 @@ mode_contracts:
       shell_access: false
       network_access: false
       path_scope: session_root_only
-  manuscript_mode:
-    allowed_tools: []
-    delivery:
-      primary: writing_gateway
-      secondary: mission_steps
-    execution:
-      path: mission_writing
-      max_steps: 500
-      max_repair_attempts: 0
-    verify:
-      enabled: false
-    guards:
-      forbid_routes: []
-      force_isolate_from: []
-    security:
-      shell_access: false
-      network_access: false
-      path_scope: session_root_only
   engineering_mode:
     allowed_tools: [mkdir_path, write_file, read_file, verify_backend]
     delivery:
@@ -548,23 +405,10 @@ project_verify:
 reflection:
   enabled: true
   max_rounds: 2
-  writing_only: false
   route_audit_on_misroute: true
 
 reasoning:
-  mode: direct   # direct | cot | react
-
-# Self-Routed Deliberation Loop (SRDL) — bounded ReAct in single runtime
-react_loop:
-  enabled: true           # bounded SRDL (受控 ReAct) for complex single-runtime QA
-  max_steps: 4
-  max_steps_complex: 6
-  max_replan: 2
-  max_failures: 2
-  replan_enabled: true
-  llm_decide: false       # when true, uses routing LLM for deliberate (fallback: rules)
-  route_recommend_min_confidence: 0.75
-  # allowed_actions: []   # empty = phase1 + optional phase2 defaults
+  mode: direct   # direct | cot
 
 resource:
   default_token_budget: ${DEFAULT_TOKEN_BUDGET:0}
@@ -587,33 +431,6 @@ llm_purpose:
 
 agent:
   tool_exec_max_workers: 4
-
-manuscript:
-  default_body: novel.txt
-  default_outline: outline.txt
-  min_body_chars: 200
-  min_outline_chars: 80
-  tail_excerpt_chars: 2400
-  head_excerpt_chars: 1200
-  append_dedup_ratio: 0.82
-  quality_gate_threshold: 0.65
-  # Chapter rubric: true = LLM judges continuity/alignment (heuristic only on fallback)
-  quality_score_use_llm: true
-  quality_score_llm_min_chars: 80
-  # Optional narrative outcome extraction (summary/events) after each append
-  chapter_outcome_use_llm: true
-  l2_token_budget: 1500
-  l3_token_budget: 1200
-  alignment_recent_window: 2
-  alignment_patch_max_chapters: 3
-  bridge_default_chars: 600
-  reconcile_max_patches: 3
-  reconcile_min_patch_chars: 80
-  placeholder_patterns:
-    - 待续写
-    - 待填充
-    - 本回合内容
-    - 占位
 
 artifacts:
   base_path: ./data/artifacts
@@ -822,13 +639,6 @@ a2a:
   http_forward_enabled: true
   registry_ttl_sec: 300
   self_url: ${A2A_SELF_URL:}
-
-mission_micro_reflect:
-  enabled: true
-  confidence_threshold: 0.5
-
-exploration:
-  llm_score_enabled: true
 
 tenant:
   enabled: ${MULTI_TENANT_ENABLED:false}

@@ -14,7 +14,7 @@ def _now_iso() -> str:
 
 def _eligible_for_capture(state: AgentState) -> bool:
     status = str(state.get("status") or "")
-    if status not in {TaskStatus.COMPLETED.value, TaskStatus.MISSION_PAUSED.value}:
+    if status not in {TaskStatus.COMPLETED.value, TaskStatus.PAUSED.value}:
         return False
     payload = state.get("input_payload") or {}
     if payload.get("skip_eval_capture"):

@@ -45,7 +45,7 @@ def turn_outcome_from_status(status: str) -> str:
         return "rejected"
     if status in (TaskStatus.FAILED.value, TaskStatus.DEAD_LETTER.value):
         return "failed"
-    if status == TaskStatus.MISSION_PAUSED.value:
+    if status == TaskStatus.PAUSED.value:
         return "paused"
     return "in_progress"
 
@@ -321,7 +321,7 @@ def write_turn_memories(state: AgentState) -> AgentState:
         TaskStatus.COMPLETED.value,
         TaskStatus.WAITING_REVIEW.value,
         TaskStatus.REVIEW_RESOLVED.value,
-        TaskStatus.MISSION_PAUSED.value,
+        TaskStatus.PAUSED.value,
         TaskStatus.POLICY_CHECKED.value,
     ):
         return state

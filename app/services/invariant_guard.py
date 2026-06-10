@@ -46,23 +46,11 @@ def validate(state: AgentState) -> AgentState:
         issues.append(("I1", f"legacy replan pending but fsm_state={fsm}"))
 
     # I3: redirect must not leave resume/supersede deadlock markers
-    if fsm == FSM_REPLANNING and status == TaskStatus.MISSION_RUNNING.value:
+    if fsm == FSM_REPLANNING and status == TaskStatus.RUNNING.value:
         if payload.get("execution_grant") and not payload.get("foreground_replan_dispatch"):
             issues.append(("I3", "REPLANNING with execution_grant without dispatch"))
 
-    # I4: chat mode must not carry mission runtime
-    mode = session_mode(state)
-    if mode == "chat" and state.get("mission") and status == TaskStatus.MISSION_RUNNING.value:
-        if not payload.get("mission_suspended"):
-            issues.append(("I4", "chat mode with active mission runtime"))
-
-    # I5: planning layer must not emit bare append_body without resolver
-    contract = payload.get("turn_contract") if isinstance(payload.get("turn_contract"), dict) else {}
-    primary = str(contract.get("primary_op") or "")
-    if primary == "append_body" and not payload.get("artifact_target_resolved"):
-        ms = state.get("manuscript") or payload.get("manuscript") or {}
-        if not ms.get("body_path") and not ms.get("outline_path"):
-            issues.append(("I5", "append_body contract on empty artifact set"))
+    _ = session_mode(state)
 
     if not issues:
         return state

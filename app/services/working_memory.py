@@ -128,13 +128,6 @@ def working_memory_from_state(state: dict[str, Any] | None) -> WorkingMemory:
             "phase": mission.get("phase"),
         },
     )
-    manuscript = payload.get("manuscript") or state.get("manuscript") or {}
-    if isinstance(manuscript, dict):
-        paths = []
-        for key in ("outline_path", "body_path", "chapter_path"):
-            if manuscript.get(key):
-                paths.append(str(manuscript[key]))
-        wm.current_target_files = paths[:8]
     return wm
 
 

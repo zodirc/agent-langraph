@@ -27,9 +27,6 @@ def should_reflect(state: AgentState) -> bool:
     audit = payload.get("route_audit") or {}
     if getattr(settings, "REFLECTION_ROUTE_AUDIT_ON_MISROUTE", True) and audit.get("aligned") is False:
         return True
-    if getattr(settings, "REFLECTION_WRITING_ONLY", True):
-        intent = payload.get("writing_intent") or {}
-        return bool(intent.get("enabled"))
     return True
 
 

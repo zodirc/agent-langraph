@@ -66,7 +66,7 @@ def collect_structural_signals(
 
     goal = str(payload.get("goal") or "")
     requested = parse_requested_chars(goal) or 0
-    long_form = requested >= int(getattr(settings, "MISSION_ORCHESTRATION_MIN_CHARS", 8000) // 2)
+    long_form = requested >= 4000
 
     params_blob = str(tool_params)
     plan_blob = " ".join(str(s) for s in (state.get("plan") or []))

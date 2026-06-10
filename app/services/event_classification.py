@@ -301,7 +301,6 @@ def _resume_signals(state: dict[str, Any], payload: dict[str, Any], goal: str) -
         TaskStatus.FAILED.value,
         TaskStatus.TOOL_FAILED.value,
         TaskStatus.REASON_FAILED.value,
-        TaskStatus.WRITING_FAILED.value,
     ):
         from app.services.session.turn_policy import _goal_requires_steer_replan
 

@@ -95,19 +95,13 @@ def build_state_debug_view(
 
         for key in (
             "input_payload",
-            "mission",
-            "progress",
-            "manuscript",
-            "react_loop",
             "mission_control",
-            "exploration",
             "turn_facts",
             "turn_event_log",
             "trace_context",
             "structured_output",
             "reasoning_result",
             "reflection_result",
-            "worker_results",
         ):
             val = raw.get(key)
             if val is not None:

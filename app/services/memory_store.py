@@ -282,7 +282,6 @@ class MemoryStore:
             "plan": turn_facts.get("plan"),
             "executed_actions": turn_facts.get("executed_actions"),
             "tools_executed": turn_facts.get("tools_executed"),
-            "manuscript": turn_facts.get("manuscript"),
             "policy_result": state.get("policy_result"),
             "structured_output": state.get("structured_output"),
         }
