@@ -30,10 +30,12 @@ def test_supervisor_pipeline(base_state, isolated_stores, monkeypatch):
     )
     decomposed = supervisor_decompose_node(state)
     assert decomposed["status"] == TaskStatus.PLANNED.value
-    assert len(decomposed.get("subtasks") or []) >= 1
+    from app.runtime.state_field_access import subtasks_from_state, worker_results_from_state
+
+    assert len(subtasks_from_state(decomposed)) >= 1
 
     worked = supervisor_worker_node(decomposed)
-    assert worked.get("worker_results")
+    assert worker_results_from_state(worked)
     assert worked["status"] == TaskStatus.REASONED.value
 
     merged = supervisor_merge_node(worked)

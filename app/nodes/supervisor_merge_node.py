@@ -13,6 +13,7 @@ from typing import Any
 
 from app.config.prompts import REASONING_SYSTEM
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
+from app.runtime.state_field_access import subtasks_from_state, worker_results_from_state
 from app.services.llm_client import invoke_structured
 from app.services.state_store import get_state_store
 
@@ -23,11 +24,11 @@ def _build_merge_context(state: AgentState) -> str:
         conversation_history_from_state,
     )
 
-    worker_results = state.get("worker_results") or {}
+    worker_results = worker_results_from_state(state)
     return json.dumps(
         {
             "goal": state.get("input_payload", {}).get("goal"),
-            "subtasks": state.get("subtasks", []),
+            "subtasks": subtasks_from_state(state),
             "worker_results": worker_results,
             "conversation_history": conversation_history_for_llm(
                 conversation_history_from_state(state)
@@ -39,8 +40,8 @@ def _build_merge_context(state: AgentState) -> str:
 
 def _retry_failed_workers(state: AgentState) -> AgentState:
     """Compensate: re-dispatch failed critical subtasks once."""
-    subtasks = list(state.get("subtasks") or [])
-    worker_results = dict(state.get("worker_results") or {})
+    subtasks = subtasks_from_state(state)
+    worker_results = worker_results_from_state(state)
     failed_critical = [
         s
         for s in subtasks
@@ -86,7 +87,7 @@ def supervisor_merge_node(state: AgentState) -> AgentState:
     """
     try:
         state = _retry_failed_workers(state)
-        worker_results = state.get("worker_results") or {}
+        worker_results = worker_results_from_state(state)
         if worker_results and all(
             str(v.get("status", "")).upper() == "FAILED" for v in worker_results.values()
         ):
@@ -117,7 +118,7 @@ def supervisor_merge_node(state: AgentState) -> AgentState:
             _build_merge_context(state),
             trace_state=state,
         )
-        worker_results = state.get("worker_results") or {}
+        worker_results = worker_results_from_state(state)
         summaries = [
             f"[{item.get('domain')}] {item.get('summary', '')}"
             for item in worker_results.values()
@@ -131,7 +132,7 @@ def supervisor_merge_node(state: AgentState) -> AgentState:
             "risk_level": str(merged.get("risk_level", _max_risk(worker_results))).upper(),
             "structured": {
                 "supervisor": True,
-                "subtasks": state.get("subtasks"),
+                "subtasks": subtasks_from_state(state),
                 "worker_results": worker_results,
                 "merged": merged.get("structured", {}),
             },

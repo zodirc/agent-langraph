@@ -24,31 +24,6 @@ def test_qa_mode_contract_blocks_writing_and_mission():
     assert "write_text_artifact" not in (updated.get("selected_tools") or [])
 
 
-def test_manuscript_mode_preserves_mission_and_strips_engineering_tools():
-    state = create_initial_state(
-        task_id="mc-ms-1",
-        input_payload={
-            "goal": "续写第三章",
-            "route_audit": {"inferred_kind": "manuscript", "kind_confidence": 0.8},
-            "mission": {"kind": "writing", "objective": "novel"},
-            "writing_intent": {"enabled": True, "action": "append_body"},
-        },
-    )
-    state = merge_state(
-        state,
-        selected_tools=["write_text_artifact", "mkdir_path"],
-        mission={"kind": "writing"},
-    )
-    res = resolve_target_mode(state)
-    assert res.target_mode == "manuscript_mode"
-    updated = apply_mode_contract_to_state(state, res)
-    payload = updated.get("input_payload") or {}
-    assert payload.get("execution_path") == "mission_writing"
-    assert (payload.get("writing_intent") or {}).get("enabled") is True
-    assert "mkdir_path" not in (updated.get("selected_tools") or [])
-    assert updated.get("mission") is not None
-
-
 def test_manuscript_to_engineering_isolate():
     state = create_initial_state(
         task_id="mc-iso-1",

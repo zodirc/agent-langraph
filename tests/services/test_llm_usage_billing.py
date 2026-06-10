@@ -31,9 +31,11 @@ def test_extract_usage_from_additional_kwargs():
 
 
 def test_record_llm_usage_billed_vs_logical(monkeypatch):
+    tenant_id = "billing-test-tenant"
     reset_tenant_quota_store()
     monkeypatch.setattr(settings, "MULTI_TENANT_ENABLED", True)
     monkeypatch.setattr(settings, "TENANT_MAX_TOKENS_PER_DAY", 0)
+    before = get_tenant_quota_store().snapshot(tenant_id)["tokens_today"]
     _record_llm_usage(
         purpose="planning",
         system_prompt="a",
@@ -42,8 +44,10 @@ def test_record_llm_usage_billed_vs_logical(monkeypatch):
         billed_tokens=42,
         bill_quota=True,
         bill_cost=False,
+        trace_state={"tenant_id": tenant_id},
     )
-    assert get_tenant_quota_store().snapshot("default")["tokens_today"] == 42
+    after = get_tenant_quota_store().snapshot(tenant_id)["tokens_today"]
+    assert after - before == 42
 
 
 def test_invoke_structured_cache_does_not_bill_quota(monkeypatch, test_settings):

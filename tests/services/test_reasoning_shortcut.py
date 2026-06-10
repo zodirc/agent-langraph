@@ -23,7 +23,6 @@ def _state(**kwargs):
                 "aligned": True,
             },
         },
-        "manuscript": {"body_path": "novel.txt", "body_bytes": 15198},
         "tool_results": None,
     }
     base.update(kwargs)
@@ -43,7 +42,7 @@ def test_qa_turn_does_not_use_execution_summary_despite_stale_skip():
     assert should_use_execution_summary(state, facts) is False
 
 
-def test_summary_omits_manuscript_when_no_writing_this_turn():
+def test_summary_empty_when_no_writing_this_turn():
     state = _state()
     facts = build_turn_facts(state)
     text = summary_from_turn_execution(facts, state)
@@ -53,13 +52,13 @@ def test_summary_omits_manuscript_when_no_writing_this_turn():
 def test_writing_turn_may_use_execution_summary():
     state = merge_state(
         _state(),
-        status=TaskStatus.WRITTEN.value,
+        status=TaskStatus.TOOL_EXECUTED.value,
         tool_results=[{"tool": "write_text_artifact", "status": "ok", "result": {"path": "novel.txt"}}],
         input_payload={
             **_state()["input_payload"],
             "skip_reasoning_after_tools": True,
             "writing_intent": {"enabled": True, "action": "write_body"},
-            "route_audit": {"inferred_kind": "manuscript", "kind_confidence": 0.6},
+            "route_audit": {"inferred_kind": "writing", "kind_confidence": 0.6},
         },
     )
     facts = build_turn_facts(state)

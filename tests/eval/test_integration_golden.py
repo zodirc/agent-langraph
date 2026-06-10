@@ -42,59 +42,6 @@ def _mock_supervisor_workers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(worker_executor, "run_workers_parallel", fake_parallel)
 
 
-def _mock_planning_mission(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _inject(result: dict, payload: dict) -> tuple[dict, str | None]:
-        payload = dict(payload)
-        if payload.get("mission"):
-            return payload, None
-        payload["mission"] = {"kind": "single_turn"}
-        return payload, "golden_handoff"
-
-    monkeypatch.setattr(
-        "app.nodes.planning_node.apply_planning_mission_decision", _inject
-    )
-
-
-def _mock_mission_oma(monkeypatch: pytest.MonkeyPatch, test_settings) -> None:
-    _mock_mission_writing(monkeypatch, test_settings)
-    import json as _json
-
-    def fake_invoke(system, user_payload):
-        data = (
-            _json.loads(user_payload)
-            if isinstance(user_payload, str)
-            else user_payload
-        )
-        return {
-            "issues": [],
-            "pass": True,
-            "summary": "oma review",
-            "polish_recommended": False,
-        }
-
-    monkeypatch.setattr(
-        "app.services.writing_phases._invoke_phase_structured",
-        lambda system, payload: fake_invoke(system, payload),
-    )
-    from app.domain.writing_memory_models import ChapterQualityRubric
-
-    monkeypatch.setattr(
-        "app.services.writing_quality.score_chapter_quality",
-        lambda **kw: ChapterQualityRubric(
-            continuity_score=0.8,
-            outline_alignment=0.8,
-            character_consistency=0.8,
-            duplication_risk=0.1,
-            chapter_completion=0.9,
-            hook_quality=0.7,
-        ),
-    )
-    monkeypatch.setattr(
-        "app.services.fact_bundle_builder._hybrid_retrieve",
-        lambda *a, **k: [],
-    )
-
-
 def _mock_engineering_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     plan = {
         "summary": "engineering golden",
@@ -191,28 +138,6 @@ def _mock_planning_qa_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.nodes.planning_node.planning_node", _fake_planning)
 
 
-def _mock_mission_writing(monkeypatch: pytest.MonkeyPatch, test_settings) -> None:
-    import app.services.artifact_tools as art
-    from app.domain.packs import writing as writing_mod
-
-    monkeypatch.setattr(art.settings, "ARTIFACTS_PATH", test_settings.ARTIFACTS_PATH)
-    monkeypatch.setattr(
-        writing_mod.WRITING_PACK,
-        "suggest_step_decision",
-        lambda *a, **k: {
-            "action": "continue",
-            "next_executor": "subgraph:writing",
-            "params": {},
-            "rationale": "test",
-        },
-    )
-    fake = "。" * 80
-    monkeypatch.setattr(
-        "app.nodes.writing_node._generate_validated_content",
-        lambda *a, **k: fake,
-    )
-
-
 @pytest.mark.parametrize("case", _load_cases(), ids=lambda c: c["id"])
 def test_integration_golden(
     case: dict, isolated_stores, test_settings, monkeypatch: pytest.MonkeyPatch
@@ -223,12 +148,6 @@ def test_integration_golden(
         _mock_engineering_bounded(monkeypatch)
     if case.get("mock_planning_qa_mode"):
         _mock_planning_qa_mode(monkeypatch)
-    if case.get("mock_planning_mission"):
-        _mock_planning_mission(monkeypatch)
-    if case.get("mock_mission_oma"):
-        _mock_mission_oma(monkeypatch, test_settings)
-    elif case.get("mock_mission_writing"):
-        _mock_mission_writing(monkeypatch, test_settings)
     runner = GraphRunner()
     payload = dict(case.get("input") or {})
     mode = str(payload.pop("execution_mode", case.get("execution_mode", "single")))
@@ -278,26 +197,5 @@ def test_integration_golden(
     if case.get("expect_verify_backend"):
         trace = payload_out.get("engineering_trace") or {}
         assert trace.get("verify_backend") == case["expect_verify_backend"]
-    min_steps = case.get("expect_min_mission_steps")
-    if min_steps is not None:
-        step = int(state.get("mission_step") or 0)
-        completed = int((state.get("progress") or {}).get("steps_completed") or 0)
-        assert max(step, completed) >= int(min_steps)
-    if case.get("expect_mission_handoff"):
-        assert state.get("mission") or (state.get("input_payload") or {}).get("mission")
-    if case.get("expect_oma_fact_bundle"):
-        payload = state.get("input_payload") or {}
-        fb = payload.get("fact_bundle_id") or (payload.get("fact_bundle") or {}).get(
-            "fact_bundle_id"
-        )
-        from app.services.writing_phases import load_chapter_reviews
-
-        reviews = load_chapter_reviews(state["task_id"])
-        has_verdict = any(
-            (v.get("evidence") or {}).get("fact_bundle_id")
-            for v in (reviews.get("reviews") or {}).values()
-            if isinstance(v, dict)
-        )
-        assert fb or has_verdict, "expected OMAW fact_bundle or reviewed verdict"
     passed = 1.0 if state["status"] == TaskStatus.COMPLETED.value else 0.5
     record(case["id"], passed=passed)

@@ -5,7 +5,7 @@ knows which execution paths and tools exist (no goal-keyword routing).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from app.config.settings import settings
 from app.services.tool_registry import get_tool_registry

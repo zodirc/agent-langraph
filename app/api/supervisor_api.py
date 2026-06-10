@@ -16,6 +16,7 @@ from app.api.task_api import CreateTaskResponse, TaskStatusResponse, _prepare_ta
 from app.api.task_api import CreateTaskRequest, wrap_task_sse_stream
 from app.services.auth_service import AuthPrincipal
 from app.services.graph_runner import get_graph_runner
+from app.runtime.state_field_access import subtasks_from_state, worker_results_from_state
 from app.services.state_store import get_state_store
 
 router = APIRouter(prefix="/supervisor", tags=["supervisor"])
@@ -123,7 +124,7 @@ def supervisor_task_result(
         "task_id": task_id,
         "status": state.get("status"),
         "final_answer": state.get("final_answer"),
-        "subtasks": state.get("subtasks"),
-        "worker_results": state.get("worker_results"),
+        "subtasks": subtasks_from_state(state),
+        "worker_results": worker_results_from_state(state) or None,
         "structured_output": state.get("structured_output"),
     }

@@ -23,20 +23,6 @@ def test_neng_zuo_shenme_classified_new_task_not_status_query(base_state):
     assert result.event_type == "new_task"
 
 
-def test_status_query_requires_active_mission(base_state):
-    from app.services.mission_schema import build_mission_dict
-
-    mission = build_mission_dict(base_state, {"mission": {"kind": "writing"}}, kind="writing")
-    state = merge_state(
-        base_state,
-        status="MISSION_RUNNING",
-        mission=mission,
-        input_payload={"mission": mission, "fsm_state": "RUNNING"},
-    )
-    result = classify_user_event(state, payload={"goal": "你正在做什么"})
-    assert result.event_type == "status_query"
-
-
 def test_turn1_skips_intent_observation_llm(base_state):
     decision = decide_intent_observation_policy(
         base_state,

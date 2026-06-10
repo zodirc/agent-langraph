@@ -9,8 +9,6 @@ APP_JS = ROOT / "web" / "static" / "app.js"
 TASK_API = ROOT / "app" / "api" / "task_api.py"
 EVENT_CLASSIFICATION = ROOT / "app" / "services" / "event_classification.py"
 SESSION_CONTROLLER = ROOT / "app" / "services" / "session_controller.py"
-PROGRESS_EVALUATOR = ROOT / "app" / "services" / "progress_evaluator.py"
-
 FORBIDDEN_FRONTEND_PATTERNS = (
     "shouldSteerReplan",
     "shouldSteerUserMessage",
@@ -47,11 +45,6 @@ FORBIDDEN_EVENT_CLASSIFICATION_PATTERNS = (
     'payload.get("replace_goal")',
     'payload.get("require_planning_after_steer")',
     'payload.get("steer_replan_mode")',
-)
-
-FORBIDDEN_PROGRESS_EVALUATOR_PATTERNS = (
-    "await /supersede",
-    'TaskStatus.MISSION_PAUSED.value',
 )
 
 FORBIDDEN_ROUTING_TASKSTATUS_FILES = (
@@ -99,12 +92,6 @@ def test_event_classification_no_client_routing_flags():
         assert pattern not in text, (
             f"event_classification must not route on client/legacy flag: {pattern}"
         )
-
-
-def test_progress_evaluator_no_supersede_api_hint():
-    text = PROGRESS_EVALUATOR.read_text(encoding="utf-8")
-    for pattern in FORBIDDEN_PROGRESS_EVALUATOR_PATTERNS:
-        assert pattern not in text, f"progress_evaluator legacy routing hint: {pattern}"
 
 
 def test_session_controller_strips_client_hints():

@@ -51,6 +51,24 @@ def _merge_prod_mode_blocks(settings: Settings) -> None:
         settings.SESSION_TURN_POLICY_CONFIG = turn_policy
 
 
+@pytest.fixture(autouse=True)
+def _sync_close_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run close_turn_async inline during tests.
+
+    The production version fires a daemon thread that keeps writing to the
+    sqlite state store after the test's tmp dir is removed, which crashes the
+    interpreter with SIGBUS (mmap'd WAL on a deleted file).
+    """
+    import app.services.close_turn_async as close_turn_module
+
+    def _inline(state) -> None:
+        from copy import deepcopy
+
+        close_turn_module._close_turn_sync(deepcopy(dict(state)))  # type: ignore[arg-type]
+
+    monkeypatch.setattr(close_turn_module, "close_turn_async", _inline)
+
+
 @pytest.fixture
 def tmp_data_dir(tmp_path: Path) -> Path:
     db_dir = tmp_path / "db"

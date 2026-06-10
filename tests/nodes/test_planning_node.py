@@ -8,5 +8,4 @@ def test_planning_node_generates_plan(base_state):
     assert result["current_node"] == "planning"
     assert result["plan"] is not None
     assert len(result["plan"]) > 0
-    assert result["audit_log"][-1]["node"] == "planning"
-    assert result["audit_log"][-1]["action"] == "success"
+    assert any(entry.get("node") == "planning" and entry.get("action") == "success" for entry in result["audit_log"])

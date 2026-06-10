@@ -3,7 +3,13 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
-def test_login_when_auth_disabled():
+def test_login_when_auth_disabled(monkeypatch):
+    import app.api.auth_api as auth_api_module
+    import app.config.settings as settings_module
+
+    monkeypatch.setattr(settings_module.settings, "AUTH_ENABLED", False)
+    monkeypatch.setattr(auth_api_module.settings, "AUTH_ENABLED", False)
+
     client = TestClient(app)
     resp = client.post("/auth/login", json={"username": "admin", "password": "admin"})
     assert resp.status_code == 400
@@ -37,10 +43,12 @@ auth:
     from app.config.settings import Settings
     import app.api.auth_api as auth_api_module
     import app.config.settings as settings_module
+    import app.services.auth_service as auth_service_module
 
     s = Settings(str(config))
     monkeypatch.setattr(settings_module, "settings", s)
     monkeypatch.setattr(auth_api_module, "settings", s)
+    monkeypatch.setattr(auth_service_module, "settings", s)
 
     client = TestClient(app)
     bad = client.post("/auth/login", json={"username": "admin", "password": "wrong"})

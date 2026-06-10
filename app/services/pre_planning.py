@@ -232,8 +232,6 @@ def should_skip_planning_llm(state: AgentState) -> bool:
         return False
     if planning_must_run_llm(state):
         return False
-    if should_skip_edit_plot_planning_llm(state):
-        return True
     return True
 
 
@@ -261,18 +259,3 @@ def engineering_thin_tools(state: AgentState) -> list[str]:
     if isinstance(tools, list) and tools:
         return [str(t) for t in tools]
     return ["mkdir_path", "read_file", "verify_backend"]
-
-
-def revision_thin_plan() -> list[str]:
-    return [
-        "revision_thin: scoped read → edit_text_artifact",
-        "contract: edit_plot",
-    ]
-
-
-def revision_thin_tools() -> list[str]:
-    return ["read_text_artifact", "edit_text_artifact"]
-
-
-def revision_thin_tool_stages() -> list[list[str]]:
-    return [["read_text_artifact"], ["edit_text_artifact"]]

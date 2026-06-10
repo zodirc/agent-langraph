@@ -190,7 +190,7 @@ def test_task_control_endpoints(isolated_stores, monkeypatch):
     store = isolated_stores
     state = merge_state(
         create_initial_state(task_id="ctrl-task"),
-        status="MISSION_RUNNING",
+        status="RUNNING",
     )
     store.save(state)
     monkeypatch.setattr(task_api, "get_state_store", lambda: store)
@@ -209,7 +209,7 @@ def test_task_control_endpoints(isolated_stores, monkeypatch):
     assert snap.status_code == 200
     assert snap.json()["pause_requested"] is False
     paused = store.load(state["task_id"])
-    assert paused["status"] == "MISSION_PAUSED"
+    assert paused["status"] == "PAUSED"
 
     stream = client.post(f"/tasks/{state['task_id']}/interrupt-stream")
     assert stream.status_code == 200

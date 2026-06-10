@@ -295,29 +295,20 @@ route_audit:
         - session_outcomes_rejected_recent
   conflicts:
     - when_kind: code
-      planned_route: writing_manuscript
-      action: disable_writing_force_reasoning
-    - when_kind: code
       planned_route: writing_artifact
       action: disable_writing_force_reasoning
     - when_kind: code
       planned_route: writing_tools_only
       action: disable_writing_force_reasoning
     - when_kind: retry_recovery
-      planned_route: writing_manuscript
+      planned_route: writing_artifact
       unless_kind: manuscript
       action: disable_writing_force_reasoning
     - when_kind: qa
-      planned_route: writing_manuscript
-      action: disable_writing_force_reasoning
-    - when_kind: interactive_app
-      planned_route: writing_manuscript
+      planned_route: writing_artifact
       action: disable_writing_force_reasoning
     - when_kind: interactive_app
       planned_route: writing_artifact
-      action: disable_writing_force_reasoning
-    - when_kind: small_project
-      planned_route: writing_manuscript
       action: disable_writing_force_reasoning
     - when_kind: small_project
       planned_route: writing_artifact

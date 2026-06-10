@@ -36,7 +36,6 @@ def build_trace_metadata(state: Optional[dict[str, Any]] = None) -> dict[str, An
         "execution_mode": state.get("execution_mode"),
         "reasoning_mode": state.get("reasoning_mode") or payload.get("reasoning_mode"),
         "policy_result": state.get("policy_result"),
-        "mission_kind": (state.get("mission") or {}).get("kind") if isinstance(state.get("mission"), dict) else None,
         "trace_show_thinking": settings.REASONING_TRACE_SHOW_THINKING,
     }
     return {k: v for k, v in meta.items() if v is not None}

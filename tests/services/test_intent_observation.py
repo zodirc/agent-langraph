@@ -144,21 +144,6 @@ def test_policy_invokes_model_on_foreground_preempt_replan():
     assert decision.reason == "foreground_preempt_replan"
 
 
-def test_structural_observation_marks_steer_replan_after_preempt():
-    state = merge_state(
-        create_initial_state(task_id="io-preempt-struct"),
-        input_payload={
-            "foreground_preempt_consumed": True,
-            "steer_replan_mode": "repair",
-            "mission": {"kind": "writing"},
-        },
-    )
-    seed = seed_pre_planning_route_audit(state)
-    result = build_structural_observation(state, route_audit_seed=seed)
-    assert result.turn_kind_candidate == "steer_replan"
-    assert result.needs_planning is True
-
-
 def test_structural_golden_baseline_runs():
     from app.services.intent_observation_eval import ALL_GOLDEN_CASES
 

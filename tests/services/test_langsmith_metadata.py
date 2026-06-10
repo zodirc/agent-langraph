@@ -5,15 +5,14 @@ from app.services.langsmith_setup import build_trace_metadata, runnable_config_w
 def test_build_trace_metadata_from_state():
     state = merge_state(
         create_initial_state(task_id="t-1"),
-        execution_mode="mission",
+        execution_mode="single",
         reasoning_mode="cot",
-        mission={"kind": "writing"},
     )
     meta = build_trace_metadata(state)
     assert meta["task_id"] == "t-1"
-    assert meta["execution_mode"] == "mission"
+    assert meta["execution_mode"] == "single"
     assert meta["reasoning_mode"] == "cot"
-    assert meta["mission_kind"] == "writing"
+    assert "mission_kind" not in meta
 
 
 def test_runnable_config_empty_when_disabled(monkeypatch):

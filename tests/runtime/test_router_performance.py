@@ -29,6 +29,7 @@ def test_route_planning_failure_retries_then_dlq():
     state = merge_state(
         create_initial_state(input_payload={"goal": "x"}),
         status=TaskStatus.FAILED.value,
+        errors=["planning: boom"],
         retry_count=1,
     )
     assert route_after_incremental_planning(state) == "incremental_planning"
@@ -37,15 +38,10 @@ def test_route_planning_failure_retries_then_dlq():
     assert route_after_incremental_planning(state) == "dead_letter"
 
 
-def test_route_after_incremental_planning_mission_in_payload_routes_retrieval(base_state):
+def test_route_after_incremental_planning_with_retrieval_plan(base_state):
     state = merge_state(
         base_state,
-        input_payload={
-            **base_state["input_payload"],
-            "mission": {"kind": "writing", "total_target_chars": 8000},
-            "writing_intent": {"enabled": True, "action": "write_outline"},
-        },
-        execution_mode="mission",
+        plan=["retrieve knowledge", "reason_and_answer"],
         skip_retrieval=False,
     )
     assert route_after_incremental_planning(state) == "retrieval"
@@ -63,7 +59,7 @@ def test_route_after_tool_non_retryable_skips_tool_loop(base_state):
     failed = tool_execution_node(state)
     assert failed["status"] == TaskStatus.TOOL_FAILED.value
     assert route_after_tool(failed) == "context_governance"
-    assert route_after_incremental_planning(failed) == "context_governance"
+    assert route_after_incremental_planning(failed) == "incremental_planning"
 
 
 def test_route_after_tool_retryable_still_retries_tool_execution(base_state):
@@ -73,20 +69,19 @@ def test_route_after_tool_retryable_still_retries_tool_execution(base_state):
         retry_count=0,
         status=TaskStatus.TOOL_FAILED.value,
         current_node="tool_execution",
+        tool_results=[
+            {
+                "tool": "missing_tool",
+                "status": "error",
+                "error": "boom",
+                "non_retryable": False,
+            }
+        ],
         errors=["tool_execution: boom"],
         audit_log=[{"node": "tool_execution", "action": "error", "detail": "boom"}],
     )
     assert route_after_tool(state) == "tool_execution"
 
 
-def test_should_reflect_skips_when_mission_runtime(base_state):
-    state = merge_state(
-        base_state,
-        input_payload={
-            **base_state["input_payload"],
-            "mission": {"kind": "writing"},
-            "writing_intent": {"enabled": True},
-        },
-        execution_mode="mission",
-    )
-    assert should_reflect(state) is False
+def test_should_reflect_default(base_state):
+    assert should_reflect(base_state) is True

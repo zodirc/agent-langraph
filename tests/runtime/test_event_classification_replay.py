@@ -21,12 +21,10 @@ REPLAY_CASES = [
         "payload": {"goal": "停止"},
         "state": {
             "session_turn": 2,
-            "status": "MISSION_RUNNING",
-            "input_payload": {
-                "mission": {"kind": "writing", "objective": "novel"},
-                "fsm_state": "RUNNING",
-            },
+            "status": "RUNNING",
+            "input_payload": {"fsm_state": "RUNNING"},
         },
+        "active_run": True,
         "expected_event_type": "interrupt",
     },
     {
@@ -38,7 +36,8 @@ REPLAY_CASES = [
     {
         "name": "status_query_progress",
         "payload": {"goal": "当前进度？"},
-        "state": {"session_turn": 2, "mission": {"goal": "novel"}},
+        "state": {"session_turn": 2},
+        "active_run": True,
         "expected_event_type": "status_query",
     },
 ]
@@ -46,13 +45,20 @@ REPLAY_CASES = [
 
 @pytest.mark.parametrize("case", REPLAY_CASES, ids=[c["name"] for c in REPLAY_CASES])
 def test_event_classification_replay_cases(case):
+    from app.services.graph_run_registry import begin_graph_run, end_graph_run
+
     state = create_initial_state(
         task_id=f"replay-{case['name']}",
         input_payload=dict(case["payload"]),
     )
     if case.get("state"):
         state = merge_state(state, **case["state"])
-    result = classify_user_event(state, payload=case["payload"])
+    run_id = begin_graph_run(state["task_id"]) if case.get("active_run") else None
+    try:
+        result = classify_user_event(state, payload=case["payload"])
+    finally:
+        if run_id:
+            end_graph_run(state["task_id"], run_id)
     assert result.event_type == case["expected_event_type"]
 
 

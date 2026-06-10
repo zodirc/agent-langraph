@@ -38,21 +38,14 @@ def detect_planned_route(
         action = str(intent.get("action") or "")
         if action == "write_outline":
             return "writing_outline"
-        body = ""
         tool_params = payload.get("tool_params") or {}
         param_blob = " ".join(str(k) + " " + str(v) for k, v in tool_params.items())
         wt_params = tool_params.get("write_text_artifact")
         planned_file = ""
         if isinstance(wt_params, dict):
             planned_file = str(wt_params.get("filename") or "")
-        if (
-            is_code_filename(body, cfg)
-            or is_code_filename(param_blob, cfg)
-            or is_code_filename(planned_file, cfg)
-        ):
+        if is_code_filename(param_blob, cfg) or is_code_filename(planned_file, cfg):
             return "writing_code_artifact"
-        if body.lower() in cfg.manuscript_body_names:
-            return "writing_manuscript"
         return "writing_artifact"
 
     if any(t in WRITING_TOOL_NAMES for t in tools):
@@ -73,7 +66,7 @@ def _resolve_artifact_profile(
         return "source_code"
     if planned_route == "writing_outline":
         return "outline"
-    if planned_route in ("writing_manuscript", "mission_writing", "writing_artifact"):
+    if planned_route == "writing_artifact":
         return "manuscript_prose"
     return "plain_text"
 
@@ -172,7 +165,7 @@ def _should_allow_mixed_qa_writing(
     """
     if primary != "qa":
         return False
-    if planned_route != "writing_manuscript":
+    if planned_route != "writing_artifact":
         return False
     structural = dict(inference.get("structural") or {})
     payload = state.get("input_payload") or {}

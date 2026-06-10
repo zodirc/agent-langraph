@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from app.runtime.state import AgentState, merge_state
 from app.services.live_task_state import LiveTaskEntry

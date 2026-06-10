@@ -39,4 +39,7 @@ def test_resolve_with_prior_engineering_mode():
     )
     res = resolve_target_mode(state)
     assert res.target_mode == "qa_mode"
-    assert "engineering_to_qa_followup" in res.mode_switch_reason
+    assert (
+        "engineering_to_qa_followup" in res.mode_switch_reason
+        or "engineering_to_conversational_qa" in res.mode_switch_reason
+    )

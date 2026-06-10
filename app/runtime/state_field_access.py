@@ -68,3 +68,27 @@ def set_react_loop_on_state(state: AgentState, react_loop: dict[str, Any] | None
         meta["react_loop"] = react_loop
     plan_graph["meta"] = meta
     return merge_state(state, plan_graph=plan_graph)
+
+
+def _plan_graph_meta(state: AgentState | dict[str, Any]) -> dict[str, Any]:
+    plan_graph = state.get("plan_graph") or {}
+    meta = plan_graph.get("meta") if isinstance(plan_graph, dict) else {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def subtasks_from_state(state: AgentState | dict[str, Any]) -> list[dict[str, Any]]:
+    raw = state.get("subtasks")
+    if isinstance(raw, list):
+        return list(raw)
+    meta = _plan_graph_meta(state)
+    subtasks = meta.get("subtasks")
+    return list(subtasks) if isinstance(subtasks, list) else []
+
+
+def worker_results_from_state(state: AgentState | dict[str, Any]) -> dict[str, Any]:
+    raw = state.get("worker_results")
+    if isinstance(raw, dict):
+        return dict(raw)
+    meta = _plan_graph_meta(state)
+    results = meta.get("worker_results")
+    return dict(results) if isinstance(results, dict) else {}

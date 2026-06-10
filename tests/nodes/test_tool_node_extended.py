@@ -108,30 +108,6 @@ def test_tool_node_planned_action_zero_replacement_not_applied(base_state):
     assert result["turn_facts"].get("edit_applied") is False
 
 
-def test_read_text_artifact_prefers_manuscript_pointer(base_state):
-    handle_write_text_artifact(
-        {
-            "task_id": base_state["task_id"],
-            "filename": "novel.txt",
-            "content": "chapter content",
-        }
-    )
-    state = merge_state(
-        base_state,
-        selected_tools=["read_text_artifact"],
-        manuscript={"body_path": "novel.txt", "body_bytes": 15},
-        input_payload={
-            **base_state["input_payload"],
-            "tool_params": {"read_text_artifact": {}},
-        },
-    )
-    result = tool_execution_node(state)
-    assert result["status"] == TaskStatus.TOOL_EXECUTED.value
-    read_result = result["tool_results"][0]["result"]
-    assert read_result["filename"] == "novel.txt"
-    assert "chapter content" in read_result["content"]
-
-
 def test_missing_artifact_is_non_retryable(base_state):
     state = merge_state(
         base_state,

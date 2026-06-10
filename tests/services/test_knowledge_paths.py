@@ -15,4 +15,3 @@ def test_knowledge_content_dir_env_override(monkeypatch, tmp_path: Path):
     (custom / "writing_guidelines.md").write_text("# stub", encoding="utf-8")
     monkeypatch.setenv("KNOWLEDGE_CONTENT_DIR", str(custom))
     assert knowledge_paths.knowledge_content_dir() == custom
-    assert knowledge_paths.writing_guidelines_path() == custom / "writing_guidelines.md"

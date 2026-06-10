@@ -13,6 +13,7 @@ from typing import Any
 
 from app.domain.worker_executor import run_workers_parallel
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
+from app.runtime.state_field_access import subtasks_from_state
 from app.services.state_store import get_state_store
 
 
@@ -23,7 +24,7 @@ def supervisor_worker_node(state: AgentState) -> AgentState:
     Writes: worker_results, tool_results, status, audit_log
     """
     try:
-        subtasks = list(state.get("subtasks") or [])
+        subtasks = subtasks_from_state(state)
         results, updated_subtasks, errors, all_tool_results = run_workers_parallel(
             parent_task_id=state["task_id"],
             user_id=state["user_id"],

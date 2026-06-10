@@ -13,7 +13,7 @@ def setup_function():
 def test_pause_resume_checkpoint_context(isolated_stores):
     state = merge_state(
         create_initial_state(task_id="pause-resume-1"),
-        status=TaskStatus.MISSION_RUNNING.value,
+        status=TaskStatus.RUNNING.value,
         progress={"work_plan": {"items": [{"id": "wp1", "status": "running"}]}},
     )
     state = mark_step_committed(
@@ -41,5 +41,5 @@ def test_pause_resume_checkpoint_context(isolated_stores):
 
     snap = snapshot_task_control("pause-resume-1")
     finalized = finalize_control_outcome(stored, snap)
-    assert finalized["status"] == TaskStatus.MISSION_PAUSED.value
+    assert finalized["status"] == TaskStatus.PAUSED.value
     assert finalized["interrupt_context"]["resume_from_checkpoint"]["checkpoint_ref"] == "ck-ref-1"

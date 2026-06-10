@@ -35,8 +35,3 @@ def test_coerce_mission_and_progress() -> None:
     assert meta.get("step_decision", {}).get("action") == "continue"
 
 
-def test_coerce_invalid_mission_preserves_dict() -> None:
-    raw = {"not_a_mission": True}
-    out = coerce_agent_state({"mission": raw, "input_payload": {}})
-    assert out.get("mission") is None
-    assert (out.get("input_payload") or {}).get("mission") == raw

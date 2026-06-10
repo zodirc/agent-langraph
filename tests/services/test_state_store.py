@@ -2,45 +2,13 @@ from app.runtime.state import TaskStatus, create_initial_state, merge_state
 from app.services.state_store import get_state_store
 
 
-def test_save_preserves_pending_steer_when_act_snapshot_omits_it(isolated_stores):
-    """Regression: mission_act save must not wipe queued steer from DB."""
-    store = get_state_store()
-    task_id = "steer-persist-1"
-    base = merge_state(
-        create_initial_state(task_id=task_id, input_payload={"goal": "写长篇"}),
-        status=TaskStatus.MISSION_RUNNING.value,
-    )
-    store.save(base)
-    store.save(
-        merge_state(
-            base,
-            pending_user_message={"message": "按电视剧人物重写大纲", "queued_at": "t"},
-        )
-    )
-    act_only = merge_state(
-        base,
-        status=TaskStatus.MISSION_RUNNING.value,
-        current_node="mission_act",
-    )
-    store.save(act_only)
-    loaded = store.load(task_id)
-    assert loaded is not None
-    pending = loaded.get("pending_user_message") or {}
-    assert pending.get("message") == "按电视剧人物重写大纲"
-
-    store.save(merge_state(loaded, pending_user_message=None))
-    cleared = store.load(task_id)
-    assert cleared is not None
-    assert not cleared.get("pending_user_message")
-
-
 def test_save_preserves_steer_planning_gate_in_payload(isolated_stores):
     """Regression: mission_act must not drop require_planning_after_steer from input_payload."""
     store = get_state_store()
     task_id = "steer-plan-gate-1"
     base = merge_state(
         create_initial_state(task_id=task_id, input_payload={"goal": "写长篇"}),
-        status=TaskStatus.MISSION_RUNNING.value,
+        status=TaskStatus.RUNNING.value,
         steer_applied_at="2026-05-26T00:00:00Z",
     )
     store.save(base)
@@ -73,7 +41,7 @@ def test_new_steer_does_not_restore_stale_outcome_gate(isolated_stores):
     task_id = "steer-outcome-clear-1"
     base = merge_state(
         create_initial_state(task_id=task_id, input_payload={"goal": "写长篇"}),
-        status=TaskStatus.MISSION_RUNNING.value,
+        status=TaskStatus.RUNNING.value,
         steer_applied_at="2026-05-26T10:00:00Z",
     )
     store.save(base)
@@ -115,7 +83,7 @@ def test_save_returns_preserved_payload(isolated_stores):
     task_id = "save-return-1"
     base = merge_state(
         create_initial_state(task_id=task_id, input_payload={"goal": "x"}),
-        status=TaskStatus.MISSION_RUNNING.value,
+        status=TaskStatus.RUNNING.value,
     )
     store.save(base)
     store.save(

@@ -38,8 +38,9 @@ def test_touch_live_if_active_only_when_registered():
     register_live(state)
     touch_live_if_active(
         state["task_id"],
-        merge_state(state, progress={"writing_state": {"phase": "body"}}),
+        merge_state(state, status="PLANNED", current_node="planning"),
     )
     entry = get_live(state["task_id"])
     assert entry is not None
-    assert entry.state.get("progress", {}).get("writing_state", {}).get("phase") == "body"
+    assert entry.state.get("status") == "PLANNED"
+    assert entry.state.get("current_node") == "planning"

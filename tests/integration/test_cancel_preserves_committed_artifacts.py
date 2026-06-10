@@ -17,7 +17,7 @@ def setup_function():
 def test_cancel_preserves_committed_artifacts(isolated_stores):
     state = merge_state(
         create_initial_state(task_id="cancel-1"),
-        status=TaskStatus.MISSION_RUNNING.value,
+        status=TaskStatus.RUNNING.value,
         manuscript={"outline_path": "outline.txt", "outline_bytes": 1200},
     )
     state = mark_step_committed(

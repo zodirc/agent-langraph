@@ -45,15 +45,6 @@ def test_legacy_guard_routes_removed_from_router():
     assert not hasattr(router_module, "route_after_writing")
 
 
-def test_legacy_mission_field_folded_into_payload():
-    state = merge_state(
-        create_initial_state(input_payload={"goal": "write"}),
-        mission={"kind": "writing", "objective": "novel"},
-    )
-    assert state.get("mission") is None
-    assert (state.get("input_payload") or {}).get("mission", {}).get("kind") == "writing"
-
-
 def test_legacy_react_loop_folded_into_plan_graph_meta():
     state = merge_state(create_initial_state(), react_loop={"round": 1})
     meta = (state.get("plan_graph") or {}).get("meta") or {}

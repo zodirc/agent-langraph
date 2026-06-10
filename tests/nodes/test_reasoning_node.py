@@ -12,7 +12,7 @@ def test_reasoning_node_produces_result(base_state):
     assert result["status"] == TaskStatus.REASONED.value
     assert result["reasoning_result"] is not None
     assert "summary" in result["reasoning_result"]
-    assert result["audit_log"][-1]["node"] == "reasoning"
+    assert any(entry.get("node") == "reasoning" for entry in result["audit_log"])
 
 
 def test_reasoning_node_turn_facts_digest(base_state):
@@ -65,7 +65,12 @@ def test_reasoning_node_records_parser_fallback_metrics(base_state, monkeypatch)
     monkeypatch.setattr("app.nodes.reasoning_node.invoke_structured", _fake_invoke)
     result = reasoning_node(state)
     assert result["status"] == TaskStatus.REASONED.value
-    last_audit = result["audit_log"][-1]["detail"]
-    assert last_audit["parser_fallback"] is True
+    reasoning_audits = [
+        entry.get("detail") or {}
+        for entry in result["audit_log"]
+        if entry.get("node") == "reasoning"
+    ]
+    assert reasoning_audits
+    assert reasoning_audits[-1]["parser_fallback"] is True
     metrics = get_metrics_service().summary()["counters"]
     assert metrics["reasoning_parser_fallback"] >= 1

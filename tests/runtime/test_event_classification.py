@@ -48,8 +48,9 @@ from app.services.event_classification import VALID_EVENT_TYPES, classify_user_e
         (
             {"goal": "停止"},
             {
-                "status": "MISSION_RUNNING",
-                "input_payload": {"mission": {"kind": "writing", "objective": "写剧本"}},
+                "status": "RUNNING",
+                "input_payload": {"fsm_state": "RUNNING", "goal": "写剧本"},
+                "_active_run": True,
             },
             "interrupt",
         ),
@@ -59,8 +60,9 @@ from app.services.event_classification import VALID_EVENT_TYPES, classify_user_e
                 "turn_policy_decision": {"intent": "supersede_active_mission"},
             },
             {
-                "status": "MISSION_RUNNING",
-                "input_payload": {"mission": {"kind": "writing", "objective": "写剧本"}},
+                "status": "RUNNING",
+                "input_payload": {"fsm_state": "RUNNING", "goal": "写剧本"},
+                "_active_run": True,
             },
             "redirect",
         ),
@@ -84,66 +86,66 @@ from app.services.event_classification import VALID_EVENT_TYPES, classify_user_e
         (
             {"goal": "你正在做什么"},
             {
-                "status": "MISSION_RUNNING",
-                "input_payload": {"mission": {"kind": "writing", "objective": "x"}},
+                "status": "RUNNING",
+                "input_payload": {"fsm_state": "RUNNING", "goal": "写剧本"},
+                "_active_run": True,
             },
             "status_query",
         ),
     ],
 )
 def test_classify_user_event_matrix(payload, state_patch, expected):
+    from app.services.graph_run_registry import begin_graph_run, end_graph_run
+
     state = create_initial_state(input_payload={"goal": "initial"})
+    active_run = bool((state_patch or {}).pop("_active_run", False))
     if state_patch:
         state = merge_state(state, **state_patch)
-    result = classify_user_event(state, payload=payload)
+    run_id = begin_graph_run(state["task_id"]) if active_run else None
+    try:
+        result = classify_user_event(state, payload=payload)
+    finally:
+        if run_id:
+            end_graph_run(state["task_id"], run_id)
     assert result.event_type == expected
     assert result.event_id
     assert result.event_type in VALID_EVENT_TYPES
 
 
-def test_resend_beats_p0_heuristic_on_completed_mission(base_state):
-    """Explicit resend steer on completed mission → redirect (not resume/interrupt)."""
-    from app.services.mission_schema import build_mission_dict
-    from app.services.session.turn_policy import resolve_session_turn
+def test_resend_steer_redirect_while_executor_active(base_state):
+    """Resend with steer correction while graph is live → redirect."""
+    from app.services.graph_run_registry import begin_graph_run, end_graph_run
 
     steer = "基于原电影编写，人物需要为原电影人物，只改动剧情走向"
-    mission = build_mission_dict(
-        base_state,
-        {"mission": {"kind": "writing"}},
-        kind="writing",
-    )
     state = merge_state(
         base_state,
-        status="COMPLETED",
-        mission=mission,
-        input_payload={"mission": mission, "goal": "写剧本"},
+        status="RUNNING",
+        input_payload={"fsm_state": "RUNNING", "goal": "写剧本"},
     )
-    payload = {"goal": steer, "meta": {"resend": True}, "mission": mission}
-    decision = resolve_session_turn(state, payload, steer, incoming=payload)
-    payload["turn_policy_decision"] = decision.to_dict()
-    result = classify_user_event(state, payload=payload)
+    run_id = begin_graph_run(state["task_id"])
+    try:
+        payload = {"goal": steer, "meta": {"resend": True}}
+        result = classify_user_event(state, payload=payload)
+    finally:
+        end_graph_run(state["task_id"], run_id)
     assert result.event_type == "redirect"
     assert result.source == "user_resend_steer"
 
 
 def test_interrupt_preempts_redirect(base_state):
-    from app.services.mission_schema import build_mission_dict
+    from app.services.graph_run_registry import begin_graph_run, end_graph_run
 
-    payload = {
-        "goal": "停止并重写大纲",
-        "priority": 100,
-    }
-    mission = build_mission_dict(
-        base_state,
-        {"mission": {"kind": "writing"}},
-        kind="writing",
-    )
+    payload = {"goal": "停止并重写大纲", "priority": 100}
     mission_state = merge_state(
         base_state,
-        status="MISSION_RUNNING",
-        input_payload={"mission": mission, "goal": "写剧本", "fsm_state": "RUNNING"},
+        status="RUNNING",
+        input_payload={"goal": "写剧本", "fsm_state": "RUNNING"},
     )
-    result = classify_user_event(mission_state, payload=payload)
+    run_id = begin_graph_run(mission_state["task_id"])
+    try:
+        result = classify_user_event(mission_state, payload=payload)
+    finally:
+        end_graph_run(mission_state["task_id"], run_id)
     assert result.event_type == "interrupt"
 
 
@@ -158,6 +160,8 @@ def test_preempt_without_active_mission_is_not_interrupt(base_state):
 
 
 def test_client_routing_hints_stripped(base_state):
+    from app.services.graph_run_registry import begin_graph_run, end_graph_run
+
     payload = {
         "goal": "改走悬疑线",
         "preempt": True,
@@ -166,13 +170,14 @@ def test_client_routing_hints_stripped(base_state):
     }
     state = merge_state(
         base_state,
-        status="MISSION_RUNNING",
-        input_payload={
-            "mission": {"kind": "writing", "objective": "写剧本"},
-            "fsm_state": "RUNNING",
-        },
+        status="RUNNING",
+        input_payload={"goal": "写剧本", "fsm_state": "RUNNING"},
     )
-    result = classify_user_event(state, payload=payload)
+    run_id = begin_graph_run(state["task_id"])
+    try:
+        result = classify_user_event(state, payload=payload)
+    finally:
+        end_graph_run(state["task_id"], run_id)
     assert result.event_type == "redirect"
 
 
@@ -190,15 +195,16 @@ def test_fsm_replanning_with_goal_is_redirect(base_state):
     assert result.event_type == "redirect"
 
 
-def test_resume_before_clarification_on_continue_signal(base_state):
+def test_continue_writing_goal_is_new_turn(base_state):
+    """Unified loop: continue cues start a fresh turn, not mission resume."""
     payload = {"goal": "继续写下一章"}
     state = merge_state(
         base_state,
         session_turn=3,
-        mission={"goal": "novel"},
+        input_payload={"goal": "novel"},
     )
     result = classify_user_event(state, payload=payload)
-    assert result.event_type == "resume"
+    assert result.event_type == "new_task"
 
 
 def test_prepare_session_turn_session_enabled_turn_two_is_clarification(
@@ -338,19 +344,16 @@ def test_prepare_session_turn_first_message_is_new_task(isolated_stores, monkeyp
 
 def test_resend_is_new_task_not_resume(base_state):
     goal = "写一份电影剧本，谍战剧情，要包括细节，民国背景"
-    mission = {"kind": "writing", "objective": goal}
     payload = {
         "goal": goal,
         "meta": {"resend": True},
-        "turn_policy_decision": {"intent": "resume_mission"},
-        "mission": mission,
+        "turn_policy_decision": {"intent": "new_turn"},
     }
     state = merge_state(
         base_state,
         session_turn=3,
-        mission=mission,
         status="COMPLETED",
-        input_payload={"mission": mission, "goal": goal},
+        input_payload={"goal": goal},
     )
     result = classify_user_event(state, payload=payload)
     assert result.event_type == "new_task"
