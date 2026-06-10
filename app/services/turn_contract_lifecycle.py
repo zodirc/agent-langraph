@@ -1,9 +1,12 @@
 """
-Turn contract lifecycle — invalidate on control-plane events (not priority overrides).
+Turn contract lifecycle — invalidate on control-plane events.
 
 A contract binds one planning→execution cycle. Steer, execution grant, and
 non-recoverable step failures retire the current contract and require a fresh
-planning pass before the next mission_act pipeline.
+planning pass.
+
+unified-core WP-4: writing/mission conflict reconciliation removed; the
+lifecycle is now purely generic (invalidate + replan-required bookkeeping).
 """
 
 from __future__ import annotations
@@ -12,12 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app.runtime.state import AgentState, TaskStatus, merge_state
-from app.services.turn_contract import (
-    _WRITE_ACTIONS,
-    contract_blocks_writing,
-    contract_from_payload,
-    contract_tool_names,
-)
+from app.services.turn_contract import contract_from_payload
 
 # Invalidation reasons (stored on payload.turn_contract_invalidation.reason)
 REASON_STEER = "steer"
@@ -49,8 +47,7 @@ def invalidate_turn_contract_payload(
     """
     Retire the active turn_contract and tool routing derived from it.
 
-    Does not rewrite mission step_policy or writing_intent; the next planning
-    pass establishes a new contract.
+    The next planning pass establishes a new contract.
     """
     out = dict(payload)
     if (
@@ -82,93 +79,12 @@ def invalidate_turn_contract_state(
     return merge_state(state, input_payload=payload)
 
 
-def _effective_writing_action(payload: dict[str, Any], state: AgentState) -> str:
-    intent = payload.get("writing_intent") or {}
-    if intent.get("enabled"):
-        return str(intent.get("action") or intent.get("writing_phase") or "")
-    mission = state.get("mission") or payload.get("mission") or {}
-    if str(mission.get("kind") or "").lower() == "writing":
-        from app.services.mission_schema import resolve_writing_intent_for_step
-
-        resolved = resolve_writing_intent_for_step(state, mission=mission)
-        if resolved.get("enabled"):
-            return str(resolved.get("action") or "")
-    return ""
-
-
-def contract_conflicts_with_writing_intent(
-    payload: dict[str, Any],
-    state: AgentState,
-) -> Optional[str]:
-    """
-    Return a reason string when the stored contract cannot execute the active write intent.
-
-    Mechanical check only (forbid list vs enabled action; read-only contract before outline exists).
-    """
-    contract = contract_from_payload(payload)
-    if not contract:
-        return None
-    primary = str(contract.get("primary_op") or "")
-    if primary in ("edit_plot", "review_outline", "run_tools"):
-        return None
-    action = _effective_writing_action(payload, state)
-    if not action or action not in _WRITE_ACTIONS:
-        return None
-    forbid = {str(x) for x in (contract.get("forbid") or [])}
-    if action in forbid:
-        return f"contract forbids active writing action {action}"
-    tools = set(contract_tool_names(payload))
-    if (
-        action == "write_outline"
-        and contract_blocks_writing(payload)
-        and tools <= {"read_text_artifact"}
-    ):
-        ms = state.get("manuscript") or {}
-        outline_bytes = int(ms.get("outline_bytes") or 0)
-        if outline_bytes <= 0:
-            return "read-only contract before outline artifact exists"
-    return None
-
-
-def sanitize_turn_contract(
-    contract: dict[str, Any],
-    payload: dict[str, Any],
-    state: AgentState,
-) -> dict[str, Any]:
-    """Repair contract when it contradicts an enabled writing step (same rules as conflict check)."""
-    conflict = contract_conflicts_with_writing_intent(
-        {**payload, "turn_contract": contract},
-        state,
-    )
-    if not conflict:
-        return contract
-    action = _effective_writing_action(payload, state)
-    return {
-        "intent_kind": "forward_write",
-        "primary_op": action,
-        "ops": [{"op": "write", "action": action}],
-        "tools": [],
-        "forbid": [],
-        "override_step_policy": False,
-        "user_visible_reason": f"repaired: {conflict}",
-    }
-
-
-def reconcile_turn_contract_execution(state: AgentState) -> AgentState:
-    """Drop contracts that contradict the current writing step (e.g. leftover from pre-mission planning)."""
-    payload = state.get("input_payload") or {}
-    conflict = contract_conflicts_with_writing_intent(payload, state)
-    if not conflict:
-        return state
-    return invalidate_turn_contract_state(state, REASON_INCONSISTENT)
-
-
 def detect_non_recoverable_step_failure(state: AgentState) -> Optional[str]:
     """
     Return a short failure signature when the last step cannot succeed via retry.
 
-    Used to trigger contract invalidation + replan instead of autonomous re-execution
-    of the same plan.
+    Used to trigger contract invalidation + replan instead of autonomous
+    re-execution of the same plan.
     """
     status = str(state.get("status") or "")
     if status in (
@@ -211,7 +127,7 @@ def detect_non_recoverable_step_failure(state: AgentState) -> Optional[str]:
 
 def apply_non_recoverable_failure_lifecycle(state: AgentState) -> AgentState:
     """
-    After a failed mission_act: retire contract, require replan, reset failure streak.
+    After a failed execution step: retire contract and require replan.
 
     Idempotent within the same step when signature unchanged.
     """
@@ -233,28 +149,10 @@ def apply_non_recoverable_failure_lifecycle(state: AgentState) -> AgentState:
     inv["signature"] = signature
     payload["turn_contract_invalidation"] = inv
 
-    item = (payload.get("current_work_item") or {}) if isinstance(payload.get("current_work_item"), dict) else {}
-    if str(item.get("kind") or "") == "edit_plot":
-        from app.services.writing.command_builder import build_writing_command
-        from app.services.writing.executor import record_command_failure
-
-        command = build_writing_command(state)
-        payload = record_command_failure(payload, command, reason=signature)
-
-    progress = dict(state.get("progress") or {})
-    progress["consecutive_failures"] = 0
-    progress["last_replan_at"] = _now_iso()
-    progress["last_replan_reason"] = signature
-
-    control = dict(state.get("mission_control") or {})
-    control["last_replan_trigger"] = REASON_NON_RECOVERABLE_FAILURE
-
     return merge_state(
         state,
         input_payload=payload,
-        progress=progress,
-        mission_control=control,
         errors=[signature],
         tool_results=[],
-        status=TaskStatus.MISSION_RUNNING.value,
+        status=TaskStatus.FAILED.value,
     )

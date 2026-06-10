@@ -11,7 +11,6 @@ from app.services.graph_execution_signals import (
 from app.services.mode_execution import mode_blocks_writing
 from app.services.route_audit.apply import writing_gate_allowed
 from app.services.turn_contract import (
-    contract_blocks_writing,
     contract_requires_side_effects,
     contract_tool_names,
 )
@@ -26,8 +25,6 @@ def _failed_route(state: AgentState, retry_node: str) -> str:
 def _writing_route_allowed(state: AgentState) -> bool:
     payload = state.get("input_payload") or {}
     if mode_blocks_writing(payload):
-        return False
-    if contract_blocks_writing(payload):
         return False
     intent = payload.get("writing_intent") or {}
     return writing_gate_allowed(state) and bool(intent.get("enabled"))

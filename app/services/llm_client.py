@@ -464,16 +464,6 @@ def extract_json_with_repair(
                 llm_repaired["parser_repaired"] = True
                 get_metrics_service().inc_contract_event("planning_parse_llm_repaired")
                 return llm_repaired
-            from app.services.turn_contract import planning_fallback_from_state
-
-            fallback = planning_fallback_from_state(
-                trace_state if isinstance(trace_state, dict) else None
-            )
-            if fallback is not None:
-                fallback["contract_phase"] = "planning"
-                fallback["parser_fallback"] = True
-                get_metrics_service().inc_contract_event("planning_parse_fallback")
-                return fallback
             get_metrics_service().inc_contract_event("planning_parse_failed")
             raise
         if purpose != "reasoning":

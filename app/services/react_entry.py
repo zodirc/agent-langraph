@@ -11,15 +11,13 @@ from app.config.settings import settings
 from app.runtime.state import AgentState
 from app.services.mission_schema import should_use_mission_runtime
 from app.services.retrieval_policy import needs_session_memory_retrieval
-from app.services.turn_contract import contract_blocks_writing, contract_tool_names
+from app.services.turn_contract import contract_tool_names
 
 
 def _writing_route_allowed(state: AgentState) -> bool:
     from app.services.route_audit.apply import writing_gate_allowed
 
     payload = state.get("input_payload") or {}
-    if contract_blocks_writing(payload):
-        return False
     intent = payload.get("writing_intent") or {}
     return writing_gate_allowed(state) and bool(intent.get("enabled"))
 
@@ -74,8 +72,6 @@ def should_enter_react_loop(state: AgentState) -> bool:
     if should_use_mission_runtime(payload, exec_mode):
         return False
     if _writing_route_allowed(state):
-        return False
-    if contract_blocks_writing(payload):
         return False
 
     forced = bool(payload.get("force_react_loop"))
