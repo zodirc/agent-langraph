@@ -21,11 +21,11 @@ def test_should_skip_qa_planning_for_greeting():
     assert should_skip_qa_planning_llm(state) is True
 
 
-def test_should_not_skip_qa_planning_on_replan():
+def test_qa_replan_keeps_thin_planning():
     state = create_initial_state(input_payload={"goal": "你好", "route_audit_replan": True})
     state = run_pre_planning_pipeline(state)
-    assert planning_must_run_llm(state) is True
-    assert should_skip_qa_planning_llm(state) is False
+    assert planning_must_run_llm(state) is False
+    assert should_skip_qa_planning_llm(state) is True
 
 
 def test_should_not_skip_qa_planning_for_substantive_followup():

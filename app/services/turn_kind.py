@@ -54,6 +54,45 @@ def pipeline_phase_after_planning(state: AgentState) -> str:
     return "narrate"
 
 
+_ANSWER_ONLY_ACTION_TYPES = frozenset({"answer", "retrieve"})
+
+
+def is_narrate_answer_turn_ready(state: AgentState | dict[str, Any]) -> bool:
+    """True when a QA/narrate turn already has a user-facing answer and needs no executor.
+
+    Used to skip post-answer replan loops and emit early ``delivered`` for streaming UX.
+    """
+    from app.services.turn_contract import contract_requires_side_effects
+
+    payload = state.get("input_payload") or {}
+    if contract_requires_side_effects(payload, state=state):  # type: ignore[arg-type]
+        return False
+    if resolve_turn_kind(state) not in _NARRATOR_TERMINAL_KINDS:  # type: ignore[arg-type]
+        thin = str(payload.get("thin_execution_profile") or "")
+        if thin != "qa_direct":
+            return False
+
+    reasoning = state.get("reasoning_result") or {}
+    answer_text = ""
+    if isinstance(reasoning, dict):
+        answer_text = str(reasoning.get("summary") or reasoning.get("answer") or "")
+    if not answer_text.strip():
+        answer_text = str(state.get("final_answer") or "")
+    if not answer_text.strip():
+        return False
+
+    actions = [a for a in (state.get("planned_actions") or []) if isinstance(a, dict)]
+    if actions:
+        types = {str(a.get("type") or "") for a in actions}
+        if types - _ANSWER_ONLY_ACTION_TYPES:
+            return False
+
+    from app.services.converge import NEXT_PROCEED, evaluate_convergence
+
+    conv = evaluate_convergence(state)
+    return bool(conv.done and conv.next == NEXT_PROCEED and conv.reason == "answer_ready")
+
+
 def should_use_reasoning_terminal(state: AgentState) -> bool:
     """Reasoning may only terminate a turn when executor work is done or turn is narrate-only."""
     if pipeline_phase_after_planning(state) == "execute":

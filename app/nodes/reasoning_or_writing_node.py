@@ -36,6 +36,22 @@ def reasoning_or_writing_node(state: AgentState) -> AgentState:
 
 
 def route_after_reasoning_or_writing(state: AgentState) -> str:
+    if _guard_failed(state):
+        return "rejected"
+    status = str(state.get("status", ""))
+    if status in (TaskStatus.FAILED.value, TaskStatus.REASON_FAILED.value):
+        if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
+            return "dead_letter"
+        return "reasoning_or_writing"
+    if status.endswith("FAILED") or status == TaskStatus.DEAD_LETTER.value:
+        return "dead_letter"
+
+    # QA / narrate-only: answer already streamed — finish the turn, never replan.
+    from app.services.turn_kind import is_narrate_answer_turn_ready
+
+    if is_narrate_answer_turn_ready(state):
+        return "verification"
+
     from app.services.reasoning_execution_guard import reasoning_terminal_blocked_reason
 
     blocked = reasoning_terminal_blocked_reason(state)
@@ -51,15 +67,6 @@ def route_after_reasoning_or_writing(state: AgentState) -> str:
             replanned = apply_planning_replan_signal(state, issues=issues)
             get_state_store().save(replanned)
             return "incremental_planning"
-    if _guard_failed(state):
-        return "rejected"
-    status = str(state.get("status", ""))
-    if status in (TaskStatus.FAILED.value, TaskStatus.REASON_FAILED.value):
-        if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
-            return "dead_letter"
-        return "reasoning_or_writing"
-    if status.endswith("FAILED") or status == TaskStatus.DEAD_LETTER.value:
-        return "dead_letter"
 
     # Single convergence gate (unified-core WP-2): if the turn goal is not met
     # and replan budget remains, go back to planning instead of emitting a

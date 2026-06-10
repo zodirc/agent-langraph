@@ -654,6 +654,16 @@ def _should_emit_node_event(node_name: str, state: AgentState) -> bool:
     return node_name not in _POST_DELIVERY_QUIET_NODES
 
 
+def _should_emit_early_delivered(state: AgentState) -> bool:
+    """Emit ``delivered`` right after reasoning for answer-only narrate turns."""
+    from app.runtime.state import TaskStatus
+    from app.services.turn_kind import is_narrate_answer_turn_ready
+
+    if str(state.get("status") or "") == TaskStatus.REJECTED.value:
+        return False
+    return is_narrate_answer_turn_ready(state)
+
+
 def _format_delivered_event(state: AgentState) -> str:
     from app.services.confirmation.stream_display import client_final_answer
 
@@ -1165,6 +1175,13 @@ class GraphRunner:
                     node_payload = _node_stream_payload(latest, node_name)
                     _record_ui_telemetry(msg_ctx, "ui_node", meta=node_payload)
                     yield _format_stream_event("node", node_payload)
+                if (
+                    not delivered_emitted
+                    and node_name == "reasoning_or_writing"
+                    and _should_emit_early_delivered(latest)
+                ):
+                    delivered_emitted = True
+                    yield _format_delivered_event(latest)
                 if node_name == "output" and not delivered_emitted:
                     delivered_emitted = True
                     yield _format_delivered_event(latest)

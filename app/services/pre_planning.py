@@ -177,14 +177,21 @@ def run_pre_planning_pipeline(state: AgentState) -> AgentState:
 def planning_must_run_llm(state: AgentState) -> bool:
     """True when steer, replan, or reflection forces a full planning LLM call."""
     payload = state.get("input_payload") or {}
-    if payload.get("route_audit_replan") or payload.get("route_audit_replan_feedback"):
-        return True
     if payload.get("plan_validation_feedback"):
         return True
     reflection = state.get("reflection_result") or {}
     if reflection.get("retry_planning"):
         return True
     if payload.get("require_planning_after_steer") and not payload.get("steer_planning_done"):
+        return True
+
+    from app.services.turn_kind import contract_needs_executor
+
+    # Converge replan on narrate/QA turns stays on thin planning (no 30s+ replan LLM).
+    if not contract_needs_executor(state):
+        return False
+
+    if payload.get("route_audit_replan") or payload.get("route_audit_replan_feedback"):
         return True
     return int(state.get("planning_revision_count") or 0) > 0
 

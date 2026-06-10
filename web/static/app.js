@@ -198,6 +198,7 @@ function isTerminalTaskStatus(status) {
     "DEAD_LETTER",
     "CANCELLED",
     "ABANDONED",
+    "PAUSED",
     "WAITING_REVIEW",
     "REVIEW_RESOLVED",
     "WRITING_FAILED",
@@ -901,7 +902,7 @@ async function syncBackendExecutionFromStatus(taskId) {
   sessionMissionExecutorActive = fsm === "RUNNING" && executorActive;
   sessionHasInFlightMission = isTaskLiveOnServer(data, null);
   const stopPending = userStopPendingTaskId === tid;
-  if (!running && executorActive && !stopPending) {
+  if (!running && !turnDelivered && executorActive && !stopPending) {
     setRunning(true, { preserveStreamUi: true, preserveRunTimer: true });
     recordPolledFlowNode(tid, data);
   } else if (!running && executorActive && stopPending) {
@@ -4270,6 +4271,9 @@ function handleStreamEvent(eventType, payload, taskIdRef, streamOpts = {}) {
       clearUiSnapshot(doneTaskId);
     } else if (shouldPersistUiSnapshot()) {
       persistUiSnapshot(doneTaskId);
+    }
+    if (terminalDone || turnDelivered) {
+      setRunning(false);
     }
     stopDetachedBackendWatch();
     const gatePending = gatePendingOnPayload(payload);
