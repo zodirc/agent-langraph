@@ -123,6 +123,55 @@ def test_extract_json_with_repair_non_reasoning_still_raises(monkeypatch):
         assert False, "planning parse should still fail on non-JSON output"
 
 
+def test_reasoning_fallback_extracts_summary_from_truncated_json(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.llm_client._attempt_reasoning_json_repair",
+        lambda *a, **k: None,
+    )
+    # Model embedded a long artifact body and hit the token cap mid-object.
+    raw = (
+        '{"summary": "用户希望润色之前写的散文。需要先读取文件再润色。", '
+        '"confidence": 0.95, "risk_level": "LOW", "structured": {"artifacts": '
+        '[{"kind": "code", "language": "mark'
+    )
+    result = extract_json_with_repair("reasoning", raw, prefer_keys=("summary",))
+    assert result["structured"]["parser_fallback"] is True
+    # Degraded answer must be clean prose (the model's summary), not a JSON blob.
+    assert result["summary"].startswith("用户希望润色")
+    assert "artifacts" not in result["summary"]
+
+
+def test_invoke_structured_parse_purpose_decouples_budget_tier(monkeypatch, test_settings):
+    # Thin/QA reasoning runs on the low-budget "routing" tier but its output is
+    # reasoning-shaped; a truncated answer must degrade, not crash the node.
+    truncated = (
+        '{"summary": "答案正文。", "confidence": 0.9, "risk_level": "LOW", '
+        '"structured": {"artifacts": [{"kind": "code", "language": "mark'
+    )
+
+    class _Resp:
+        content = truncated
+
+    class _LLM:
+        def invoke(self, messages, config=None):
+            return _Resp()
+
+    monkeypatch.setattr("app.services.llm_client.get_llm", lambda *a, **k: _LLM())
+    monkeypatch.setattr(
+        "app.services.llm_client._attempt_reasoning_json_repair",
+        lambda *a, **k: None,
+    )
+
+    result = invoke_structured(
+        "routing",
+        "system",
+        "user",
+        parse_purpose="reasoning",
+    )
+    assert result["summary"].startswith("答案正文")
+    assert result["structured"]["parser_fallback"] is True
+
+
 def test_invoke_structured_local_mode(test_settings):
     result = invoke_structured(
         "planning",

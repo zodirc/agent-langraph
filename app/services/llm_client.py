@@ -308,8 +308,20 @@ def _extract_json(text: str, *, prefer_keys: tuple[str, ...] | None = None) -> d
 
 def _reasoning_fallback_payload(text: str) -> dict[str, Any]:
     cleaned = _strip_markdown_fences(text)
+    # Prefer the model's own "summary" field (common when JSON was truncated mid
+    # object, e.g. a long artifact body blew the token budget) so the degraded
+    # answer is clean prose instead of a raw JSON blob.
+    summary = ""
+    try:
+        from app.services.reasoning_trace import extract_field_text
+
+        summary = extract_field_text(cleaned, "summary").strip()
+    except Exception:
+        summary = ""
+    if not summary:
+        summary = cleaned[:12000]
     return {
-        "summary": cleaned[:12000],
+        "summary": summary[:12000],
         "confidence": 0.45,
         "risk_level": "MEDIUM",
         "structured": {
@@ -762,7 +774,17 @@ def invoke_structured(
     *,
     budget_ctx: Any | None = None,
     trace_state: Any | None = None,
+    parse_purpose: str | None = None,
 ) -> dict[str, Any]:
+    """Invoke the LLM and parse a structured JSON result.
+
+    ``purpose`` selects the LLM tier / token budget (e.g. thin QA uses the
+    low-budget ``routing`` tier). ``parse_purpose`` selects the JSON repair /
+    fallback strategy when the model output is malformed or truncated; it
+    defaults to ``purpose`` but callers whose output schema differs from their
+    budget tier (e.g. reasoning running on the ``routing`` tier) should set it
+    so a truncated answer degrades gracefully instead of crashing the node.
+    """
     from app.services.resource_budget import BudgetExceededError
     from app.services.prompt_context_gateway import apply_governance_to_user_content
 
@@ -845,10 +867,11 @@ def invoke_structured(
             bill_quota=True,
             bill_cost=True,
         )
+        pp = parse_purpose or purpose
         parsed = extract_json_with_repair(
-            purpose,
+            pp,
             normalized,
-            prefer_keys=_prefer_keys_for_purpose(purpose),
+            prefer_keys=_prefer_keys_for_purpose(pp),
             trace_state=trace_state,
             budget_ctx=budget_ctx,
         )

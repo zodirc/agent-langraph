@@ -107,8 +107,11 @@ def _run_reasoning_llm_loop(
                 phase="reasoning_llm",
                 field="summary",
             )
+            # Parse as reasoning so truncated/malformed output degrades via
+            # reasoning repair+fallback instead of re-raising. ``llm_purpose``
+            # only selects the LLM token-budget tier (thin QA → "routing").
             result = extract_json_with_repair(
-                llm_purpose,
+                "reasoning",
                 raw,
                 prefer_keys=("summary",),
                 trace_state=working,
@@ -121,6 +124,7 @@ def _run_reasoning_llm_loop(
                 user_json,
                 budget_ctx=budget_ctx,
                 trace_state=working,
+                parse_purpose="reasoning",
             )
             raw = json.dumps(result, ensure_ascii=False)
         reasoning_result = _build_reasoning_result(result, raw, mode)
