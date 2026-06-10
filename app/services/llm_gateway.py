@@ -32,19 +32,19 @@ from app.services.reasoning_trace import (
 from app.services.artifact_args_parser import ArtifactArgsParser
 from app.services.circuit_breaker import classify_llm_error, is_retryable_category
 from app.services.stream_progress import report_thinking_delta
-from app.services.writing_generation import (
-    WritingGenerationRecord,
-    begin_writing_generation,
-    map_close_status,
+from app.services.generation_record import (
+    GenerationRecord,
+    begin_generation,
+    map_stream_close_status,
 )
-from app.services.writing_stream import (
-    emit_full_content_deltas,
-    emit_writing_content_deltas,
+from app.services.artifact_stream import (
+    artifact_stream_enabled,
+    emit_artifact_content_deltas,
+    emit_full_artifact_content_deltas,
     extract_streaming_content,
-    maybe_report_writing_buffer_trace,
-    report_writing_done,
-    report_writing_start,
-    writing_stream_enabled,
+    maybe_report_artifact_buffer_trace,
+    report_artifact_stream_done,
+    report_artifact_stream_start,
 )
 
 # Protocol: content blocks the gateway understands (not domain keywords).
@@ -402,7 +402,7 @@ def _draft_from_partial_stream(
     merged: Any,
     *,
     stream_interrupted: bool,
-    generation: WritingGenerationRecord,
+    generation: GenerationRecord,
 ) -> ArtifactDraft | None:
     content = extract_streaming_content(accumulated, parser).strip()
     if not content and merged is not None:
@@ -414,7 +414,7 @@ def _draft_from_partial_stream(
         return None
     meta = generation.to_meta()
     meta["stream_interrupted"] = stream_interrupted
-    meta["stream_close"] = map_close_status(
+    meta["stream_close"] = map_stream_close_status(
         has_content=True,
         stream_interrupted=stream_interrupted,
     )
@@ -555,14 +555,14 @@ def _stream_artifact_live(
 
     task_id = str(user_payload.get("task_id") or "")
     segment_index = int(user_payload.get("chunk_index") or 0)
-    generation = begin_writing_generation(
+    generation = begin_generation(
         task_id=task_id,
         filename=filename,
         segment_index=segment_index,
         target_chars=target_chars,
     )
 
-    report_writing_start(filename, target_chars=target_chars)
+    report_artifact_stream_start(filename, target_chars=target_chars)
     report_status_trace("writing", f"gateway: 流式生成 {filename}…")
 
     messages = [SystemMessage(content=system), HumanMessage(content=user)]
@@ -588,8 +588,8 @@ def _stream_artifact_live(
     stream_interrupted = False
     aborted = False
     stream_session = None
-    max_duration = int(getattr(settings, "WRITING_STREAM_MAX_DURATION_SEC", 600))
-    max_accumulated = int(getattr(settings, "WRITING_STREAM_MAX_ACCUMULATED_CHARS", 120_000))
+    max_duration = int(getattr(settings, "ARTIFACT_STREAM_MAX_DURATION_SEC", 600))
+    max_accumulated = int(getattr(settings, "ARTIFACT_STREAM_MAX_ACCUMULATED_CHARS", 120_000))
 
     try:
         for chunk in stream_llm.stream(messages):
@@ -605,7 +605,7 @@ def _stream_artifact_live(
                     f"流式生成已达 {max_duration}s 上限，尝试提交已缓冲正文…",
                 )
                 stream_interrupted = True
-                get_metrics_service().inc_contract_event("writing_stream_duration_cap")
+                get_metrics_service().inc_contract_event("artifact_stream_duration_cap")
                 break
             if task_id:
                 try:
@@ -624,7 +624,7 @@ def _stream_artifact_live(
                             step_epoch = active.get("foreground_epoch")
                     check_for_control_signal(
                         task_id,
-                        phase="writing_stream_chunk",
+                        phase="artifact_stream_chunk",
                         step_epoch=int(step_epoch) if step_epoch is not None else None,
                         raise_on_pause=True,
                         raise_on_cancel=True,
@@ -655,11 +655,11 @@ def _stream_artifact_live(
                     f"tool args 已超 {max_accumulated} 字符上限，终止读流并尝试提交已解析正文…",
                 )
                 stream_interrupted = True
-                get_metrics_service().inc_contract_event("writing_stream_args_cap")
+                get_metrics_service().inc_contract_event("artifact_stream_args_cap")
                 break
             accumulated = parser.accumulated
             prev_seen = seen_content
-            seen_content = emit_writing_content_deltas(
+            seen_content = emit_artifact_content_deltas(
                 accumulated,
                 seen_content,
                 filename=filename,
@@ -673,7 +673,7 @@ def _stream_artifact_live(
                     "writing",
                     f"{filename} 正文 content 已开始流式输出（手稿区将随后刷新）",
                 )
-            buffer_trace_at = maybe_report_writing_buffer_trace(
+            buffer_trace_at = maybe_report_artifact_buffer_trace(
                 filename=filename,
                 accumulated_len=parser.args_len(),
                 content_seen_len=seen_content,
@@ -692,7 +692,7 @@ def _stream_artifact_live(
             report_status_trace("writing", "检测到任务控制停止，终止本次流式生成")
             aborted = True
         elif is_stream_transport_error(exc):
-            get_metrics_service().inc_contract_event("writing_stream_transport_error")
+            get_metrics_service().inc_contract_event("artifact_stream_transport_error")
             partial_draft = _draft_from_partial_stream(
                 parser.accumulated,
                 parser,
@@ -700,7 +700,7 @@ def _stream_artifact_live(
                 stream_interrupted=True,
                 generation=generation,
             )
-            if partial_draft and getattr(settings, "WRITING_PARTIAL_ON_DISCONNECT", True):
+            if partial_draft and getattr(settings, "ARTIFACT_PARTIAL_ON_DISCONNECT", True):
                 generation.finish(
                     status="partial",
                     args_bytes=parser.args_len(),
@@ -715,7 +715,7 @@ def _stream_artifact_live(
                     f"gateway: 流式连接中断，已保留 partial 正文 {len(partial_draft.content)} 字",
                 )
                 if partial_draft.content:
-                    report_writing_done(filename, len(partial_draft.content))
+                    report_artifact_stream_done(filename, len(partial_draft.content))
                 return partial_draft
             raise RetryableError(str(exc)) from exc
         raise
@@ -754,7 +754,7 @@ def _stream_artifact_live(
     draft.raw_length = parser.args_len()
     if stream_session and draft.content:
         stream_session.finalize(draft.content)
-    close = map_close_status(
+    close = map_stream_close_status(
         has_content=bool(draft.content),
         stream_interrupted=stream_interrupted,
         aborted=aborted,
@@ -775,7 +775,7 @@ def _stream_artifact_live(
     )
     draft.meta.update(generation.to_meta())
     if draft.content:
-        report_writing_done(filename, len(draft.content))
+        report_artifact_stream_done(filename, len(draft.content))
     billed, usage_detail = (
         _usage_from_llm_response(merged) if merged is not None else (None, None)
     )
@@ -841,8 +841,8 @@ def invoke_artifact_draft(
         )
         return draft
 
-    if writing_stream_enabled():
-        stream_retries = int(getattr(settings, "WRITING_STREAM_MAX_RETRIES", 2))
+    if artifact_stream_enabled():
+        stream_retries = int(getattr(settings, "ARTIFACT_STREAM_MAX_RETRIES", 2))
         for attempt in range(stream_retries + 1):
             try:
                 return _stream_artifact_live(
@@ -893,8 +893,8 @@ def invoke_artifact_draft(
             trace_state=trace_state,
         )
         raise
-    if writing_stream_enabled() and draft.content:
-        emit_full_content_deltas(fname, draft.content, target_chars=target_chars)
+    if artifact_stream_enabled() and draft.content:
+        emit_full_artifact_content_deltas(fname, draft.content, target_chars=target_chars)
     _log_gateway_llm_interaction(
         purpose=purpose,
         system=system,
@@ -917,7 +917,7 @@ def stream_artifact_draft(
     trace_state: Any | None = None,
 ) -> ArtifactDraft:
     """Prefer live writing_delta stream; falls back to invoke path."""
-    if writing_stream_enabled() or trace_enabled():
+    if artifact_stream_enabled() or trace_enabled():
         return invoke_artifact_draft(
             purpose=purpose,
             task_desc=task_desc,

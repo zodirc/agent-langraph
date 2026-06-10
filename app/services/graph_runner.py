@@ -75,7 +75,7 @@ from app.services.reasoning_trace import (
     trace_after_node,
     trace_enabled,
 )
-from app.services.writing_stream import writing_stream_enabled
+from app.services.artifact_stream import artifact_stream_enabled
 from app.services.stream_progress import (
     clear_stream_run_context,
     set_ack_handler,
@@ -1027,7 +1027,7 @@ class GraphRunner:
         set_ack_handler(_capture_ack)
         set_answer_handler(_capture_answer if answer_stream_enabled() else None)
         set_thinking_handler(_capture_thinking if thinking_stream_enabled() else None)
-        set_writing_handler(_capture_writing if writing_stream_enabled() else None)
+        set_writing_handler(_capture_writing if artifact_stream_enabled() else None)
         worker = threading.Thread(target=_run_graph, daemon=True)
         _register_stream_worker(str(task_id), worker)
         worker.start()

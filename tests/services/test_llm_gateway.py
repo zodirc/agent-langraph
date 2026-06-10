@@ -9,7 +9,7 @@ from app.services.llm_gateway import (
     _draft_from_partial_stream,
 )
 from app.services.artifact_args_parser import ArtifactArgsParser
-from app.services.writing_generation import begin_writing_generation
+from app.services.generation_record import begin_generation
 
 
 def test_extract_chunk_stream_parts_splits_blocks():
@@ -64,7 +64,7 @@ def test_is_stream_transport_error():
 def test_draft_from_partial_stream():
     parser = ArtifactArgsParser()
     parser.feed('{"content": "残稿正文')
-    gen = begin_writing_generation(task_id="t", filename="n.txt")
+    gen = begin_generation(task_id="t", filename="n.txt")
     draft = _draft_from_partial_stream(
         parser.accumulated,
         parser,

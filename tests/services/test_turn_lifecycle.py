@@ -80,7 +80,7 @@ def test_stream_single_emits_delivered_before_done(isolated_stores, monkeypatch)
         lambda: False,
     )
     monkeypatch.setattr(
-        "app.services.graph_runner.writing_stream_enabled",
+        "app.services.graph_runner.artifact_stream_enabled",
         lambda: False,
     )
     monkeypatch.setattr(

@@ -17,7 +17,7 @@ from app.services.artifact_resolver import resolve_artifact_target, sanitize_art
 from app.services.artifact_tools import task_artifact_dir
 from app.services.llm_gateway import invoke_artifact_draft, stream_artifact_draft
 from app.services.reasoning_trace import report_block, report_status_trace, trace_enabled
-from app.services.writing_stream import writing_stream_enabled
+from app.services.artifact_stream import artifact_stream_enabled
 
 _PLACEHOLDER_MARKERS = ("占位", "请在本任务完成后", "由助手生成", "示例）", "章节规划（示例）")
 _SHORT_GOAL_RE = re.compile(r"^(续写|追加|继续|下一章|append)$", re.IGNORECASE)
@@ -215,7 +215,7 @@ def generate_artifact_content(
         if isinstance(state, dict):
             mutate_state_context_trace(state, envelope)
     report_status_trace("writing", f"gateway: 生成 {filename}（约 {chars} 字）…")
-    if trace_enabled() or writing_stream_enabled():
+    if trace_enabled() or artifact_stream_enabled():
         draft = stream_artifact_draft(
             purpose="writing",
             task_desc=task_desc,

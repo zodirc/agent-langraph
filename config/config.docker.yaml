@@ -178,9 +178,9 @@ performance:
   reasoning_trace_show_thinking: true
   thinking_stream_enabled: true
   answer_stream_enabled: true
-  writing_stream_enabled: true
-  writing_stream_max_chars: 200000
-  writing_generation:
+  artifact_stream_enabled: true
+  artifact_stream_max_chars: 200000
+  artifact_generation:
     stream_max_retries: 2
     max_stream_duration_sec: 600
     max_accumulated_chars: 120000

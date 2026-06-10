@@ -1,4 +1,4 @@
-"""Writing generation lifecycle records (audit + draft meta)."""
+"""Artifact generation lifecycle records (audit + draft meta)."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ GenerationStatus = Literal[
 
 
 @dataclass
-class WritingGenerationRecord:
+class GenerationRecord:
     generation_id: str
     task_id: str = ""
     filename: str = "artifact.txt"
@@ -69,14 +69,14 @@ class WritingGenerationRecord:
             self.meta.update(extra)
 
 
-def begin_writing_generation(
+def begin_generation(
     *,
     task_id: str = "",
     filename: str = "artifact.txt",
     segment_index: int = 0,
     target_chars: int = 0,
-) -> WritingGenerationRecord:
-    return WritingGenerationRecord(
+) -> GenerationRecord:
+    return GenerationRecord(
         generation_id=str(uuid.uuid4()),
         task_id=task_id,
         filename=filename,
@@ -85,7 +85,7 @@ def begin_writing_generation(
     )
 
 
-def map_close_status(
+def map_stream_close_status(
     *,
     has_content: bool,
     stream_interrupted: bool,

@@ -144,9 +144,9 @@ performance:
   reasoning_trace_show_thinking: true   # 兼容旧键；与 thinking_stream_enabled 等效时可二选一
   thinking_stream_enabled: true         # 推送代理 thinking 块 → SSE thinking_delta（独立于 verbose trace）
   answer_stream_enabled: true           # reasoning summary 增量推到 SSE answer_delta
-  writing_stream_enabled: true          # 手稿正文增量 → SSE writing_delta（独立于 thinking / answer）
-  writing_stream_max_chars: 200000
-  writing_generation:
+  artifact_stream_enabled: true          # artifact 正文增量 → SSE writing_delta（独立于 thinking / answer）
+  artifact_stream_max_chars: 200000
+  artifact_generation:
     stream_max_retries: 2               # 流式 transport 失败可重试次数（不含首次）
     max_stream_duration_sec: 600        # 单次流式读超时（秒）
     max_accumulated_chars: 120000       # tool args 累积上限，超限熔断
