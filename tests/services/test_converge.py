@@ -130,3 +130,61 @@ def test_no_signal_keeps_pipeline_flowing_without_replan():
     assert result.done is False
     assert result.next == NEXT_PROCEED
     assert result.reason == "no_signal"
+
+
+def test_pending_planned_side_effect_action_requests_replan():
+    state = _base_state(
+        planned_actions=[
+            {"type": "read_artifact", "params": {"filename": "outline.txt"}},
+            {
+                "type": "edit_artifact",
+                "params": {"filename": "outline.txt", "old_text": "a", "new_text": "b"},
+            },
+        ],
+        tool_results=[
+            {"tool": "read_text_artifact", "status": "ok", "result": {"status": "ok"}}
+        ],
+    )
+    result = evaluate_convergence(state)
+    assert result.done is False
+    assert result.next == NEXT_REPLAN
+    assert "actions_pending" in result.reason
+
+
+def test_exploration_only_plan_returns_to_planning_after_reads():
+    state = _base_state(
+        planned_actions=[{"type": "read_artifact", "params": {"filename": "outline.txt"}}],
+        tool_results=[
+            {"tool": "read_text_artifact", "status": "ok", "result": {"status": "ok"}}
+        ],
+    )
+    result = evaluate_convergence(state)
+    assert result.done is False
+    assert result.next == NEXT_REPLAN
+    assert result.reason == "exploration_needs_replan"
+
+
+def test_executed_planned_actions_converge_done():
+    state = _base_state(
+        planned_actions=[
+            {
+                "type": "edit_artifact",
+                "params": {"filename": "outline.txt", "old_text": "a", "new_text": "b"},
+                "completes_turn": True,
+            }
+        ],
+        tool_results=[_edit_result(1)],
+    )
+    result = evaluate_convergence(state)
+    assert result.done is True
+    assert result.reason == "edit_applied"
+
+
+def test_answer_plan_with_no_tools_converges_on_answer():
+    state = _base_state(
+        planned_actions=[{"type": "answer", "params": {}, "completes_turn": True}],
+        reasoning_result={"summary": "答案"},
+    )
+    result = evaluate_convergence(state)
+    assert result.done is True
+    assert result.reason == "answer_ready"

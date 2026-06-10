@@ -1,12 +1,13 @@
-"""规划节点：增量规划层（WP-1.4 目标），当前仍承担较多路由职责。
+"""规划节点（统一内核）：意图 → Action 序列，识别即执行。
 
-调用方：event_classification → planning、mission_act 内联流水线、reflection 重规划。
-主流程：早退（TOOL_FAILED）→ 重规划输入 → mission 机械 skip_planning_llm
-→ LLM 规划（skill planning_overlay、tool_selection）→ mission/writing 后处理
-→ validate_plan、work_plan、route_audit → PLANNED。
-写出：plan、selected_tools、writing_intent、skip_retrieval 等。
+主流程：早退（TOOL_FAILED 重试耗尽）→ 预规划（模式解析）→ QA / 工程薄路径
+→ LLM 结构化规划（产出 actions）→ 工具校验 → route_audit → PLANNED。
 
-Planning node: follows event_classification; LLM or skip path; writes plan for routers.
+写出：``plan``（人读摘要）、``planned_actions``（统一 Action 列表）、
+``selected_tools`` / ``tool_params`` / ``tool_stages``（过渡期执行传输层，
+由 actions 直接渲染，零翻译）、``skip_retrieval``。
+
+不再产出 mission / writing_intent / turn_contract 等旧控制面字段。
 """
 
 from __future__ import annotations
@@ -14,25 +15,19 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
 from app.config.prompts import build_planning_system_prompt
-from app.services.llm_client import extract_json_with_repair, invoke_structured, stream_structured
-from app.services.resource_budget import (
-    BudgetExceededError,
-    budget_context_from_state,
-    init_task_budget,
-)
-from app.services.artifact_resolver import bind_planned_artifact_names, manifest_for_planning
-from app.services.manuscript_service import (
-    build_writing_intent,
-    enrich_payload,
-    resolve_manuscript,
-    split_execution_tools,
-    strip_writing_content_from_tool_params,
-)
+from app.domain.action import Action
+from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
+from app.services.artifact_resolver import manifest_for_planning
 from app.services.conversation_context import (
     conversation_history_for_llm,
     conversation_history_from_state,
+)
+from app.services.llm_client import (
+    extract_json_with_repair,
+    invoke_structured,
+    normalize_planning_plan,
+    stream_structured,
 )
 from app.services.planning_tools import normalize_selected_tools
 from app.services.reasoning_trace import (
@@ -44,29 +39,111 @@ from app.services.reasoning_trace import (
     trace_enabled,
     trace_verbose,
 )
-from app.services.mission_routing import (
-    apply_planning_mission_decision,
-    patch_mission_from_planning,
+from app.services.resource_budget import (
+    BudgetExceededError,
+    budget_context_from_state,
+    init_task_budget,
 )
-from app.services.mission_service import init_mission_state, should_run_mission_runtime
 from app.services.runtime_capabilities import build_runtime_capabilities
 from app.services.state_store import get_state_store
 from app.services.stream_progress import report_progress
 from app.services.tool_registry import get_tool_registry
 
+# Action types executed by nodes (not via selected_tools transport).
+_NODE_HANDLED = ("answer", "run_code")
+
+
+def _actions_from_result(result: dict[str, Any]) -> tuple[list[Action], list[str]]:
+    """Parse the planner's ``actions`` into validated Action objects."""
+    raw = result.get("actions")
+    if not isinstance(raw, list):
+        return [], []
+    actions: list[Action] = []
+    issues: list[str] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            issues.append("action_not_object")
+            continue
+        try:
+            actions.append(Action.from_dict(item))
+        except (TypeError, ValueError) as exc:
+            issues.append(f"invalid_action:{exc}")
+    return actions, issues
+
+
+def _execution_transport_from_actions(
+    actions: list[Action],
+) -> tuple[list[str], dict[str, dict[str, Any]], list[list[str]]]:
+    """Render actions into the legacy tool transport (zero re-interpretation).
+
+    Until tool_node consumes ``planned_actions`` directly (WP-5), artifact and
+    run_tool actions ride on selected_tools + tool_params + tool_stages.
+    """
+    tools: list[str] = []
+    tool_params: dict[str, dict[str, Any]] = {}
+    stages: list[list[str]] = []
+    for action in actions:
+        if action.type in _NODE_HANDLED or action.type == "retrieve":
+            continue
+        if action.type == "run_tool":
+            name = str(action.params.get("name") or "")
+            params = {k: v for k, v in action.params.items() if k != "name"}
+        else:
+            name = action.tool_name or ""
+            params = dict(action.params)
+        if not name:
+            continue
+        if name not in tools:
+            tools.append(name)
+            stages.append([name])
+        tool_params[name] = {**tool_params.get(name, {}), **params}
+    return tools, tool_params, stages
+
+
+def _finish_thin(
+    state: AgentState,
+    *,
+    payload: dict[str, Any],
+    plan: list[str],
+    tools: list[str],
+    planned_actions: list[Action],
+    audit_action: str,
+    audit_detail: dict[str, Any],
+    pin_mode: bool = True,
+) -> AgentState:
+    """Common tail for thin (LLM-free) planning paths."""
+    updated = merge_state(
+        state,
+        input_payload=payload,
+        plan=plan,
+        planned_actions=[a.to_dict() for a in planned_actions] or None,
+        selected_tools=tools,
+        skip_retrieval=True,
+        review_required=False,
+        status=TaskStatus.PLANNED.value,
+        current_node="planning",
+        audit_log=append_audit(state, "planning", audit_action, audit_detail),
+    )
+    from app.services.route_audit.pipeline import run_route_audit_pipeline
+
+    pinned_mode = str(payload.get("target_mode") or "")
+    updated = run_route_audit_pipeline(updated)
+    if pin_mode and pinned_mode:
+        lp = dict(updated.get("input_payload") or {})
+        lp["target_mode"] = pinned_mode
+        lp["current_mode"] = pinned_mode
+        updated = merge_state(updated, input_payload=lp)
+    get_state_store().save(updated)
+    return updated
+
 
 def planning_node(state: AgentState) -> AgentState:
-    """
-    理解目标并产出结构化计划；写出 plan、selected_tools、writing_intent 等。
-
-    Produce structured plan for the turn; next route_after_planning.
-    """
+    """理解目标并产出 Action 序列；写出 plan、planned_actions、selected_tools。"""
     try:
-        # If we're re-invoked from a snapshot where tool execution already exhausted retries,
-        # do not "heal" the failure by re-planning and completing the task.
-        # Let router send the run to dead_letter.
         from app.config.settings import settings
 
+        # Re-invoked from a snapshot where tool execution exhausted retries:
+        # do not "heal" the failure by re-planning; router sends to dead_letter.
         if (
             str(state.get("status") or "") == TaskStatus.TOOL_FAILED.value
             and str(state.get("current_node") or "") == "tool_execution"
@@ -76,6 +153,7 @@ def planning_node(state: AgentState) -> AgentState:
 
         state = init_task_budget(state)
         budget_ctx = budget_context_from_state(state)
+
         payload_early = dict(state.get("input_payload") or {})
         reflection = state.get("reflection_result") or {}
         if reflection.get("retry_planning") or payload_early.get("route_audit_replan"):
@@ -90,25 +168,15 @@ def planning_node(state: AgentState) -> AgentState:
                 planning_revision_count=revisions,
                 reflection_result={**reflection, "retry_planning": False},
             )
+
         report_progress("正在理解任务并制定计划…")
         report_boundary("planning", "enter")
         report_planning_input(state)
         report_status_trace("planning", "正在分析目标并生成结构化计划…")
 
-        task_id = state["task_id"]
-        ms = resolve_manuscript(task_id, state.get("manuscript"))
-        from app.services.mission_intervention import normalize_payload_execution_fields
-
-        payload = normalize_payload_execution_fields(
-            enrich_payload(
-                dict(state.get("input_payload") or {}),
-                task_id,
-                session_turn=int(state.get("session_turn") or 1),
-                manuscript=ms,
-            )
-        )
+        payload = dict(state.get("input_payload") or {})
         payload.pop("turn_contract", None)
-        state = merge_state(state, input_payload=payload, manuscript=ms.to_dict())
+        state = merge_state(state, input_payload=payload)
 
         from app.services.pre_planning import (
             engineering_thin_plan,
@@ -121,56 +189,18 @@ def planning_node(state: AgentState) -> AgentState:
 
         state = run_pre_planning_pipeline(state)
         payload = dict(state.get("input_payload") or {})
-        from app.services.mission_handoff import (
-            detect_handoff_planning_loop,
-            record_planning_handoff_attempt,
-        )
-        from app.services.mission_steer import (
-            planning_steer_replan_active,
-            steer_requires_planning,
-        )
 
-        payload = record_planning_handoff_attempt(payload, state)
-        state = merge_state(state, input_payload=payload)
-        payload = dict(state.get("input_payload") or {})
-
-        if state.get("mission") and detect_handoff_planning_loop(payload, state):
-            from app.services.mission_schema import apply_mission_step_to_payload
-            from app.services.steer_planning_lifecycle import defer_steer_planning_completion
-
-            if planning_steer_replan_active(payload, state) and not payload.get(
-                "steer_planning_done"
-            ):
-                state = defer_steer_planning_completion(
-                    merge_state(state, input_payload=payload)
-                )
-                payload = dict(state.get("input_payload") or {})
-            payload = apply_mission_step_to_payload(
-                merge_state(state, input_payload=payload, manuscript=ms.to_dict())
-            )
-            payload["skip_planning_llm"] = True
-            state = merge_state(
-                state,
-                input_payload=payload,
-                audit_log=append_audit(
-                    state,
-                    "planning",
-                    "handoff_loop_detected",
-                    {"contract": (payload.get("turn_contract") or {}).get("primary_op")},
-                ),
-            )
-            payload = dict(state.get("input_payload") or {})
-
+        # --- QA thin path: conversational QA never pays planning latency ---
         if should_skip_qa_planning_llm(state):
             goal = str(payload.get("goal") or payload.get("query") or "").strip()
-            intent = {
+            payload["writing_intent"] = {
                 "enabled": False,
                 "blocked_by": "qa_mode",
                 "source": "thin_planning",
             }
-            payload["writing_intent"] = intent
-            plan = qa_thin_plan(goal, intent_kind=str(payload.get("intent_kind") or "qa"))
             payload["thin_execution_profile"] = "qa_direct"
+            plan = qa_thin_plan(goal, intent_kind=str(payload.get("intent_kind") or "qa"))
+            actions = [Action(type="answer", completes_turn=True, source="structural")]
             report_plan_trace(
                 plan,
                 [],
@@ -181,160 +211,38 @@ def planning_node(state: AgentState) -> AgentState:
                     "skip_retrieval": True,
                 },
             )
-            updated = merge_state(
+            return _finish_thin(
                 state,
-                input_payload=payload,
+                payload=payload,
                 plan=plan,
-                selected_tools=[],
-                manuscript=ms.to_dict(),
-                skip_retrieval=True,
-                review_required=False,
-                status=TaskStatus.PLANNED.value,
-                current_node="planning",
-                audit_log=append_audit(
-                    state,
-                    "planning",
-                    "qa_thin_skip",
-                    {
-                        "target_mode": payload.get("target_mode"),
-                        "intent_kind": payload.get("intent_kind"),
-                        "goal_preview": goal[:80],
-                    },
-                ),
-            )
-            from app.services.route_audit.pipeline import run_route_audit_pipeline
-
-            pinned_mode = str(payload.get("target_mode") or "")
-            updated = run_route_audit_pipeline(updated)
-            if pinned_mode:
-                lp = dict(updated.get("input_payload") or {})
-                lp["target_mode"] = pinned_mode
-                lp["current_mode"] = pinned_mode
-                updated = merge_state(updated, input_payload=lp)
-            get_state_store().save(updated)
-            return updated
-
-        from app.services.pre_planning import (
-            revision_thin_plan,
-            revision_thin_tool_stages,
-            revision_thin_tools,
-            should_skip_revision_planning_llm,
-        )
-
-        if should_skip_revision_planning_llm(state):
-            from app.domain.revision_intent import RevisionIntent
-            from app.domain.writing_intent_model import IntentAnchor, WritingIntentRecord
-            from app.services.task_drift import detect_task_drift
-
-            drift = detect_task_drift(state)
-            if drift.get("drift_type") == "mission_rebound":
-                from app.services.turn_event_log import record_turn_event
-
-                state = record_turn_event(
-                    state,
-                    "mission_rebound_detected",
-                    "planning",
-                    "revision_rebound",
-                    {
-                        "confirmed_goal": drift.get("confirmed_goal"),
-                        "current_planning_goal": drift.get("current_planning_goal"),
-                    },
-                )
-                mission_block = dict(state.get("mission") or payload.get("mission") or {})
-                rev = RevisionIntent.from_dict(
-                    (state.get("intent_observation") or {}).get("revision_intent")
-                    or payload.get("revision_intent")
-                )
-                if rev:
-                    mission_block["objective"] = rev.revision_summary
-                    payload["mission"] = mission_block
-                    state = merge_state(state, mission=mission_block, input_payload=payload)
-
-            intent_obs = state.get("intent_observation") or {}
-            rev_raw = intent_obs.get("revision_intent") or payload.get("revision_intent") or {}
-            rev = RevisionIntent.from_dict(rev_raw)
-            anchor = IntentAnchor(
-                target_hint=str(rev.artifact_role if rev else "outline"),  # type: ignore[arg-type]
-            )
-            if rev and rev.edits:
-                first = rev.edits[0]
-                anchor.old_text = first.old_text
-                anchor.new_text = first.new_text
-            writing_intent = WritingIntentRecord(
-                action="edit_plot",
-                anchor=anchor,
-                source="revision_thin_plan",
-                reason="revision_executable",
-            )
-            payload["writing_intent"] = writing_intent.to_dict()
-            payload["revision_intent"] = rev_raw
-            payload["thin_execution_profile"] = "revision_scoped"
-            from app.services.turn_contract import revision_edit_plot_contract
-
-            tools = revision_thin_tools()
-            stages = revision_thin_tool_stages()
-            payload["turn_contract"] = revision_edit_plot_contract(tools)
-            plan = revision_thin_plan()
-            report_plan_trace(
-                plan,
-                tools,
-                meta={
-                    "planning": "revision_thin_skip",
+                tools=[],
+                planned_actions=actions,
+                audit_action="qa_thin_skip",
+                audit_detail={
                     "target_mode": payload.get("target_mode"),
-                    "is_revision": True,
-                    "skip_retrieval": True,
+                    "intent_kind": payload.get("intent_kind"),
+                    "goal_preview": goal[:80],
                 },
             )
-            updated = merge_state(
-                state,
-                input_payload={**payload, "tool_stages": stages},
-                plan=plan,
-                selected_tools=tools,
-                manuscript=ms.to_dict(),
-                skip_retrieval=True,
-                review_required=False,
-                status=TaskStatus.PLANNED.value,
-                current_node="planning",
-                audit_log=append_audit(
-                    state,
-                    "planning",
-                    "revision_thin_skip",
-                    {
-                        "revision_scope": rev.revision_scope if rev else "",
-                        "planning_required_source": payload.get("planning_required_source"),
-                    },
-                ),
-            )
-            from app.services.route_audit.pipeline import run_route_audit_pipeline
 
-            updated = run_route_audit_pipeline(updated)
-            from app.services.confirmation.revision_boundary import (
-                maybe_apply_revision_clarification,
-                stream_revision_boundary,
-            )
-
-            if rev_raw:
-                stream_revision_boundary(
-                    task_id=task_id,
-                    revision_intent=rev_raw,
-                    node="planning",
-                )
-            updated = maybe_apply_revision_clarification(updated)
-            if (updated.get("input_payload") or {}).get("revision_clarification_pending"):
-                get_state_store().save(updated)
-                return updated
-            get_state_store().save(updated)
-            return updated
-
+        # --- Engineering thin path: repo-style delivery skips planning LLM ---
         if should_skip_planning_llm(state):
-            intent = {
+            payload["writing_intent"] = {
                 "enabled": False,
                 "blocked_by": "engineering_mode",
                 "source": "thin_planning",
             }
-            payload["writing_intent"] = intent
             plan = engineering_thin_plan()
             tools = engineering_thin_tools(state)
+            goal = str(payload.get("goal") or payload.get("query") or "")
+            actions = [
+                Action(
+                    type="run_code",
+                    params={"goal": goal},
+                    completes_turn=True,
+                    source="structural",
+                )
+            ]
             report_plan_trace(
                 plan,
                 tools,
@@ -345,145 +253,40 @@ def planning_node(state: AgentState) -> AgentState:
                     "skip_retrieval": True,
                 },
             )
-            updated = merge_state(
+            return _finish_thin(
                 state,
-                input_payload=payload,
+                payload=payload,
                 plan=plan,
-                selected_tools=tools,
-                manuscript=ms.to_dict(),
-                skip_retrieval=True,
-                review_required=False,
-                status=TaskStatus.PLANNED.value,
-                current_node="planning",
-                audit_log=append_audit(
-                    state,
-                    "planning",
-                    "engineering_thin_skip",
-                    {
-                        "target_mode": payload.get("target_mode"),
-                        "intent_kind": payload.get("intent_kind"),
-                    },
-                ),
-            )
-            from app.services.route_audit.pipeline import run_route_audit_pipeline
-
-            pinned_mode = str(payload.get("target_mode") or "")
-            updated = run_route_audit_pipeline(updated)
-            if pinned_mode:
-                lp = dict(updated.get("input_payload") or {})
-                lp["target_mode"] = pinned_mode
-                lp["current_mode"] = pinned_mode
-                updated = merge_state(updated, input_payload=lp)
-            get_state_store().save(updated)
-            return updated
-
-        steer_planning_turn = planning_steer_replan_active(payload, state)
-        mission_before_steer = dict(state.get("mission") or payload.get("mission") or {})
-
-        if (
-            payload.get("skip_planning_llm")
-            and state.get("mission")
-            and not planning_steer_replan_active(payload, state)
-        ):
-            from app.services.mission_schema import resolve_writing_intent_for_step
-
-            mission_in_state = state.get("mission") or {}
-            if mission_in_state.get("kind") == "writing":
-                payload["writing_intent"] = resolve_writing_intent_for_step(
-                    merge_state(state, input_payload=payload, manuscript=ms.to_dict()),
-                    mission=mission_in_state,
-                )
-            intent = payload.get("writing_intent") or {}
-            payload = bind_planned_artifact_names(payload)
-            trace_tools = ["writing_node"] if intent.get("enabled") else []
-            from app.services.turn_kind import plan_steps_for_display
-
-            skip_plan = plan_steps_for_display(
-                merge_state(
-                    state,
-                    input_payload=payload,
-                    mission=state.get("mission"),
-                    progress=state.get("progress"),
-                )
-            )
-            if not skip_plan:
-                skip_plan = ["mission_writing_step"]
-            report_plan_trace(
-                skip_plan,
-                trace_tools,
-                meta={
-                    "跳过检索": bool(state.get("skip_retrieval")),
-                    "writing_action": intent.get("action"),
-                    "mission": True,
-                    "body_path": ms.body_path,
-                    "planning": "mission_step_skip",
+                tools=tools,
+                planned_actions=actions,
+                audit_action="engineering_thin_skip",
+                audit_detail={
+                    "target_mode": payload.get("target_mode"),
+                    "intent_kind": payload.get("intent_kind"),
                 },
             )
-            updated = merge_state(
-                state,
-                input_payload=payload,
-                plan=skip_plan,
-                selected_tools=[],
-                manuscript=ms.to_dict(),
-                skip_retrieval=False,
-                status=TaskStatus.PLANNED.value,
-                current_node="planning",
-                audit_log=append_audit(
-                    state,
-                    "planning",
-                    "mission_step_skip",
-                    {"writing_intent": intent, "mission_step": state.get("mission_step")},
-                ),
-            )
-            from app.services.route_audit.pipeline import run_route_audit_pipeline
 
-            updated = run_route_audit_pipeline(updated)
-            get_state_store().save(updated)
-            return updated
-
-        replan_feedback = payload.get("route_audit_replan_feedback")
-        plan_validation_feedback = payload.get("plan_validation_feedback")
-        steer_planning_active = steer_planning_turn
-        steer_text = str(payload.get("latest_steer_message") or "").strip()
+        # --- Full LLM planning: goal → actions ---
         goal_for_planning = str(
-            payload.get("goal")
+            payload.get("latest_steer_message")
+            or payload.get("goal")
             or payload.get("query")
             or payload.get("question")
             or ""
-        )
-        if steer_text and steer_planning_active:
-            goal_for_planning = (
-                "[STEER_REPLAN: 用户中途纠偏，以此为准重新规划；"
-                "不要机械续写 append_body；按纠偏内容选 edit_plot / mission_intervention]\n"
-                f"{steer_text}"
-            )
-        elif steer_text:
-            goal_for_planning = steer_text
-        constraints = list(payload.get("writing_constraints") or [])
-        if steer_planning_active and constraints:
-            joined = "\n".join(str(c) for c in constraints if str(c).strip())
-            if joined and joined not in goal_for_planning:
-                goal_for_planning = f"{goal_for_planning}\n\n[writing_constraints]\n{joined}"
-        mission_block_early = payload.get("mission") or state.get("mission") or {}
-        from app.domain.packs.registry import resolve_mission_pack
+        ).strip()
 
-        planning_pack = resolve_mission_pack(
-            mission_kind=str(mission_block_early.get("kind") or ""),
-            task_type=str(state.get("task_type") or ""),
-            payload=payload,
-        )
         from app.services.skill_task_attach import (
             merge_domain_pack_tools_with_skill,
             skill_tool_allowlist_from_state,
         )
 
         pack_tools = merge_domain_pack_tools_with_skill(
-            list(planning_pack.tools or []) or None,
+            None,
             skill_tool_allowlist_from_state(state),
         )
         runtime_caps = build_runtime_capabilities(
             goal=goal_for_planning,
-            domain=str(planning_pack.name or ""),
+            domain="",
             risk_level=str(payload.get("risk_level") or "LOW"),
             pack_tools=pack_tools,
             state=state,
@@ -494,406 +297,137 @@ def planning_node(state: AgentState) -> AgentState:
             "context": payload.get("context", {}),
             "conversation_history": [],
             "session_turn": state.get("session_turn"),
-            "manuscript": payload.get("manuscript"),
             **manifest_for_planning(state, payload),
-            "writing_instruction": payload.get("writing_instruction"),
             "previous_artifact_summary": payload.get("previous_artifact_summary"),
             "risk_level": payload.get("risk_level", "LOW"),
             "use_tools": payload.get("use_tools", True),
             "needs_search": payload.get("needs_search", True),
             "runtime_capabilities": runtime_caps,
-            "existing_mission": payload.get("mission") or state.get("mission"),
-            "route_audit_replan_feedback": replan_feedback,
-            "plan_validation_feedback": plan_validation_feedback,
-            "writing_constraints": constraints,
-            "latest_steer_message": payload.get("latest_steer_message"),
-            "steer_replan": steer_planning_active,
+            "route_audit_replan_feedback": payload.get("route_audit_replan_feedback"),
+            "plan_validation_feedback": payload.get("plan_validation_feedback"),
             "intent_revision": payload.get("intent_revision"),
         }
-        if steer_planning_active and steer_text:
-            planning_payload["steer_replan_instruction"] = (
-                "steer_replan=true: latest_steer_message overrides resume/append. "
-                "Do not keep append_body if steer contradicts it. "
-                "Emit turn_contract primary_op edit_plot or mission_intervention as appropriate."
-            )
         from app.services.prompt_context_gateway import (
             context_governance_enabled,
             prepare_governed_user_json,
         )
 
         if context_governance_enabled():
-            user_content = prepare_governed_user_json(
-                state, "planning", planning_payload
-            )
+            user_content = prepare_governed_user_json(state, "planning", planning_payload)
         else:
             planning_payload["conversation_history"] = conversation_history_for_llm(
                 conversation_history_from_state(state)
             )
             user_content = json.dumps(planning_payload, ensure_ascii=False)
-        from app.services.turn_contract import (
-            planning_fallback_from_state,
-            session_steer_correction_fallback_from_state,
-            steer_replan_planning_fallback_from_state,
-        )
-        from app.services.turn_contract_lifecycle import contract_replan_required
 
-        plan_state = merge_state(state, input_payload=payload, manuscript=ms.to_dict())
-        result: dict[str, Any] | None = None
-        if contract_replan_required(payload) and not steer_planning_active:
-            fb = planning_fallback_from_state(plan_state)
-            if fb:
-                result = dict(fb)
-
-        if result is None and steer_planning_active:
-            fb = steer_replan_planning_fallback_from_state(plan_state)
-            if fb:
-                result = dict(fb)
-
-        if result is None:
-            fb = session_steer_correction_fallback_from_state(plan_state)
-            if fb:
-                result = dict(fb)
-                payload["skip_planning_llm"] = True
-
-        from app.services.pre_planning import should_skip_edit_plot_planning_llm
-
-        if result is None and should_skip_edit_plot_planning_llm(state):
-            fb = steer_replan_planning_fallback_from_state(plan_state)
-            if fb:
-                result = dict(fb)
-                payload["skip_planning_llm"] = True
-
-        if result is None:
-            if steer_planning_active:
-                calls = int(payload.get("steer_planning_llm_calls") or 0)
-                max_calls = int(getattr(settings, "STEER_PLANNING_LLM_MAX_CALLS", 2))
-                if calls >= max_calls:
-                    fb = steer_replan_planning_fallback_from_state(plan_state)
-                    if fb:
-                        result = dict(fb)
-                        payload["skip_planning_llm"] = True
-            if result is None:
-                system_prompt = build_planning_system_prompt(state)
-                if trace_enabled():
-                    raw = stream_llm_trace(
-                        stream_structured(
-                            "planning",
-                            system_prompt,
-                            user_content,
-                            budget_ctx=budget_ctx,
-                            trace_state=state,
-                            stream_node="planning",
-                            stream_phase="planning_llm",
-                        ),
-                        node="planning",
-                        phase="planning_llm",
-                        field="plan",
-                        extra_fields=["risk_level"] if trace_verbose() else None,
-                    )
-                    result = extract_json_with_repair(
-                        "planning",
-                        raw,
-                        prefer_keys=("plan",),
-                        trace_state=state,
-                        budget_ctx=budget_ctx,
-                    )
-                else:
-                    result = invoke_structured(
-                        "planning",
-                        system_prompt,
-                        user_content,
-                        budget_ctx=budget_ctx,
-                        trace_state=state,
-                    )
-                if steer_planning_active:
-                    payload["steer_planning_llm_calls"] = (
-                        int(payload.get("steer_planning_llm_calls") or 0) + 1
-                    )
-
-        payload_patch = result.pop("_input_payload_patch", None)
-        if payload_patch:
-            patch = dict(payload_patch)
-            patch.pop("force_slow_reasoning", None)
-            payload = normalize_payload_execution_fields({**payload, **patch})
-        if result.get("force_slow_reasoning"):
-            payload["force_slow_reasoning"] = True
-
-        from app.services.mission.batch_unit_capability import enrich_planning_result_with_batch_unit
-
-        result = enrich_planning_result_with_batch_unit(
-            result, merge_state(state, input_payload=payload, manuscript=ms.to_dict())
-        )
-
-        if steer_planning_active and isinstance(result, dict):
-            from app.services.turn_contract import apply_steer_replan_outline_route
-
-            result = apply_steer_replan_outline_route(plan_state, result)
-
-        from app.services.mission_intervention import apply_planning_intervention
-
-        payload = apply_planning_intervention(
-            result, payload, state=merge_state(state, input_payload=payload)
-        )
-        if steer_planning_turn:
-            from app.services.steer_planning_lifecycle import defer_steer_planning_completion
-
-            payload = defer_steer_planning_completion(merge_state(state, input_payload=payload)).get(
-                "input_payload"
-            ) or payload
-            from app.services.mission_supersede import settle_foreground_operation
-
-            state = settle_foreground_operation(merge_state(state, input_payload=payload))
-            payload = dict(state.get("input_payload") or payload)
-            from app.services.mission_intervention import intervention_from_payload
-            from app.services.mission.steer_replan import apply_work_plan_patch
-            from app.services.mission_orchestrator import ensure_work_plan, orchestration_enabled
-
-            replan_state = merge_state(state, input_payload=payload)
-            if orchestration_enabled(replan_state.get("mission") or {}):
-                replan_state = ensure_work_plan(replan_state)
-                replan_state = apply_work_plan_patch(
-                    replan_state,
-                    result.get("work_plan_patch"),
-                    intervention=intervention_from_payload(payload),
-                )
-                state = merge_state(state, progress=replan_state.get("progress"))
-                payload = dict(replan_state.get("input_payload") or payload)
-
-            from app.services.mission_steer_confirm import (
-                apply_steer_confirmation_pending,
-                build_steer_intent_summary,
-                steer_confirmation_required,
+        system_prompt = build_planning_system_prompt(state)
+        if trace_enabled():
+            raw = stream_llm_trace(
+                stream_structured(
+                    "planning",
+                    system_prompt,
+                    user_content,
+                    budget_ctx=budget_ctx,
+                    trace_state=state,
+                    stream_node="planning",
+                    stream_phase="planning_llm",
+                ),
+                node="planning",
+                phase="planning_llm",
+                field="plan",
+                extra_fields=["risk_level"] if trace_verbose() else None,
+            )
+            result = extract_json_with_repair(
+                "planning",
+                raw,
+                prefer_keys=("plan",),
+                trace_state=state,
+                budget_ctx=budget_ctx,
+            )
+        else:
+            result = invoke_structured(
+                "planning",
+                system_prompt,
+                user_content,
+                budget_ctx=budget_ctx,
+                trace_state=state,
             )
 
-            if steer_confirmation_required(
-                result,
-                payload,
-                mission_before=mission_before_steer,
-                state=merge_state(state, input_payload=payload),
-            ):
-                summary = build_steer_intent_summary(
-                    result,
-                    payload,
-                    mission_before=mission_before_steer,
-                    state=merge_state(state, input_payload=payload),
-                    task_id=state["task_id"],
-                )
-                payload = apply_steer_confirmation_pending(
-                    payload, summary, task_id=state["task_id"]
-                )
+        result.pop("_input_payload_patch", None)
 
-        from app.services.mission_steer import apply_review_outline_mode, review_outline_requested
+        # --- Map planning result → Action sequence (the core contract) ---
+        actions, action_issues = _actions_from_result(result)
+        exec_tools, action_tool_params, action_stages = _execution_transport_from_actions(
+            actions
+        )
 
-        if review_outline_requested(payload):
-            payload = apply_review_outline_mode(
-                payload,
-                payload.get("mission") or state.get("mission") or {},
-            )
+        # Legacy selected_tools from the LLM still count (transitional), merged
+        # after action-derived tools so actions stay authoritative.
+        raw_tools = [str(t) for t in result.get("selected_tools", [])]
+        legacy_tools, dropped_tools = normalize_selected_tools(raw_tools)
+        for tool in legacy_tools:
+            if tool not in exec_tools:
+                exec_tools.append(tool)
+                action_stages.append([tool])
 
+        tool_params = dict(payload.get("tool_params") or {})
         plan_tool_params = result.get("tool_params")
-        existing_params = payload.get("tool_params")
-        tool_params = dict(existing_params) if isinstance(existing_params, dict) else {}
         if isinstance(plan_tool_params, dict):
             for key, value in plan_tool_params.items():
                 if isinstance(value, dict):
                     tool_params[key] = {**(tool_params.get(key) or {}), **value}
                 else:
                     tool_params[key] = value
-        tool_params = strip_writing_content_from_tool_params(tool_params)
+        for key, value in action_tool_params.items():
+            tool_params[key] = {**(tool_params.get(key) or {}), **value}
 
-        from app.services.llm_client import normalize_planning_plan
-
-        plan = normalize_planning_plan(result.get("plan", []))
-        if len(plan) >= 10 and sum(1 for s in plan if "append" in s.lower()) >= 6:
-            plan = normalize_planning_plan(
-                ["write_outline via writing", "append body via mission loop"]
-            )
-            result = {
-                **result,
-                "mission_recommended": True,
-                "use_mission": True,
-            }
-        raw_tools = [str(tool) for tool in result.get("selected_tools", [])]
-        all_tools, dropped_tools = normalize_selected_tools(raw_tools)
         from app.services.tool_selection import validate_tool_selection
 
         user_role = str(payload.get("user_role") or "user")
         valid_tools, selection_issues = validate_tool_selection(
-            all_tools,
+            exec_tools,
             tool_params,
             get_tool_registry(),
             user_role,
         )
         if selection_issues:
             dropped_tools = list(dict.fromkeys(list(dropped_tools or []) + selection_issues))
-        all_tools = valid_tools
-        exec_tools, writing_tools = split_execution_tools(all_tools)
-        from app.services.artifact_read_guard import filter_saturated_read_tools
+        exec_tools = valid_tools
+        action_stages = [[t for t in stage if t in exec_tools] for stage in action_stages]
+        action_stages = [stage for stage in action_stages if stage]
 
-        exec_tools = filter_saturated_read_tools(
-            merge_state(state, input_payload=payload, manuscript=ms.to_dict()),
-            exec_tools,
-            tool_params,
-        )
+        plan = normalize_planning_plan(result.get("plan", []))
+        if not plan and actions:
+            plan = [
+                (a.rationale or a.type)[:60] for a in actions[:8]
+            ]
 
-        goal = str(payload.get("goal") or "")
-        mission_before_patch = dict(payload.get("mission") or state.get("mission") or {})
-        payload, mission_auto_reason = apply_planning_mission_decision(result, payload)
-        from app.services.writing_step import normalize_writing_mission
-
-        plan_mission = result.get("mission")
-        mission_block: dict[str, Any] | None = None
-        if isinstance(plan_mission, dict) and plan_mission:
-            mission_block = normalize_writing_mission(
-                {**(payload.get("mission") or {}), **plan_mission}
-            ) or {**(payload.get("mission") or {}), **plan_mission}
-            payload["mission"] = mission_block
-        elif payload.get("mission"):
-            mission_block = normalize_writing_mission(payload["mission"]) or dict(
-                payload["mission"]
-            )
-            payload["mission"] = mission_block
-
-        payload, patch_reason = patch_mission_from_planning(
-            result,
-            payload,
-            state_mission=payload.get("mission") or state.get("mission"),
-        )
-        if patch_reason and steer_planning_turn and not payload.get("steer_intent_pending_confirm"):
-            from app.services.mission_steer_confirm import (
-                apply_steer_confirmation_pending,
-                build_steer_intent_summary,
-                steer_confirmation_required,
-            )
-
-            if steer_confirmation_required(
-                result,
-                payload,
-                mission_before=mission_before_patch,
-                state=merge_state(state, input_payload=payload),
-            ):
-                payload = apply_steer_confirmation_pending(
-                    payload,
-                    build_steer_intent_summary(
-                        result,
-                        payload,
-                        mission_before=mission_before_patch,
-                        state=merge_state(state, input_payload=payload),
-                        task_id=state["task_id"],
-                    ),
-                    task_id=state["task_id"],
-                )
-        if patch_reason:
-            mission_auto_reason = mission_auto_reason or patch_reason
-            mission_block = dict(payload.get("mission") or mission_block or {})
-
-        mission_in_state = (
-            normalize_writing_mission(payload.get("mission") or state.get("mission")) or {}
-        )
-        if mission_in_state.get("kind") == "writing":
-            from app.services.turn_contract import finalize_turn_execution_plan
-
-            merged = merge_state(state, input_payload=payload, manuscript=ms.to_dict())
-            payload, exec_tools = finalize_turn_execution_plan(
-                result,
-                payload,
-                merged,
-                exec_tools,
-                mission=mission_in_state,
-                steer_planning_turn=steer_planning_turn,
-            )
-        else:
-            llm_intent = (
-                dict(result.get("writing_intent"))
-                if isinstance(result.get("writing_intent"), dict)
-                else None
-            )
-            if llm_intent is None:
-                llm_intent = {}
-            if not llm_intent.get("action"):
-                raw_action = str(
-                    result.get("writing_action") or result.get("writing_mode") or ""
-                ).strip()
-                if raw_action:
-                    llm_intent["action"] = raw_action
-            if not llm_intent:
-                llm_intent = None
-            payload["writing_intent"] = build_writing_intent(
-                goal=goal,
-                selected_tools=writing_tools or all_tools,
-                manuscript=ms,
-                session_turn=int(state.get("session_turn") or 1),
-                llm_intent=llm_intent,
-                mission_block=mission_block,
-                active_mission=state.get("mission"),
-                mission_step=int(state.get("mission_step") or 0),
-            )
-
-        if str(payload.get("target_mode") or "") != "engineering_mode":
-            payload = bind_planned_artifact_names(payload, planning_result=result)
-
-        for tool in ("read_text_artifact", "edit_text_artifact", "write_text_artifact", "append_text_artifact"):
-            cfg = tool_params.get(tool)
-            if isinstance(cfg, dict) and "filename" in cfg:
-                slim = {k: v for k, v in cfg.items() if k != "filename"}
-                tool_params[tool] = slim
+        payload["writing_intent"] = {"enabled": False, "source": "unified_actions"}
         payload["tool_params"] = tool_params
-
-        tool_stages = result.get("tool_stages")
-        if isinstance(tool_stages, list) and tool_stages:
-            payload["tool_stages"] = tool_stages
-        elif len(exec_tools) > 1 and not tool_stages:
-            independent = {"calculator", "get_runtime_info", "echo", "read_text_artifact"}
-            parallel = [t for t in exec_tools if t in independent]
-            sequential = [t for t in exec_tools if t not in parallel]
-            stages: list[list[str]] = []
-            if parallel:
-                stages.append(parallel)
-            for t in sequential:
-                stages.append([t])
-            if stages:
-                payload["tool_stages"] = stages
-
+        if action_stages:
+            payload["tool_stages"] = action_stages
         tool_dag = result.get("tool_dag")
         if isinstance(tool_dag, dict) and tool_dag.get("nodes"):
             payload["tool_dag"] = tool_dag
 
-        review_required = str(result.get("risk_level", "LOW")).upper() in ("HIGH", "CRITICAL")
-        skip_retrieval = bool(result.get("skip_retrieval", False))
-
-        trace_tools = list(exec_tools)
-        if (payload.get("writing_intent") or {}).get("enabled"):
-            trace_tools.append("writing_node")
-        elif writing_tools:
-            trace_tools.extend(writing_tools)
-        if mission_block:
-            trace_tools.append("mission_runtime")
-        from app.services.turn_kind import plan_steps_for_display
-
-        authoritative_plan = plan_steps_for_display(
-            merge_state(
-                state,
-                input_payload=payload,
-                mission=payload.get("mission") or state.get("mission"),
-                progress=state.get("progress"),
-                plan=plan,
-            )
+        has_retrieve = any(a.type == "retrieve" for a in actions)
+        skip_retrieval = bool(result.get("skip_retrieval", not has_retrieve))
+        if has_retrieve:
+            skip_retrieval = False
+        review_required = str(result.get("risk_level", "LOW")).upper() in (
+            "HIGH",
+            "CRITICAL",
         )
-        if authoritative_plan and any(
-            str(s).startswith(("contract:", "agenda:")) for s in authoritative_plan
-        ):
-            plan = authoritative_plan
+
         report_plan_trace(
             plan,
-            trace_tools,
+            exec_tools,
             dropped=dropped_tools or None,
             meta={
                 "风险等级": result.get("risk_level"),
                 "跳过检索": skip_retrieval,
-                "writing_action": (payload.get("writing_intent") or {}).get("action"),
-                "mission": bool(mission_block),
-                "mission_auto": mission_auto_reason or "",
-                "body_path": ms.body_path,
+                "actions": [a.type for a in actions],
+                "action_issues": action_issues or "",
             },
         )
 
@@ -904,16 +438,20 @@ def planning_node(state: AgentState) -> AgentState:
         from app.services.retrieval_routing import attach_retrieval_context
 
         retrieval_ctx = attach_retrieval_context(
-            {**state, "input_payload": payload, "selected_tools": exec_tools, "skip_retrieval": skip_retrieval}
+            {
+                **state,
+                "input_payload": payload,
+                "selected_tools": exec_tools,
+                "skip_retrieval": skip_retrieval,
+            }
         )
         updated = budget_ctx.apply_to_state(
             merge_state(
                 state,
                 input_payload=payload,
-                mission=payload.get("mission") or state.get("mission"),
                 plan=plan,
+                planned_actions=[a.to_dict() for a in actions] or None,
                 selected_tools=exec_tools,
-                manuscript=ms.to_dict(),
                 skip_retrieval=skip_retrieval,
                 retrieval_decision=retrieval_ctx.get("retrieval_decision"),
                 query_object=retrieval_ctx.get("query_object"),
@@ -928,8 +466,8 @@ def planning_node(state: AgentState) -> AgentState:
                     {
                         "plan_steps": len(plan),
                         "tools": exec_tools,
-                        "writing_intent": payload.get("writing_intent"),
-                        "mission_planned": bool(mission_block),
+                        "actions": [a.type for a in actions],
+                        "action_issues": action_issues,
                         "dropped_tools": dropped_tools,
                         "source": "llm",
                         "skip_retrieval": skip_retrieval,
@@ -952,6 +490,7 @@ def planning_node(state: AgentState) -> AgentState:
                 {
                     "steps": len(plan),
                     "tools": exec_tools,
+                    "actions": [a.type for a in actions],
                 },
             )
         else:
@@ -978,6 +517,7 @@ def planning_node(state: AgentState) -> AgentState:
                     input_payload=next_payload,
                     planning_revision_count=revisions + 1,
                     plan=None,
+                    planned_actions=None,
                     selected_tools=None,
                     status=TaskStatus.NEW.value,
                     audit_log=append_audit(
@@ -988,51 +528,10 @@ def planning_node(state: AgentState) -> AgentState:
                     ),
                 )
             )
-        if should_run_mission_runtime(updated, payload):
-            from app.services.mission_handoff import complete_mission_handoff
-
-            if state.get("mission"):
-                updated = complete_mission_handoff(
-                    updated, payload, source="planning_node"
-                )
-            else:
-                updated = init_mission_state(updated, payload)
-                from app.services.mission_schema import apply_mission_step_to_payload
-
-                payload_after = apply_mission_step_to_payload(updated)
-                payload_after["mission_handoff_completed"] = True
-                payload_after["mission_handoff_source"] = "planning_node_init"
-                updated = merge_state(updated, input_payload=payload_after)
-            updated = merge_state(
-                updated,
-                status=TaskStatus.MISSION_RUNNING.value,
-                audit_log=append_audit(
-                    updated,
-                    "planning",
-                    "mission_runtime",
-                    {"execution_mode": updated.get("execution_mode")},
-                ),
-            )
-
-        from app.services.mission_orchestrator import orchestration_enabled, work_plan_from_mission
-
-        mission_for_agenda = updated.get("mission") or payload.get("mission") or {}
-        if orchestration_enabled(mission_for_agenda) and plan:
-            from app.services.task_agenda import agenda_summary, items_from_plan_steps, merge_agenda_into_work_plan
-
-            agenda_items = items_from_plan_steps(plan, tool_dag=payload.get("tool_dag"))
-            progress = dict(updated.get("progress") or {})
-            base_plan = progress.get("work_plan") or work_plan_from_mission(mission_for_agenda)
-            progress["work_plan"] = merge_agenda_into_work_plan(base_plan, agenda_items)
-            progress["agenda_summary"] = agenda_summary(progress["work_plan"])
-            updated = merge_state(updated, progress=progress)
 
         from app.services.route_audit.pipeline import run_route_audit_pipeline
 
         updated = run_route_audit_pipeline(updated)
-        from app.services.planning_clarification import maybe_apply_steer_clarification
-
-        updated = maybe_apply_steer_clarification(updated)
         get_state_store().save(updated)
         return updated
     except BudgetExceededError as exc:

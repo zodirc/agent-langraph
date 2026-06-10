@@ -84,9 +84,14 @@ def infer_revision_intent_structural(
         return None
     task_id = str(state.get("task_id") or "")
     manuscript = state.get("manuscript") if isinstance(state.get("manuscript"), dict) else {}
-    from app.services.artifact_resolver import resolve_artifact_target
+    from app.services.artifact_resolver import ArtifactResolutionError, resolve_artifact_target
 
-    target = resolve_artifact_target(state, action="edit_plot", target_hint="outline")
+    try:
+        target = resolve_artifact_target(state, action="edit_plot", target_hint="outline")
+    except ArtifactResolutionError:
+        # No outline-role artifact: this is not a manuscript revision; let the
+        # unified planner produce edit actions instead of failing the turn.
+        return None
     filename = target.filename
     if manuscript.get("body_path") and re.search(r"章|段|对白|结尾|正文", goal):
         from app.services.manuscript_service import resolve_manuscript

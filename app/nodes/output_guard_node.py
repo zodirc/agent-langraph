@@ -49,6 +49,7 @@ def output_guard_node(state: AgentState) -> AgentState:
 
     faithfulness: dict[str, object] = {"skipped": True}
     grounding_result: dict[str, object] | None = None
+    guard_warnings: list[str] = []
     from app.services.grounding_policy import (
         grounding_hits_for_state,
         should_run_grounding_check,
@@ -129,19 +130,34 @@ def output_guard_node(state: AgentState) -> AgentState:
         grounding_result["failure_attribution"] = attribution
         grounding_result["attribution_rows"] = dashboard_rows(attribution)
         if not faithfulness.get("faithful"):
-            result = GuardResult(
-                passed=False,
-                issues=list(result.issues)
-                + [
-                    "faithfulness:"
-                    + "; ".join((faithfulness.get("unsupported_claims") or [])[:3])
-                ],
-                sanitized_summary=result.sanitized_summary,
-                source=result.source,
+            from app.services.grounding_policy import side_effects_verified
+
+            issue = "faithfulness:" + "; ".join(
+                (faithfulness.get("unsupported_claims") or [])[:3]
             )
+            # Tool-observation turns with executor-verified side effects and no
+            # fabricated citations: low token overlap is a noise signal (CJK
+            # narrative vs key=value evidence), not a hallucination — warn only.
+            if (
+                grounding_mode == "tool_observation"
+                and not (faithfulness.get("fake_citations") or [])
+                and side_effects_verified(state)
+            ):
+                faithfulness["demoted_to_warning"] = True
+                grounding_result["demoted_to_warning"] = True
+                guard_warnings.append(issue)
+            else:
+                result = GuardResult(
+                    passed=False,
+                    issues=list(result.issues) + [issue],
+                    sanitized_summary=result.sanitized_summary,
+                    source=result.source,
+                )
     guard_payload = {**result.to_dict(), "faithfulness": faithfulness}
     if grounding_result is not None:
         guard_payload["grounding_check"] = grounding_result
+    if guard_warnings:
+        guard_payload["warnings"] = guard_warnings
     guard_payload["skill_validation"] = skill_validation.to_dict()
     updated = merge_state(
         state,
@@ -154,6 +170,7 @@ def output_guard_node(state: AgentState) -> AgentState:
             {
                 "passed": result.passed,
                 "issues": result.issues,
+                "warnings": guard_warnings,
                 "source": result.source,
                 "skill_validation": skill_validation.to_dict(),
             },

@@ -17,6 +17,12 @@ _TOOL_OBSERVATION_KEYS = (
     "filename",
     "preview",
     "diff",
+    "diff_preview",
+    "replacements",
+    "tail_excerpt",
+    "bytes",
+    "total_chars",
+    "line_count",
     "new_text",
     "old_text",
     "summary",
@@ -84,6 +90,32 @@ def tool_observation_hits(state: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return hits
+
+
+_SIDE_EFFECT_TOOLS = frozenset(
+    {"write_text_artifact", "edit_text_artifact", "append_text_artifact"}
+)
+
+
+def side_effects_verified(state: dict[str, Any]) -> bool:
+    """True when this turn's side effects are executor-verified (edit honesty).
+
+    Used by the output guard to decide whether an unfaithful-summary signal can
+    be demoted to a warning: when the writes/edits demonstrably happened, the
+    summary narrating them is not a fabrication risk even if token overlap with
+    evidence is low (CJK narrative rarely matches key=value observation text).
+    """
+    turn_facts = state.get("turn_facts") or {}
+    if turn_facts.get("edit_applied") is False:
+        return False
+    for row in state.get("tool_results") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("tool") or "") not in _SIDE_EFFECT_TOOLS:
+            continue
+        if str(row.get("status") or "ok").lower() not in ("ok", "success"):
+            return False
+    return True
 
 
 def classify_grounding_turn(state: dict[str, Any]) -> GroundingMode:

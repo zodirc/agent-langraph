@@ -34,10 +34,9 @@ Behavior:
   Earlier turns are context — stay consistent with prior assistant answers in the same session.
 
 Capabilities (see runtime_capabilities in user JSON for this run):
-- Registered tools and execution_paths (single_turn vs mission) are listed there — choose paths in planning, not from memory.
-- File prose is produced by the Writing node (writing_intent or mission.step_policy), not in planning/reasoning JSON.
-- Long totals: use mission.total_target_chars + step_policy.chars_per_step; single-turn caps use writing_intent.target_chars only.
-- Read manuscript / previous_artifact_excerpt in user JSON before continuing a manuscript.
+- Registered tools are listed there — choose tools in planning, not from memory.
+- Documents are written/edited through artifact actions (write_artifact / edit_artifact / read_artifact) executed in the tool loop.
+- Read artifact_manifest / previous_artifact_excerpt in user JSON before continuing or editing an existing document.
 """
 
 
@@ -80,9 +79,10 @@ def build_planning_system_prompt(state: dict | None = None) -> str:
     tools = get_tool_registry().list_tools()
     tool_list = ", ".join(tools) if tools else "(none)"
     guide = (
-        "Registry tools (selected_tools only — writing uses writing_intent / mission, not selected_tools):\n"
+        "Registry tools (for run_tool actions):\n"
         f"  [{tool_list}]\n"
-        "See runtime_capabilities.execution_paths in user JSON for when to set mission vs writing_intent.\n"
+        "Artifact read/write/edit and retrieval have dedicated action types; "
+        "use run_tool only for other registry tools (calculator, get_runtime_info, …).\n"
         "Keep planning JSON compact; plan steps are short labels, not story text or schema field names."
     )
     return resolve_system_prompt("planning", state=state, tool_guide=guide)

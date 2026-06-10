@@ -262,17 +262,11 @@ def should_skip_planning_llm(state: AgentState) -> bool:
     if not payload.get("pre_planning_completed"):
         return False
 
-    if should_skip_revision_planning_llm(state):
-        return True
-
     from app.services.planning_gate_policy import derive_planning_required
 
     planning_required, _source = derive_planning_required(state)
-    intent_obs = state.get("intent_observation") or {}
     if not planning_required:
         if str(payload.get("target_mode") or "") == "engineering_mode":
-            return True
-        if intent_obs.get("is_revision"):
             return True
         return False
 

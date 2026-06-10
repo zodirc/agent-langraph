@@ -72,6 +72,59 @@ def _edit_counts(
     return attempted, applied
 
 
+def _pending_planned_actions(
+    state: Mapping[str, Any], tool_results: list[dict[str, Any]]
+) -> list[str]:
+    """Planner-declared executable actions that have not run successfully yet.
+
+    ``planned_actions`` is the turn's execution contract in the unified model:
+    a turn cannot converge while a declared write/edit/run_tool has no
+    successful tool result. Node-handled types (answer/retrieve/run_code) are
+    excluded — dedicated nodes execute and route them.
+    """
+    from app.domain.action import ACTION_TOOL_NAMES
+
+    executed_ok = {
+        str(item.get("tool") or "")
+        for item in tool_results
+        if str(item.get("status") or "ok") in ("ok", "cached")
+    }
+    pending: list[str] = []
+    for raw in state.get("planned_actions") or []:
+        if not isinstance(raw, dict):
+            continue
+        a_type = str(raw.get("type") or "")
+        if a_type in ("write_artifact", "edit_artifact"):
+            tool = ACTION_TOOL_NAMES[a_type]
+        elif a_type == "run_tool":
+            tool = str((raw.get("params") or {}).get("name") or "")
+        else:
+            continue
+        if tool and tool not in executed_ok:
+            pending.append(a_type)
+    return pending
+
+
+def _exploratory_actions_only(state: Mapping[str, Any]) -> bool:
+    """True when the planner only emitted reads/retrieves (no goal-completing action).
+
+    That is an explicit "I need more context" plan: the loop must return to
+    planning with the gathered context instead of emitting a final answer that
+    promises future work.
+    """
+    actions = [a for a in (state.get("planned_actions") or []) if isinstance(a, dict)]
+    if not actions:
+        return False
+    # Only concrete goal-completing action types count; a planner-set
+    # completes_turn flag on a read/retrieve is a hint we deliberately ignore
+    # (reading a file never satisfies a user goal by itself).
+    return not any(
+        str(raw.get("type") or "")
+        in ("answer", "run_code", "write_artifact", "edit_artifact", "run_tool")
+        for raw in actions
+    )
+
+
 def _read_loop_detected(tool_results: list[dict[str, Any]]) -> bool:
     """True when the turn only keeps reading without producing any side effect."""
     reads = 0
@@ -106,7 +159,15 @@ def evaluate_convergence(state: Mapping[str, Any]) -> ConvergeResult:
     if _read_loop_detected(tool_results):
         return ConvergeResult(False, NEXT_FINALIZE, "read_loop")
 
-    # 3) Contract-required side effects.
+    # 3) Planned-actions contract (unified model): declared side-effect actions
+    #    must have executed; an exploration-only plan must return to planning.
+    pending = _pending_planned_actions(state, tool_results)
+    if pending:
+        return ConvergeResult(False, NEXT_REPLAN, f"actions_pending:{','.join(pending)}")
+    if _exploratory_actions_only(state) and tool_results:
+        return ConvergeResult(False, NEXT_REPLAN, "exploration_needs_replan")
+
+    # 3b) Legacy turn-contract side effects (transitional).
     from app.services.turn_contract import (
         contract_requires_side_effects,
         is_turn_contract_fulfilled,

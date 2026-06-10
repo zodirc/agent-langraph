@@ -26,10 +26,12 @@ def _claim_supported(
     support_ratio: float = 0.5,
     min_token_len: int = 4,
 ) -> tuple[bool, str]:
+    # Split digit / latin / han runs into separate tokens: a mixed run like
+    # "328字符" must yield "328" so it can match evidence text "total_chars=328".
     tokens = [
         t
-        for t in re.findall(r"[\w\u4e00-\u9fff]+", claim.lower())
-        if len(t) >= min_token_len
+        for t in re.findall(r"\d+(?:\.\d+)?|[a-z_]+|[\u4e00-\u9fff]+", claim.lower())
+        if len(t) >= min_token_len or (t.isdigit() and len(t) >= 2)
     ]
     if not tokens:
         return True, "trivial"
