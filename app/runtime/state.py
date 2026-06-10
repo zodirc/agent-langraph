@@ -48,6 +48,7 @@ class AgentState(TypedDict):
     status: str
 
     plan: Optional[list[str]]
+    planned_actions: Optional[list[dict[str, Any]]]
     selected_tools: Optional[list[str]]
     skip_retrieval: Optional[bool]
     retrieval_decision: Optional[dict[str, Any]]
@@ -153,6 +154,7 @@ def create_initial_state(
             "current_node": "api",
             "status": TaskStatus.NEW.value,
             "plan": None,
+            "planned_actions": None,
             "selected_tools": None,
             "skip_retrieval": None,
             "conversation_history": None,

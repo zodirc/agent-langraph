@@ -55,7 +55,7 @@ class Action:
     source: str = "llm"  # llm | structural | explicit
 
     def __post_init__(self) -> None:
-        if self.type not in ACTION_TOOL_NAMES and self.type not in ("answer", "run_code"):
+        if self.type not in ACTION_TOOL_NAMES and self.type not in ("answer", "run_code", "run_tool"):
             raise ValueError(f"unknown action type: {self.type!r}")
 
     @property

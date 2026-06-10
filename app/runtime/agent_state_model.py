@@ -54,6 +54,7 @@ class AgentStateModel(BaseModel):
     current_node: str = "api"
     status: str = TaskStatus.NEW.value
     plan: Optional[list[str]] = None
+    planned_actions: Optional[list[dict[str, Any]]] = None
     selected_tools: Optional[list[str]] = None
     skip_retrieval: Optional[bool] = None
     retrieval_decision: Optional[dict[str, Any]] = None
