@@ -1,21 +1,21 @@
 skill_id: consistency_review
 name: Consistency Review
 version: "1.0.0"
-description: Review manuscript/outline for plot and character consistency.
+description: Review text artifacts such as outlines, chapters, and notes for consistency issues.
 summary: Consistency report with contradictions and fix suggestions.
 source_type: builtin
 status: published
 visibility: system_public
-base_domain: writing
+base_domain: document
 category: writing
-preferred_execution_mode: mission_oma
+preferred_execution_mode: single
 required_role: user
 risk_level: LOW
 enabled: true
 tags: [writing, general]
 allowed_tools: [read_text_artifact, get_runtime_info]
 planning_overlay: |
-  Skill: consistency_review. Scope: {{goal}}. Read outline and body artifacts; list contradictions by severity.
+  Skill: consistency_review. Scope: {{goal}}. Read the relevant text artifacts and list contradictions by severity.
 reasoning_overlay: |
   Format: Summary, Contradictions (location, issue), Suggested fixes.
 output_contract:

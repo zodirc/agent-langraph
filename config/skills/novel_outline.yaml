@@ -2,22 +2,22 @@ skill_id: novel_outline
 name: Novel Outline
 version: "1.0.0"
 description: Create a long-form fiction outline with acts, arcs, and chapter beats.
-summary: Outline suitable for mission-based chapter writing.
+summary: Outline generation skill with artifact-based delivery.
 source_type: builtin
 status: published
 visibility: system_public
-base_domain: writing
+base_domain: document
 category: writing
-preferred_execution_mode: mission_oma
+preferred_execution_mode: single
 required_role: user
 risk_level: LOW
 enabled: true
 tags: [writing, general]
 allowed_tools: [read_text_artifact, write_text_artifact, append_text_artifact]
 planning_overlay: |
-  Skill: novel_outline. Premise: {{goal}}. Plan outline via writing/mission; set mission when length exceeds one turn.
+  Skill: novel_outline. Premise: {{goal}}. Produce a structured outline that can be stored as a text artifact and expanded in later turns if needed.
 reasoning_overlay: |
-  Status-only summary; prose belongs in writing artifacts, not summary field.
+  Keep the summary brief. Put the actual outline content in artifacts rather than the summary field.
 output_contract:
   require_summary: true
 presentation:

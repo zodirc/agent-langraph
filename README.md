@@ -36,8 +36,8 @@ make init && make up
 
 1. [`docs/arch.md`](docs/arch.md)
    - 当前项目完整架构与流程总览
-   - 包含系统分层、主执行链路、执行模式与 ASCII 流程图
+   - 包含系统分层、统一主链路、执行模式与更细化的 ASCII 流程图
 
 2. [`docs/rag_skills.md`](docs/rag_skills.md)
-   - RAG、代码检索、Tools、MCP、Skill、上下文与记忆的详细说明
-   - 适合理解项目中几个最核心也最容易混淆的概念
+   - RAG 与 Skills 在当前项目中的完整流程说明
+   - 包含检索、证据组织、上下文注入、场景策略与协同关系的细化 ASCII 流程图
