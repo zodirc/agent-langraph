@@ -3,7 +3,10 @@ from app.services.mode_resolution import apply_mode_contract_to_state, run_mode_
 from app.services.mode_router import ModeResolution, resolve_target_mode
 
 
-def test_qa_mode_contract_blocks_writing_and_mission():
+def test_qa_mode_contract_blocks_writing_and_mission_legacy(monkeypatch):
+    import app.config.settings as settings_module
+
+    monkeypatch.setattr(settings_module.settings, "QA_MODE_TOOLS_RESIDENT", False)
     state = create_initial_state(
         task_id="mc-qa-1",
         input_payload={
@@ -22,6 +25,36 @@ def test_qa_mode_contract_blocks_writing_and_mission():
     assert (payload.get("writing_intent") or {}).get("enabled") is False
     assert updated.get("mission") is None
     assert "write_text_artifact" not in (updated.get("selected_tools") or [])
+
+
+def test_qa_mode_contract_resident_filters_engineering_keeps_artifacts():
+    state = create_initial_state(
+        task_id="mc-qa-resident-1",
+        input_payload={
+            "goal": "润色一下",
+            "route_audit": {"inferred_kind": "qa", "kind_confidence": 0.7},
+            "writing_intent": {"enabled": True, "source": "artifact_edit"},
+            "thin_execution_profile": "artifact_edit",
+        },
+    )
+    state = merge_state(
+        state,
+        selected_tools=[
+            "read_text_artifact",
+            "write_text_artifact",
+            "mkdir_path",
+            "verify_backend",
+        ],
+    )
+    res = resolve_target_mode(state)
+    updated = apply_mode_contract_to_state(state, res)
+    tools = updated.get("selected_tools") or []
+    assert "read_text_artifact" in tools
+    assert "write_text_artifact" in tools
+    assert "mkdir_path" not in tools
+    assert "verify_backend" not in tools
+    payload = updated.get("input_payload") or {}
+    assert (payload.get("route_audit") or {}).get("writing_blocked") is False
 
 
 def test_manuscript_to_engineering_isolate():

@@ -190,6 +190,56 @@ def planning_node(state: AgentState) -> AgentState:
         state = run_pre_planning_pipeline(state)
         payload = dict(state.get("input_payload") or {})
 
+        # --- Artifact edit thin path: polish/revise existing file (before QA thin) ---
+        from app.services.artifact_edit_intent import detect_artifact_edit_intent
+
+        goal = str(payload.get("goal") or payload.get("query") or "").strip()
+        if getattr(settings, "ARTIFACT_EDIT_FAST_PATH", True) and detect_artifact_edit_intent(
+            state, goal
+        ):
+            from app.services.pre_planning import artifact_edit_thin_actions
+
+            actions = artifact_edit_thin_actions(state)
+            from app.services.metrics_service import get_metrics_service
+
+            metrics = get_metrics_service()
+            if not actions:
+                metrics.inc_contract_event("artifact_edit_ambiguous_multi")
+            if actions:
+                exec_tools, tool_params, stages = _execution_transport_from_actions(actions)
+                payload["tool_params"] = {**payload.get("tool_params", {}), **tool_params}
+                payload["tool_stages"] = stages
+                payload["thin_execution_profile"] = "artifact_edit"
+                payload["writing_intent"] = {
+                    "enabled": True,
+                    "source": "artifact_edit",
+                }
+                plan = ["读取已有产物", "生成修订内容", "写回文件"]
+                report_plan_trace(
+                    plan,
+                    exec_tools,
+                    meta={
+                        "planning": "artifact_edit_thin",
+                        "target_mode": payload.get("target_mode"),
+                        "goal_preview": goal[:80],
+                    },
+                )
+                metrics.inc_contract_event("artifact_edit_fast_path")
+                metrics.inc_contract_event("artifact_edit_resolved_single")
+                return _finish_thin(
+                    state,
+                    payload=payload,
+                    plan=plan,
+                    tools=exec_tools,
+                    planned_actions=actions,
+                    audit_action="artifact_edit_thin",
+                    audit_detail={
+                        "target_mode": payload.get("target_mode"),
+                        "goal_preview": goal[:80],
+                    },
+                    pin_mode=False,
+                )
+
         # --- QA thin path: conversational QA never pays planning latency ---
         if should_skip_qa_planning_llm(state):
             goal = str(payload.get("goal") or payload.get("query") or "").strip()
@@ -357,6 +407,26 @@ def planning_node(state: AgentState) -> AgentState:
 
         # --- Map planning result → Action sequence (the core contract) ---
         actions, action_issues = _actions_from_result(result)
+        plan = normalize_planning_plan(result.get("plan", []))
+        from app.services.artifact_edit_intent import ensure_artifact_edit_write_action
+
+        actions, write_patched = ensure_artifact_edit_write_action(
+            actions,
+            plan,
+            goal=goal_for_planning,
+            task_id=str(state["task_id"]),
+        )
+        if write_patched:
+            payload["thin_execution_profile"] = (
+                str(payload.get("thin_execution_profile") or "") or "artifact_edit"
+            )
+            payload["writing_intent"] = {
+                "enabled": True,
+                "source": "artifact_edit_patch",
+            }
+            from app.services.metrics_service import get_metrics_service
+
+            get_metrics_service().inc_contract_event("artifact_edit_write_patched")
         exec_tools, action_tool_params, action_stages = _execution_transport_from_actions(
             actions
         )
@@ -396,7 +466,6 @@ def planning_node(state: AgentState) -> AgentState:
         action_stages = [[t for t in stage if t in exec_tools] for stage in action_stages]
         action_stages = [stage for stage in action_stages if stage]
 
-        plan = normalize_planning_plan(result.get("plan", []))
         if not plan and actions:
             plan = [
                 (a.rationale or a.type)[:60] for a in actions[:8]

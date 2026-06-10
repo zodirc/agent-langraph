@@ -133,6 +133,12 @@ class Settings:
         self.FAST_REASONING_ENABLED = _coerce_bool(
             performance.get("fast_reasoning_enabled", False)
         )
+        self.ARTIFACT_EDIT_FAST_PATH = _coerce_bool(
+            performance.get("artifact_edit_fast_path", True)
+        )
+        self.QA_MODE_TOOLS_RESIDENT = _coerce_bool(
+            performance.get("qa_mode_tools_resident", True)
+        )
         self.SKIP_RETRIEVAL_WHEN_NO_TOOLS = _coerce_bool(
             performance.get("skip_retrieval_when_no_tools", True)
         )

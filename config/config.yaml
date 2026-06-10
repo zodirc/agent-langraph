@@ -129,6 +129,8 @@ session:
 
 performance:
   fast_reasoning_enabled: false
+  artifact_edit_fast_path: true
+  qa_mode_tools_resident: true
   skip_retrieval_when_no_tools: true
   stream_save_every_node: false
   stream_draft_persist_enabled: true   # 流式 answer_delta 增量落库，刷新后可恢复已生成文本
@@ -327,13 +329,43 @@ mode_routing:
 
 mode_contracts:
   qa_mode:
-    allowed_tools: []
+    allowed_tools:
+      - read_text_artifact
+      - write_text_artifact
+      - append_text_artifact
+      - edit_text_artifact
+      - calculator
+      - get_runtime_info
     delivery:
       primary: reasoning_summary
       secondary: null
     execution:
       path: reasoning
-      max_steps: 2
+      max_steps: 4
+      max_repair_attempts: 0
+    verify:
+      enabled: false
+    guards:
+      forbid_routes: []
+      force_isolate_from: []
+    security:
+      shell_access: false
+      network_access: false
+      path_scope: session_root_only
+  manuscript_mode:
+    allowed_tools:
+      - read_text_artifact
+      - write_text_artifact
+      - append_text_artifact
+      - edit_text_artifact
+      - calculator
+      - get_runtime_info
+    delivery:
+      primary: reasoning_summary
+      secondary: null
+    execution:
+      path: reasoning
+      max_steps: 6
       max_repair_attempts: 0
     verify:
       enabled: false

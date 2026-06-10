@@ -13,7 +13,7 @@ from app.services.mode_router import (
     is_engineering_mode,
     resolve_target_mode,
 )
-from app.services.mode_execution import apply_qa_mode_contract
+from app.services.mode_execution import apply_manuscript_mode_contract, apply_qa_mode_contract
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
@@ -83,7 +83,22 @@ def apply_mode_contract_to_state(
 
     elif resolution.target_mode == "qa_mode":
         payload, audit, tools, state = apply_qa_mode_contract(
-            state, payload, audit, tools, intent
+            state,
+            payload,
+            audit,
+            tools,
+            intent,
+            allowed=contract.allowed_tools,
+        )
+
+    elif resolution.target_mode == "manuscript_mode":
+        payload, audit, tools, state = apply_manuscript_mode_contract(
+            state,
+            payload,
+            audit,
+            tools,
+            intent,
+            allowed=contract.allowed_tools,
         )
 
     payload["route_audit"] = audit

@@ -73,6 +73,22 @@ def test_read_loop_triggers_safe_finalize():
     assert result.reason == "read_loop"
 
 
+def test_read_loop_with_pending_artifact_save_replans():
+    reads = [
+        {"tool": "read_text_artifact", "status": "ok", "result": {"status": "ok"}}
+        for _ in range(READ_LOOP_THRESHOLD)
+    ]
+    state = _base_state(
+        tool_results=reads,
+        input_payload={"goal": "优化故事那一篇"},
+        plan=["读取故事", "润色", "保存优化后的故事"],
+    )
+    result = evaluate_convergence(state)
+    assert result.done is False
+    assert result.next == NEXT_REPLAN
+    assert result.reason == "artifact_edit_needs_write"
+
+
 def test_reads_followed_by_side_effect_is_not_a_loop():
     items = [
         {"tool": "read_text_artifact", "status": "ok", "result": {"status": "ok"}}

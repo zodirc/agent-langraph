@@ -189,10 +189,21 @@ def generate_artifact_content(
             "previous_artifact_excerpt; do NOT repeat existing text."
         )
     else:
-        task_desc = (
-            f"Write the requested content for {filename}, about {chars} characters, "
-            "directly satisfying the user's goal. No filler or meta commentary."
-        )
+        from app.services.artifact_edit_intent import is_artifact_edit_goal
+
+        if is_artifact_edit_goal(goal) and existing_excerpt:
+            task_desc = (
+                f"Revise or polish the existing document {filename} per the user's goal. "
+                f"Output the COMPLETE revised text (similar length to the original, "
+                f"about {chars} characters unless the user asked to shorten/expand). "
+                "Use previous_artifact_excerpt as the source material. "
+                "No placeholders, no meta commentary — only the final document body."
+            )
+        else:
+            task_desc = (
+                f"Write the requested content for {filename}, about {chars} characters, "
+                "directly satisfying the user's goal. No filler or meta commentary."
+            )
 
     user_payload = {
         "task_id": task_id,

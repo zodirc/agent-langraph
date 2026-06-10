@@ -103,6 +103,34 @@ def _execute_run_tool(action: Action, state: AgentState) -> dict[str, Any]:
     return {**invoked, "status": "ok", "action_type": "run_tool"}
 
 
+def _resolve_write_content(state: AgentState, params: dict[str, Any]) -> str:
+    """Fill empty write params via the same LLM draft path as tool_node."""
+    from app.services.artifact_content import generate_artifact_content, needs_generated_content
+
+    payload = state.get("input_payload") or {}
+    goal = str(
+        payload.get("goal")
+        or payload.get("query")
+        or payload.get("question")
+        or ""
+    )
+    raw = params.get("content")
+    content = "" if raw is None else str(raw).strip()
+    if not needs_generated_content(content, goal):
+        return content
+
+    filename = str(params.get("filename") or "")
+    if not filename:
+        raise ValueError("write_artifact requires params.filename")
+
+    return generate_artifact_content(
+        state=state,
+        tool_name="write_text_artifact",
+        filename=filename,
+        goal=goal,
+    )
+
+
 def _execute_artifact(action: Action, state: AgentState) -> dict[str, Any]:
     call = action.as_tool_call(str(state["task_id"]))
     assert call is not None  # artifact types always map to a registry tool name
@@ -110,6 +138,8 @@ def _execute_artifact(action: Action, state: AgentState) -> dict[str, Any]:
     if action.type in ("write_artifact", "edit_artifact"):
         # Run fence: stale/cancelled runs must not persist writes.
         params["_agent_state"] = state
+    if action.type == "write_artifact":
+        params["content"] = _resolve_write_content(state, params)
     try:
         result = _artifact_handler(action.type)(params)
     except FileNotFoundError as exc:
@@ -189,6 +219,10 @@ def execute_actions(state: AgentState) -> AgentState:
         turn_facts["edits_applied"] = edits_applied
         # Honesty contract: every attempted edit must have actually changed the file.
         turn_facts["edit_applied"] = edits_applied == edits_attempted
+
+    from app.services.artifact_write_honesty import annotate_write_honesty
+
+    turn_facts = annotate_write_honesty(turn_facts, results)
 
     return merge_state(
         current,

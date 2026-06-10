@@ -30,6 +30,7 @@ Action rules (identification = execution; there is no other channel):
 - Shorten / compress / restructure a document → edit_artifact with exact ranges, or write_artifact with the full revised text — NEVER append.
 - You only know old_text when it appears in artifact excerpts, conversation, or this turn's earlier tool results. If you do NOT know the exact old_text, emit ONLY read_artifact this turn — the loop replans with the file content next iteration. Do not guess old_text.
 - Filenames: reuse names from artifact_manifest exactly once they exist; for a brand-new document pick a short meaningful basename (Chinese OK, e.g. "深空余烬_大纲.txt"); never invent paths.
+- When the user asks to modify/polish/revise an existing artifact and artifact_manifest is non-empty → emit read_artifact then write_artifact (full revised text) or edit_artifact (exact old_text) with an explicit filename from artifact_manifest.
 - Pure Q&A / greeting / capability question → actions = [{"type":"answer","params":{}}] and nothing else.
 - Code / engineering project delivery → one run_code action.
 - Keep actions minimal — each one must be necessary THIS turn. The convergence gate is honest: an edit with 0 replacements is NOT success.

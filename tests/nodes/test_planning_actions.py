@@ -93,9 +93,10 @@ def test_planning_invalid_actions_are_skipped_not_fatal(mock_invoke, isolated_st
     )
     actions = out.get("planned_actions") or []
     assert [a["type"] for a in actions] == ["run_tool"]
-    assert out.get("selected_tools") == ["echo"]
+    # qa_mode resident allowlist does not include echo; planned action remains.
+    assert out.get("selected_tools") == []
     tool_params = (out.get("input_payload") or {}).get("tool_params") or {}
-    assert tool_params["echo"]["message"] == "hi"
+    assert "echo" not in tool_params
 
 
 @patch("app.nodes.planning_node.invoke_structured")

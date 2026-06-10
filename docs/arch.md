@@ -153,6 +153,10 @@
 
 **薄执行契约。** 当系统判断当前任务属于轻量问答、寒暄或低复杂度解释时，不必进入高成本长链路，而是走轻量规划和低预算推理通道。薄执行的重点不是写死回复模板，而是在保证真实生成的前提下缩短响应路径。
 
+薄执行**不会**因短句或 `qa_mode` 就剥夺工具能力：若用户意图是润色/修改/改写已有产物（`artifact_edit_intent`），且磁盘上存在可编辑产物，则走产物编辑薄路径或完整 LLM 规划，而非 `qa_direct` 直答。
+
+**模式契约（mode contract）与能力发放。** 场景模式（`qa_mode` / `manuscript_mode` / `engineering_mode`）主要表达**偏置**（默认交付形态、步数预算、工程隔离），不再把 `qa_mode` 等同于「零工具」。当 `performance.qa_mode_tools_resident` 为真时，`qa_mode` 按 `mode_contracts.qa_mode.allowed_tools` 过滤工具（产物读写、计算器、运行时查询等常驻），仅剥离工程类工具；写意图由规划产出的 Action 驱动，而非入口一次性封死。回滚：`qa_mode_tools_resident: false` 恢复旧版「qa 清空工具集」语义。
+
 ---
 
 ## 3. 一次任务的主流程
@@ -419,6 +423,21 @@
 
 规划阶段的输出通常是结构化的，而不是普通自然语言说明。它把用户原始目标转换为后续执行可消费的计划对象，并与当前运行状态一起形成后续上游。
 
+### 规划路径分流（预规划 → 规划节点）
+
+规划节点在调用规划 LLM 之前，先完成 **pre_planning**（意图观测、路由审计种子、`target_mode` 与模式契约），再按下列顺序短路（详见 `docs/agentic_artifact_editing_plan.md`）：
+
+| 路径 | 触发条件 | 产出 | 说明 |
+|---|---|---|---|
+| **产物编辑薄路径** | `detect_artifact_edit_intent` 且单文件可解析 | `read_artifact` → `write_artifact`；`thin_execution_profile=artifact_edit` | 跳过高成本规划 LLM；`pin_mode=False` 避免 route_audit 后工具被钉回无工具态 |
+| **QA 薄路径** | `qa_mode` 且 `goal_is_conversational_qa` 且非产物编辑 | `answer` only；`thin_execution_profile=qa_direct` | 寒暄/短闲聊，无工具 |
+| **工程薄路径** | `engineering_mode` 且规则判定可跳过规划 LLM | `run_code` + 工程工具集 | 交付类任务 |
+| **完整 LLM 规划** | 以上皆不满足（含多产物润色） | 结构化 `actions` + `planned_actions` | 规划上下文含 `artifact_manifest`；多文件时由模型具名 `filename` |
+
+改写类动词（润色、修改、重写等）在 `interaction_goal` 层不再被「≤16 字」兜底误判为闲聊；是否真的走工具路径仍要求会话内**已有磁盘产物**。
+
+多产物时从 goal 关键词（如「故事」「散文」）匹配 `artifact_manifest` 文件名，仍可走 `read_artifact → write_artifact` 薄路径。LLM 规划若 plan 含「保存/写回」但 actions 仅有 read，规划节点自动补 `write_artifact`；连续 3 次只读且尚未写回时，收敛闸触发 `artifact_edit_needs_write` 再规划写回，而非 `read_loop` 提前 finalize。
+
 ### 规划阶段的核心作用
 
 1. 将自然语言目标转为结构化任务意图
@@ -623,6 +642,7 @@
 | - 执行成功              |
 | - 失败原因              |
 | - 可复用结果            |
+| - 回合诚实性标记        |
 +------------+-----------+
              |
              v
@@ -633,6 +653,13 @@
 | - 触发修复/重规划       |
 +------------------------+
 ```
+
+**回合诚实性（turn_facts / turn_contract）。** 工具结果写入 `turn_facts` 后，推理必须以之为准，不得「口头承诺未执行的动作」：
+
+- `edit_artifact`：`replacements ≥ 1` 才记 `edit_applied`；否则收敛闸触发 replan（`contract_edit_not_applied`）。
+- `write_artifact`（覆盖写回）：若本回合先 `read` 后 `write` 且字节数未变，记 `write_verified=false`，契约校验报 `contract_write_unchanged`。
+
+推理上下文（`reasoning_context_from_state`）与规划上下文均注入 **`artifact_manifest`**（当前任务磁盘产物清单），以支持「这篇 / 刚才那个文件」类指代。
 
 ---
 
@@ -714,19 +741,31 @@
 
 当前项目不是为每个任务类型单独维护一套完全不同的用户入口，而是在统一运行时下表现出不同执行形态。
 
-## 5.1 单轮问答模式
+## 5.1 单轮问答模式（`qa_mode`）
 
-适合解释、说明、分析、知识问答类任务。
+适合解释、说明、分析、知识问答类任务；**也可在用户对已有产物提出改写时执行 read/write 工具链**（与 Cursor Agent 对齐：能力常驻、由 Action 决定是否动手）。
 
 特点：
 
 - 事件进入后先做首响确认
-- 规划驱动
-- 检索可选
-- 推理为主
-- 更强调答案质量与证据充分性
+- 纯寒暄/能力询问 → QA 薄路径（无工具、低延迟）
+- 产物改写意图 + 已有文件 → 产物编辑薄路径或 LLM 规划（有工具）
+- 检索可选；`allowed_tools` 含产物读写与轻量工具，不含工程目录操作
+- 推理为主；`turn_facts` 约束总结不得虚构未发生的写回
 
-## 5.2 工程执行模式
+配置：`config.yaml` → `mode_contracts.qa_mode`；开关 `performance.qa_mode_tools_resident` / `artifact_edit_fast_path`。
+
+## 5.2 文稿模式（`manuscript_mode`）
+
+适合长文创作、续写、大纲与正文等多轮写作任务（`mode_routing.by_intent.manuscript`）。
+
+特点：
+
+- 已定义独立 `mode_contracts.manuscript_mode`（产物读写工具 + 较高 `max_steps`）
+- 默认启用写作意图；工程工具仍被契约过滤
+- 与 `qa_mode` 共用 Action 词汇表（`read_artifact` / `write_artifact` / `edit_artifact`）
+
+## 5.3 工程执行模式
 
 适合文件修改、工程产物生成、校验与交付类任务。
 
@@ -738,7 +777,7 @@
 - 更强调产物和验证结果
 - 允许在执行后直接进入治理与输出尾段
 
-## 5.3 持续推进型任务模式
+## 5.4 持续推进型任务模式
 
 适合复杂多步骤任务、需要跨多轮补充信息的任务、以及需要暂停后继续推进的任务。
 
@@ -750,7 +789,7 @@
 - 用户仍通过统一消息入口与系统交互
 - 系统通过会话状态与增量规划推动后续轮次继续完成任务
 
-## 5.4 反应式执行模式
+## 5.5 反应式执行模式
 
 适合需要观察—动作—再观察的任务。
 

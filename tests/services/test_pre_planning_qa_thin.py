@@ -28,6 +28,27 @@ def test_qa_replan_keeps_thin_planning():
     assert should_skip_qa_planning_llm(state) is True
 
 
+def test_should_not_skip_qa_planning_for_artifact_edit(monkeypatch, tmp_path):
+    from tests.conftest import patch_task_artifact_dir
+
+    task_id = "qa-thin-artifact-edit"
+    patch_task_artifact_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "app.services.artifact_resolver.task_artifact_dir",
+        lambda tid: tmp_path / tid,
+    )
+    target = tmp_path / task_id
+    target.mkdir(parents=True)
+    (target / "draft.txt").write_text("内容", encoding="utf-8")
+
+    state = create_initial_state(
+        task_id=task_id,
+        input_payload={"goal": "润色一下"},
+    )
+    state = run_pre_planning_pipeline(state)
+    assert should_skip_qa_planning_llm(state) is False
+
+
 def test_should_not_skip_qa_planning_for_substantive_followup():
     state = create_initial_state(
         input_payload={"goal": "请详细分析项目架构并给出改进建议"},

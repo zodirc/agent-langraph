@@ -124,8 +124,10 @@ def _engineering_trace_digest(state: AgentState) -> Optional[dict[str, Any]]:
 def attach_turn_facts(state: AgentState) -> AgentState:
     """Rebuild turn_facts from state and store on state + payload."""
     from app.runtime.state import merge_state
+    from app.services.artifact_write_honesty import annotate_write_honesty
 
     facts = build_turn_facts(state)
+    facts = annotate_write_honesty(facts, list(state.get("tool_results") or []))
     payload = dict(state.get("input_payload") or {})
     payload["turn_facts"] = facts
     return merge_state(state, turn_facts=facts, input_payload=payload)
@@ -153,6 +155,9 @@ def reasoning_context_from_state(state: AgentState) -> dict[str, Any]:
     llm_history = conversation_history_for_llm(raw_history)
     outcomes_digest = build_session_outcomes_digest(state)
 
+    from app.services.artifact_resolver import build_artifact_manifest
+
+    task_id = str(state.get("task_id") or "")
     return {
         "goal": payload.get("goal"),
         "session_turn": state.get("session_turn"),
@@ -164,6 +169,7 @@ def reasoning_context_from_state(state: AgentState) -> dict[str, Any]:
         "runtime_capabilities": build_runtime_capabilities(),
         "writing_intent": payload.get("writing_intent"),
         "instructions": reasoning_instructions_for_state(state),
+        "artifact_manifest": [e.to_dict() for e in build_artifact_manifest(task_id)],
     }
 
 
@@ -185,19 +191,28 @@ def validate_reasoning_summary(
         "分多次追加",
         "本轮创作",
         "将追加",
+        "将保存",
+        "保存至",
+        "写回",
         "will write",
         "going to write",
+        "will save",
     )
     has_writing = any("writing:" in a for a in actions)
+    has_write_tool = any(
+        t.get("tool") in ("write_text_artifact", "edit_text_artifact") for t in tools
+    )
     has_append = any(
         t.get("tool") == "append_text_artifact" or t.get("mode") == "append" for t in tools
     )
 
-    if not has_writing and not has_append:
+    if not has_writing and not has_write_tool and not has_append:
         for marker in future_markers:
             if marker in text:
                 warnings.append(f"summary implies future writing but turn_facts has none: {marker}")
                 break
+        if not has_write_tool and ("已保存" in summary or "已更新" in summary or "文件已" in summary):
+            warnings.append("summary claims file saved but turn_facts has no write/edit tool")
 
     if "万字" in text or "1.2万" in text:
         total_bytes = sum(

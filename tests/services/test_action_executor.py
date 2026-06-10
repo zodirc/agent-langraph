@@ -161,3 +161,50 @@ def test_invalid_action_dict_recorded_as_error(artifact_env):
 def test_no_planned_actions_is_noop():
     state = create_initial_state(task_id="task-noop", input_payload={})
     assert execute_actions(state) is state
+
+
+def test_write_without_inline_content_generates_via_gateway(artifact_env, monkeypatch):
+    from unittest.mock import patch
+
+    from app.domain.action import Action
+
+    task_id = "task-gen-write"
+    story = artifact_env / task_id
+    story.mkdir(parents=True)
+    (story / "北平的车辙_故事.txt").write_text(
+        "顺子记得他第一次拉上自己的车那天。\n",
+        encoding="utf-8",
+    )
+
+    polished = "顺子记得他第一次拉上自己的车那天，风很冷。\n" * 3
+
+    state = create_initial_state(
+        task_id=task_id,
+        input_payload={"goal": "你重新试试润色故事"},
+    )
+    state = merge_state(
+        state,
+        planned_actions=[
+            Action(type="read_artifact", params={"filename": "北平的车辙_故事.txt"}).to_dict(),
+            Action(
+                type="write_artifact",
+                params={"filename": "北平的车辙_故事.txt"},
+                completes_turn=True,
+            ).to_dict(),
+        ],
+    )
+
+    with patch(
+        "app.services.artifact_content.generate_artifact_content",
+        return_value=polished,
+    ) as mock_gen:
+        updated = execute_actions(state)
+
+    mock_gen.assert_called_once()
+    write_result = updated["tool_results"][-1]
+    assert write_result["tool"] == "write_text_artifact"
+    assert write_result["status"] == "ok"
+    assert int(write_result["result"]["bytes"]) > 0
+    assert updated["turn_facts"]["write_verified"] is True
+    on_disk = (story / "北平的车辙_故事.txt").read_text(encoding="utf-8")
+    assert on_disk == polished

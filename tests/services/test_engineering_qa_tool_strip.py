@@ -8,7 +8,7 @@ from app.runtime.state import TaskStatus, create_initial_state, merge_state
 from app.services.mode_execution import apply_qa_mode_contract
 
 
-def test_apply_qa_mode_contract_strips_engineering_tools():
+def test_apply_qa_mode_contract_strips_engineering_tools(monkeypatch):
     state = merge_state(
         create_initial_state(
             task_id="qa-strip-1",
@@ -20,8 +20,11 @@ def test_apply_qa_mode_contract_strips_engineering_tools():
     audit: dict = {}
     intent: dict = {}
     tools = list(state.get("selected_tools") or [])
+    import app.config.settings as settings_module
+
+    monkeypatch.setattr(settings_module.settings, "QA_MODE_TOOLS_RESIDENT", False)
     payload, audit, tools, state = apply_qa_mode_contract(
-        state, payload, audit, tools, intent
+        state, payload, audit, tools, intent, allowed=frozenset()
     )
     assert tools == []
     assert payload.get("tool_params") in (None, {})

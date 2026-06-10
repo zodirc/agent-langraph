@@ -73,6 +73,10 @@ def goal_is_conversational_qa(goal: str) -> bool:
         return False
     if _ENGINEERING_SIGNAL_RE.search(text):
         return False
+    from app.services.artifact_edit_intent import _EDIT_VERB_RE
+
+    if _EDIT_VERB_RE.search(text):
+        return False
     if _QA_FOLLOWUP_RE.search(text):
         return True
     if len(text) <= 16 and not _ENGINEERING_SIGNAL_RE.search(text):

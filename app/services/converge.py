@@ -155,8 +155,13 @@ def evaluate_convergence(state: Mapping[str, Any]) -> ConvergeResult:
             return ConvergeResult(True, NEXT_PROCEED, "edit_applied")
         return ConvergeResult(False, NEXT_REPLAN, "edit_not_applied")
 
-    # 2) Read loop: repeated reads with no side effects -> stop spinning.
+    # 2) Read loop: repeated reads with no side effects -> stop spinning,
+    #    unless an artifact save edit is still owed (replan for write, not finalize).
     if _read_loop_detected(tool_results):
+        from app.services.artifact_edit_intent import artifact_edit_needs_write_after_reads
+
+        if artifact_edit_needs_write_after_reads(state, tool_results):
+            return ConvergeResult(False, NEXT_REPLAN, "artifact_edit_needs_write")
         return ConvergeResult(False, NEXT_FINALIZE, "read_loop")
 
     # 3) Planned-actions contract (unified model): declared side-effect actions

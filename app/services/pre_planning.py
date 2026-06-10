@@ -205,10 +205,36 @@ def should_skip_qa_planning_llm(state: AgentState) -> bool:
         return False
     if planning_must_run_llm(state):
         return False
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    from app.services.artifact_edit_intent import detect_artifact_edit_intent
+
+    if detect_artifact_edit_intent(state, goal):
+        return False
     from app.services.interaction_goal import goal_is_conversational_qa
 
-    goal = str(payload.get("goal") or payload.get("query") or "").strip()
     return goal_is_conversational_qa(goal)
+
+
+def artifact_edit_thin_actions(state: AgentState) -> list["Action"]:
+    """read → write for a resolvable artifact (single file or goal-disambiguated)."""
+    from app.domain.action import Action
+    from app.services.artifact_edit_intent import resolve_artifact_edit_filename
+
+    task_id = str(state.get("task_id") or "")
+    payload = state.get("input_payload") or {}
+    goal = str(payload.get("goal") or payload.get("query") or "")
+    filename = resolve_artifact_edit_filename(task_id, goal)
+    if not filename:
+        return []
+    return [
+        Action(type="read_artifact", params={"filename": filename}, source="structural"),
+        Action(
+            type="write_artifact",
+            params={"filename": filename},
+            completes_turn=True,
+            source="structural",
+        ),
+    ]
 
 
 def should_skip_planning_llm(state: AgentState) -> bool:

@@ -83,6 +83,10 @@ def build_planning_system_prompt(state: dict | None = None) -> str:
         f"  [{tool_list}]\n"
         "Artifact read/write/edit and retrieval have dedicated action types; "
         "use run_tool only for other registry tools (calculator, get_runtime_info, …).\n"
+        "When the user asks to modify/polish/revise an existing artifact and "
+        "artifact_manifest in user JSON is non-empty, emit read_artifact then "
+        "write_artifact (full revised text) or edit_artifact (exact old_text) "
+        "with an explicit filename from artifact_manifest.\n"
         "Keep planning JSON compact; plan steps are short labels, not story text or schema field names."
     )
     return resolve_system_prompt("planning", state=state, tool_guide=guide)

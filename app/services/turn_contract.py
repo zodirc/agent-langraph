@@ -168,6 +168,12 @@ def validate_turn_contract_execution(state: AgentState) -> list[str]:
     if primary == "edit_artifact" and turn_facts.get("edit_applied") is False:
         issues.append("contract_edit_not_applied")
 
+    if primary == "write_artifact":
+        from app.services.artifact_write_honesty import write_unchanged_after_read
+
+        if turn_facts.get("write_verified") is False or write_unchanged_after_read(state):
+            issues.append("contract_write_unchanged")
+
     return issues
 
 
@@ -181,7 +187,13 @@ def is_turn_contract_fulfilled(state: AgentState) -> bool:
         from app.services.metrics_service import get_metrics_service
 
         get_metrics_service().inc_contract_event("unfulfilled")
-    return len(issues) == 0
+        return False
+    turn_facts = state.get("turn_facts") or {}
+    if turn_facts.get("write_verified") is True:
+        from app.services.metrics_service import get_metrics_service
+
+        get_metrics_service().inc_contract_event("artifact_edit_write_verified")
+    return True
 
 
 def record_contract_fulfilled(state: AgentState) -> None:
