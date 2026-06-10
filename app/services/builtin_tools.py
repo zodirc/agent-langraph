@@ -15,7 +15,6 @@ from app.services.artifact_tools import (
     handle_read_text_artifact,
     handle_write_text_artifact,
 )
-from app.services.manuscript_context import analyze_manuscript_structure
 from app.services.verify_backend_tool import handle_verify_backend
 from app.services.session_fs_tools import (
     handle_append_file,
@@ -62,18 +61,6 @@ def _register_core(registry: ToolRegistry) -> None:
             handler=_summarize_handler,
         )
     )
-
-
-def _manuscript_context_handler(params: dict[str, Any]) -> dict[str, Any]:
-    task_id = str(params["task_id"])
-    body = str(params.get("body_filename") or "novel.txt")
-    outline = params.get("outline_filename")
-    analysis = analyze_manuscript_structure(
-        task_id,
-        body_path=body,
-        outline_path=str(outline) if outline else None,
-    )
-    return {"status": "ok", **analysis}
 
 
 def _summarize_handler(params: dict[str, Any]) -> dict[str, Any]:
@@ -402,27 +389,6 @@ def _register_artifact_and_utility(registry: ToolRegistry) -> None:
     )
     registry.register(
         ToolSpec(
-            name="get_manuscript_context",
-            description=(
-                "Analyze long-form manuscript: chapter boundaries, tail excerpt, "
-                "next chapter outline slice. Use before planning append_body."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "task_id": {"type": "string"},
-                    "body_filename": {"type": "string"},
-                    "outline_filename": {"type": "string"},
-                },
-            },
-            output_schema={"type": "object"},
-            required_role="user",
-            risk_level="LOW",
-            handler=_manuscript_context_handler,
-        )
-    )
-    registry.register(
-        ToolSpec(
             name="read_text_artifact",
             description="Read a previously written task artifact file",
             input_schema={
@@ -478,52 +444,5 @@ def _register_artifact_and_utility(registry: ToolRegistry) -> None:
             required_role="user",
             risk_level="LOW",
             handler=handle_edit_text_artifact,
-        )
-    )
-    from app.services.mission_tools import (
-        handle_enqueue_mission_work_item,
-        handle_set_mission_work_plan,
-    )
-
-    registry.register(
-        ToolSpec(
-            name="enqueue_mission_work_item",
-            description=(
-                "Append work items to an orchestrated mission plan "
-                "(e.g. append_chapter, edit_plot, human_gate). "
-                "Use instead of hard-coded decomposition."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "task_id": {"type": "string"},
-                    "items": {"type": "array"},
-                    "work_item": {"type": "object"},
-                },
-            },
-            output_schema={"type": "object"},
-            required_role="user",
-            risk_level="LOW",
-            handler=handle_enqueue_mission_work_item,
-        )
-    )
-    registry.register(
-        ToolSpec(
-            name="set_mission_work_plan",
-            description=(
-                "Replace the mission work plan with an explicit item list "
-                "(planning LLM decomposition)."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "task_id": {"type": "string"},
-                    "work_plan": {"type": "object"},
-                },
-            },
-            output_schema={"type": "object"},
-            required_role="user",
-            risk_level="LOW",
-            handler=handle_set_mission_work_plan,
         )
     )

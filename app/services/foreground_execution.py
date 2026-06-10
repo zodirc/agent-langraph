@@ -321,7 +321,7 @@ def apply_steer_replan_to_payload(
     constraints: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Map steer_action_hint to planning / writing_intent (no mechanical append)."""
-    from app.services.mission_steer import apply_steer_planning_gate
+    from app.services.session_fsm import apply_replan_gate as apply_steer_planning_gate
 
     hint = str(action_hint or "append").strip() or "append"
     out = merge_writing_constraints(dict(payload), constraints or [])
@@ -383,13 +383,6 @@ def enter_replanning_state(
     payload.pop("steer_action_hint", None)
     payload.pop("foreground_preempt_pending", None)
     updated = merge_state(state, interrupt_context=ctx, input_payload=payload)
-    from app.services.mission.steer_replan import supersede_pending_work_plan
-
-    updated = supersede_pending_work_plan(
-        updated,
-        reason="foreground_replan",
-        superseded_by_revision=int(payload.get("intent_revision") or 0) or None,
-    )
     updated = record_control_event(
         updated,
         "foreground_replanning",

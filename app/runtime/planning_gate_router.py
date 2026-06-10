@@ -24,11 +24,6 @@ from app.services.turn_contract import contract_requires_side_effects, contract_
 
 def route_after_incremental_planning(state: AgentState) -> str:
     """Post-incremental_planning fork: retrieval / tools / engineering / generation prep."""
-    from app.runtime.revision_loop_guard import should_block_incremental_planning
-
-    if should_block_incremental_planning(state):
-        return "context_governance"
-
     from app.services.planning_retry_signals import (
         apply_planning_replan_signal,
         can_planning_replan_again,

@@ -590,35 +590,6 @@ def governed_reasoning_context(state: AgentState | dict[str, Any]) -> dict[str, 
     return governed
 
 
-def governed_mission_observation_context(state: AgentState | dict[str, Any]) -> dict[str, Any]:
-    from app.services.observation import build_observation
-
-    payload = state.get("input_payload") or {}
-    obs = state.get("observation") or build_observation(state)
-    base = {
-        "goal": payload.get("goal"),
-        "session_turn": state.get("session_turn"),
-        "mission": state.get("mission") or payload.get("mission"),
-        "progress": state.get("progress") or {},
-        "conversation_history": conversation_history_from_state(state),
-        "observation": obs,
-        "turn_facts": obs,
-        "retrieved_knowledge": state.get("retrieved_knowledge") or [],
-        "memory_hits": (state.get("memory_hits") or [])[:5],
-        "instructions": (
-            "Answer ONLY based on observation / turn_facts for what already executed. "
-            "Do NOT claim actions absent from observation.executed_actions. "
-            "For long missions, reference progress.metrics vs mission.success_criteria."
-        ),
-    }
-    if not context_governance_enabled():
-        return base
-    governed, envelope = prepare_governed_payload(state, "reasoning", base)
-    if isinstance(state, dict):
-        mutate_state_context_trace(state, envelope)
-    return governed
-
-
 def resolve_context_panel_meta(
     state: AgentState | dict[str, Any],
     *,

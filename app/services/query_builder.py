@@ -147,10 +147,6 @@ def build_query_object(
     if must_have and must_have[0] not in standalone:
         standalone = f"{' '.join(must_have[:4])} {standalone}".strip()
 
-    from app.services.writing_knowledge import enrich_retrieval_query_for_writing
-
-    standalone = enrich_retrieval_query_for_writing(state, standalone)
-
     task_constraints = _extract_task_constraints(standalone, decision.purpose)
     task_constraints.extend(_history_constraints(state))
 

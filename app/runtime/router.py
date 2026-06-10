@@ -75,10 +75,6 @@ def route_after_tool(state: AgentState) -> str:
     Convergence judgment comes from the single gate (`evaluate_convergence`);
     legacy guards remain as fallback during the unified-core transition.
     """
-    from app.runtime.revision_loop_guard import (
-        apply_revision_loop_guard,
-        should_block_incremental_planning,
-    )
     from app.services.converge import NEXT_FINALIZE, NEXT_REPLAN, evaluate_convergence
     from app.services.planning_retry_signals import (
         apply_planning_replan_signal,
@@ -90,7 +86,6 @@ def route_after_tool(state: AgentState) -> str:
         not graph_last_tool_failed(state)
         and conv.next == NEXT_REPLAN
         and can_planning_replan_again(state)
-        and not should_block_incremental_planning(state)
     ):
         from app.services.turn_contract import validate_turn_contract_execution
 
@@ -102,8 +97,6 @@ def route_after_tool(state: AgentState) -> str:
 
         get_state_store().save(replanned)
         return "incremental_planning"
-
-    state = apply_revision_loop_guard(state)
 
     if graph_last_tool_failed(state):
         if _is_non_retryable_tool_failure(state):

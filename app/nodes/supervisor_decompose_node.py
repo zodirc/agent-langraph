@@ -21,13 +21,6 @@ def supervisor_decompose_node(state: AgentState) -> AgentState:
     Writes: subtasks, plan, execution_mode, status, audit_log
     """
     try:
-        from app.services.manuscript_supervisor_guard import reject_supervisor_for_manuscript
-
-        blocked = reject_supervisor_for_manuscript(state)
-        if blocked is not None:
-            get_state_store().save(blocked)
-            return blocked
-
         payload = state.get("input_payload", {})
         goal = str(payload.get("goal") or payload.get("query") or "")
         domains = payload.get("domains")

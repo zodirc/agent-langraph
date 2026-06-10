@@ -588,10 +588,6 @@ def _stream_artifact_live(
     stream_interrupted = False
     aborted = False
     stream_session = None
-    if isinstance(trace_state, dict):
-        from app.services.step_committer import StreamingStepSession
-
-        stream_session = StreamingStepSession.maybe_start(trace_state, user_payload, filename)
     max_duration = int(getattr(settings, "WRITING_STREAM_MAX_DURATION_SEC", 600))
     max_accumulated = int(getattr(settings, "WRITING_STREAM_MAX_ACCUMULATED_CHARS", 120_000))
 

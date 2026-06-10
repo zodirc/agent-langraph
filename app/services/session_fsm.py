@@ -41,21 +41,6 @@ def _legacy_replan_pending(state: AgentState | dict[str, Any]) -> bool:
         return True
     if payload.get("foreground_replan_dispatch"):
         return True
-    ctx = state.get("interrupt_context") or {}
-    if isinstance(ctx, dict):
-        op = ctx.get("foreground_operation") or {}
-        if isinstance(op, dict):
-            from app.services.mission_supersede import (
-                FG_STATUS_DISPATCHING,
-                FG_STATUS_QUEUED,
-                FOREGROUND_KIND_SUPERSEDE,
-            )
-
-            if op.get("kind") == FOREGROUND_KIND_SUPERSEDE and op.get("status") in (
-                FG_STATUS_QUEUED,
-                FG_STATUS_DISPATCHING,
-            ):
-                return True
     return False
 
 
@@ -82,13 +67,6 @@ def _active_graph_run(state: AgentState | dict[str, Any]) -> bool:
 
 def derive_fsm_from_legacy(state: AgentState | dict[str, Any]) -> FsmState:
     """Bootstrap fsm_state from gates + run metadata (not graph telemetry status)."""
-    payload = state.get("input_payload") or {}
-
-    from app.services.mission_steer_confirm import steer_confirmation_pending
-    from app.services.mission_steer_outcome_confirm import steer_outcome_confirmation_pending
-
-    if steer_confirmation_pending(payload) or steer_outcome_confirmation_pending(payload):
-        return FSM_WAITING_USER
     if bool(state.get("review_required")):
         return FSM_WAITING_USER
     if _legacy_replan_pending(state):
@@ -106,15 +84,27 @@ def set_fsm_state(state: AgentState, fsm_state: FsmState) -> AgentState:
     return merge_state(state, input_payload=payload, fsm_state=fsm_state)
 
 
+def apply_replan_gate(payload: dict[str, Any]) -> dict[str, Any]:
+    """Retire current contract and require a fresh planning pass."""
+    from app.services.turn_contract_lifecycle import (
+        REASON_STEER,
+        invalidate_turn_contract_payload,
+    )
+
+    out = invalidate_turn_contract_payload(dict(payload), REASON_STEER)
+    out["require_planning_after_steer"] = True
+    out["steer_planning_done"] = False
+    out.pop("skip_planning_llm", None)
+    return out
+
+
 def sync_legacy_flags_from_fsm(state: AgentState) -> AgentState:
     """Derive legacy replan telemetry from fsm_state (never the reverse)."""
     fsm = get_fsm_state(state)
     payload = dict(state.get("input_payload") or {})
     if fsm == FSM_REPLANNING:
-        from app.services.mission_steer import apply_steer_planning_gate
-
         if not payload.get("require_planning_after_steer"):
-            payload = apply_steer_planning_gate(payload)
+            payload = apply_replan_gate(payload)
     elif fsm == FSM_RUNNING:
         payload.pop("foreground_replan_dispatch", None)
     elif fsm == FSM_IDLE:
@@ -172,10 +162,8 @@ def transition_fsm(state: AgentState, fsm_state: FsmState) -> AgentState:
     updated = set_fsm_state(state, fsm_state)
     payload = dict(updated.get("input_payload") or {})
     if fsm_state == FSM_REPLANNING:
-        from app.services.mission_steer import apply_steer_planning_gate
-
         if not payload.get("require_planning_after_steer"):
-            payload = apply_steer_planning_gate(payload)
+            payload = apply_replan_gate(payload)
             updated = merge_state(updated, input_payload=payload)
     elif fsm_state == FSM_RUNNING:
         payload.pop("foreground_replan_dispatch", None)

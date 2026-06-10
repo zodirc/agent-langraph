@@ -1,4 +1,4 @@
-"""Session goal drift detection (§2.3 / §4.1) + mission rebound for revision turns."""
+"""Session goal drift detection (§2.3 / §4.1)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from app.services.conversation_context import (
     conversation_history_for_llm,
     conversation_history_from_state,
 )
-from app.services.intent_snapshot import current_intent_snapshot
 
 _TOPIC_SHIFT_RE = re.compile(
     r"(?i)\b(instead|actually|forget|switch|change topic|by the way|另外|换个|不要.*了|改成)\b"
@@ -38,28 +37,6 @@ def detect_task_drift(state: AgentState | dict[str, Any]) -> dict[str, Any]:
     current = str(
         payload.get("goal") or payload.get("query") or payload.get("question") or ""
     ).strip()
-
-    confirmed = current_intent_snapshot(state)
-    mission = state.get("mission") or payload.get("mission") or {}
-    planning_goal = str(mission.get("objective") or payload.get("goal") or "").strip()
-    if confirmed and confirmed.is_revision and planning_goal:
-        summary = ""
-        if confirmed.revision_intent:
-            from app.domain.revision_intent import RevisionIntent
-
-            rev = RevisionIntent.from_dict(confirmed.revision_intent)
-            if rev:
-                summary = rev.revision_summary
-        if summary and not goals_aligned(summary, planning_goal):
-            return {
-                "drifted": True,
-                "drift_type": "mission_rebound",
-                "confirmed_goal": summary[:200],
-                "current_planning_goal": planning_goal[:200],
-                "prior_goal": summary[:200],
-                "current_goal": current[:200],
-                "reason": "mission_rebound",
-            }
 
     history = conversation_history_for_llm(conversation_history_from_state(state))
     prior = ""

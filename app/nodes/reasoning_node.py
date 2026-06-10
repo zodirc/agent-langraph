@@ -23,11 +23,6 @@ from app.services.fact_layer import (
     attach_turn_facts,
     build_turn_facts,
 )
-from app.services.observation import (
-    attach_observation,
-    build_observation,
-    reasoning_context_from_observation,
-)
 from app.services.llm_client import (
     extract_json_with_repair,
     invoke_structured,
@@ -224,15 +219,9 @@ def reasoning_node(state: AgentState) -> AgentState:
         grounding_overlay = build_grounding_instructions(state)
         if grounding_overlay:
             reasoning_system = f"{reasoning_system}\n\n[Evidence policy]\n{grounding_overlay}"
-        state = attach_observation(state) if state.get("mission") else attach_turn_facts(state)
+        state = attach_turn_facts(state)
         payload = state.get("input_payload", {})
-        turn_facts = (
-            state.get("observation")
-            or state.get("turn_facts")
-            or build_observation(state)
-            if state.get("mission")
-            else build_turn_facts(state)
-        )
+        turn_facts = state.get("turn_facts") or build_turn_facts(state)
         force_llm = bool(payload.get("force_slow_reasoning"))
 
         from app.services.turn_contract import (
@@ -319,12 +308,9 @@ def reasoning_node(state: AgentState) -> AgentState:
                 "structured": fast.get("structured", {}),
             }
         else:
-            if state.get("mission"):
-                context = reasoning_context_from_observation(state)
-            else:
-                from app.services.fact_layer import reasoning_context_from_state
+            from app.services.fact_layer import reasoning_context_from_state
 
-                context = reasoning_context_from_state(state)
+            context = reasoning_context_from_state(state)
             report_reasoning_context(state)
             report_status_trace("reasoning", "基于 turn_facts 综合回答（只读已执行事实）…")
             reasoning_result, _raw, _working = _run_reasoning_llm_loop(
@@ -375,10 +361,11 @@ def reasoning_node(state: AgentState) -> AgentState:
             audit_log=append_audit(state, "reasoning", "budget_exceeded", {"detail": str(exc)}),
         )
     except Exception as exc:
-        from app.services.execution_control import CancelRequested, PauseRequested
-        from app.services.mission_execution import (
+        from app.services.execution_control import (
             PAUSE_USER_REQUESTED_CANCEL,
             PAUSE_USER_REQUESTED_PAUSE,
+            CancelRequested,
+            PauseRequested,
         )
 
         if isinstance(exc, PauseRequested):

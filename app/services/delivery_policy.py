@@ -7,7 +7,8 @@ from typing import Any
 
 from app.config.settings import settings
 from app.runtime.state import AgentState
-from app.services.manuscript_service import WRITING_TOOL_NAMES
+
+WRITING_TOOL_NAMES = frozenset({"write_text_artifact", "append_text_artifact"})
 
 
 def _route_audit_extensions() -> frozenset[str]:

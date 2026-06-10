@@ -26,9 +26,8 @@ def is_gate_reasoning_result(reasoning: Optional[dict[str, Any]]) -> bool:
 
 
 def steer_confirmation_pending_any(payload: dict[str, Any]) -> bool:
-    from app.services.steer_confirmation_actions import steer_confirmation_pending_any as _any
-
-    return _any(payload)
+    """Steer confirmation gates were removed with the mission runtime."""
+    return False
 
 
 def streamed_answer_revoked(state: AgentState) -> bool:
@@ -68,22 +67,10 @@ def client_final_answer(state: AgentState) -> Optional[str]:
 
 
 def build_gate_sse_fields(task_id: str, state: AgentState) -> dict[str, Any]:
-    """Confirmation fields for SSE done / resume responses."""
-    from app.services.mission_steer_confirm import steer_confirmation_pending
-    from app.services.mission_steer_outcome_confirm import steer_outcome_confirmation_pending
-    from app.services.steer_confirmation_actions import confirmation_sse_fields
-
-    payload = state.get("input_payload") or {}
-    pending_intent = steer_confirmation_pending(payload)
-    pending_outcome = steer_outcome_confirmation_pending(payload)
+    """Confirmation fields for SSE done / resume responses (gates removed)."""
     return {
-        "steer_intent_pending_confirm": pending_intent,
-        "steer_intent_confirmation": (
-            payload.get("steer_intent_confirmation") if pending_intent else None
-        ),
-        "steer_outcome_pending_confirm": pending_outcome,
-        "steer_outcome_confirmation": (
-            payload.get("steer_outcome_confirmation") if pending_outcome else None
-        ),
-        **confirmation_sse_fields(task_id, payload),
+        "steer_intent_pending_confirm": False,
+        "steer_intent_confirmation": None,
+        "steer_outcome_pending_confirm": False,
+        "steer_outcome_confirmation": None,
     }

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from app.config.settings import settings
 from app.runtime.state import AgentState
-from app.services.mission_schema import should_use_mission_runtime
 
 
 def should_reflect(state: AgentState) -> bool:
@@ -12,8 +11,6 @@ def should_reflect(state: AgentState) -> bool:
     if not getattr(settings, "REFLECTION_ENABLED", True):
         return False
     payload = state.get("input_payload") or {}
-    if should_use_mission_runtime(payload, str(state.get("execution_mode") or "")):
-        return False
     if payload.get("reflection_enabled") is False:
         return False
     max_rounds = int(getattr(settings, "REFLECTION_MAX_ROUNDS", 2))

@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from app.services.writing_contract import StreamCloseStatus, contract_meta
+StreamCloseStatus = Literal["ok", "partial", "aborted", "failed"]
 
 GenerationStatus = Literal[
     "streaming",
@@ -36,20 +36,18 @@ class WritingGenerationRecord:
     meta: dict[str, Any] = field(default_factory=dict)
 
     def to_meta(self) -> dict[str, Any]:
-        return contract_meta(
-            {
-                "generation_id": self.generation_id,
-                "generation_status": self.status,
-                "segment_index": self.segment_index,
-                "target_chars": self.target_chars,
-                "args_bytes": self.args_bytes,
-                "content_bytes_parsed": self.content_bytes_parsed,
-                "stream_duration_ms": self.stream_duration_ms,
-                "error_class": self.error_class,
-                "time_to_first_content_ms": self.time_to_first_content_ms,
-                **self.meta,
-            }
-        )
+        return {
+            "generation_id": self.generation_id,
+            "generation_status": self.status,
+            "segment_index": self.segment_index,
+            "target_chars": self.target_chars,
+            "args_bytes": self.args_bytes,
+            "content_bytes_parsed": self.content_bytes_parsed,
+            "stream_duration_ms": self.stream_duration_ms,
+            "error_class": self.error_class,
+            "time_to_first_content_ms": self.time_to_first_content_ms,
+            **self.meta,
+        }
 
     def finish(
         self,

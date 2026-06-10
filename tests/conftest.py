@@ -17,7 +17,6 @@ from app.services.tool_registry import ToolRegistry
 
 _ARTIFACT_DIR_PATCH_TARGETS = (
     "app.services.artifact_tools.task_artifact_dir",
-    "app.services.manuscript_service.task_artifact_dir",
 )
 
 
@@ -195,9 +194,6 @@ skill:
     import app.services.skill_registry as skill_registry_module
     import app.services.mcp_manager as mcp_manager_module
     import app.services.mcp_bridge as mcp_bridge_module
-    import app.services.react_entry as react_entry_module
-    import app.services.react_loop_runner as react_loop_runner_module
-    import app.services.runtime_router as runtime_router_module
 
     for mod in (
         graph_pool_module,
@@ -212,9 +208,6 @@ skill:
         skill_registry_module,
         mcp_manager_module,
         mcp_bridge_module,
-        react_entry_module,
-        react_loop_runner_module,
-        runtime_router_module,
     ):
         monkeypatch.setattr(mod, "settings", settings)
     return settings
@@ -338,14 +331,12 @@ def isolated_stores(test_settings: Settings, monkeypatch: pytest.MonkeyPatch) ->
     import app.nodes.reasoning_node as reasoning_node_module
     import app.nodes.retrieval_node as retrieval_node_module
     import app.nodes.tool_node as tool_node_module
-    import app.nodes.writing_node as writing_node_module
     import app.services.graph_runner as graph_runner_module
 
     for module in (
         planning_node_module,
         retrieval_node_module,
         tool_node_module,
-        writing_node_module,
         reasoning_node_module,
         policy_node_module,
         human_review_node_module,

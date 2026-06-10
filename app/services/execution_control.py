@@ -14,6 +14,9 @@ from app.services.task_control import (
 )
 
 # Control sub-states stored on live snapshot and interrupt_context
+PAUSE_USER_REQUESTED_PAUSE = "user_requested_pause"
+PAUSE_USER_REQUESTED_CANCEL = "user_requested_cancel"
+
 CONTROL_IDLE = "IDLE"
 CONTROL_RUNNING_STEP = "RUNNING_STEP"
 CONTROL_STREAMING_OUTPUT = "STREAMING_OUTPUT"
@@ -332,11 +335,6 @@ def finalize_control_outcome(state: AgentState, control: TaskControl | None) -> 
     Pause → MISSION_PAUSED with user_requested_pause reason.
     Cancel → CANCELLED, preserve committed artifacts.
     """
-    from app.services.mission_execution import (
-        PAUSE_USER_REQUESTED_CANCEL,
-        PAUSE_USER_REQUESTED_PAUSE,
-    )
-
     ctx = ensure_interrupt_context(state)
     paused = bool((control and control.pause_requested) or ctx.get("pause_requested"))
     cancelled = bool((control and control.cancel_requested) or ctx.get("cancel_requested"))
@@ -530,11 +528,6 @@ def handle_control_exception(state: AgentState, exc: BaseException) -> AgentStat
 
     Returns updated state or None when exc is not a control signal.
     """
-    from app.services.mission_execution import (
-        PAUSE_USER_REQUESTED_CANCEL,
-        PAUSE_USER_REQUESTED_PAUSE,
-    )
-
     if isinstance(exc, PauseRequested):
         observe_control_executed(str(state["task_id"]), snapshot_task_control(str(state["task_id"])), started_at_iso=None, event="pause")
         return merge_state(

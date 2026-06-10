@@ -581,13 +581,15 @@ def _emit_edit_diff_stream(task_id: str, filename: str, diff_preview: str) -> No
     if not diff_preview:
         return
     try:
-        from app.services.confirmation.writing_delta import stream_edit_diff_preview
+        from app.services.reasoning_trace import report_block, trace_enabled
 
-        stream_edit_diff_preview(
-            task_id=task_id,
-            filename=filename,
-            diff_preview=diff_preview,
-        )
+        if trace_enabled():
+            report_block(
+                "writing",
+                "diff",
+                f"【编辑差异】{filename}\n{diff_preview[:2000]}",
+                field="diff_preview",
+            )
     except Exception:
         logger.debug("diff_preview stream skipped", exc_info=True)
 

@@ -118,9 +118,6 @@ def run_pre_planning_pipeline(state: AgentState) -> AgentState:
     Pipeline: explicit mode → structural route audit → intent observation → mode contract.
     Writes: intent_observation, route_audit (partial), mode_resolution, target_mode.
     """
-    from app.services.revision_side_effects import maybe_invalidate_intent_on_steer_confirm
-
-    state = maybe_invalidate_intent_on_steer_confirm(state)
     from app.services.intent_observation import (
         apply_intent_observation_to_state,
         observe_intent,
@@ -187,9 +184,7 @@ def planning_must_run_llm(state: AgentState) -> bool:
     reflection = state.get("reflection_result") or {}
     if reflection.get("retry_planning"):
         return True
-    from app.services.mission_steer import steer_requires_planning
-
-    if steer_requires_planning(payload):
+    if payload.get("require_planning_after_steer") and not payload.get("steer_planning_done"):
         return True
     return int(state.get("planning_revision_count") or 0) > 0
 
@@ -207,48 +202,6 @@ def should_skip_qa_planning_llm(state: AgentState) -> bool:
 
     goal = str(payload.get("goal") or payload.get("query") or "").strip()
     return goal_is_conversational_qa(goal)
-
-
-def should_skip_edit_plot_planning_llm(state: AgentState) -> bool:
-    """Fast path: known edit_plot/review_outline steer with existing artifact → skip planning LLM."""
-    payload = state.get("input_payload") or {}
-    from app.services.mission_steer import planning_steer_replan_active
-
-    if not planning_steer_replan_active(payload, state):
-        return False
-    from app.services.artifact_resolver import outline_exists
-    from app.services.edit_scope import classify_edit_action, steer_implies_global_rewrite
-
-    steer = str(payload.get("latest_steer_message") or payload.get("goal") or "").strip()
-    if not steer or not outline_exists(state):
-        return False
-    if steer_implies_global_rewrite(steer):
-        return False
-    intervention = payload.get("mission_intervention") or {}
-    action = str(intervention.get("action") or "")
-    if action in ("edit_plot", "review_outline"):
-        return True
-    if classify_edit_action(steer, outline_exists=True) == "edit_plot":
-        return True
-    return False
-
-
-def should_skip_revision_planning_llm(state: AgentState) -> bool:
-    """Revision fast path: executable revision intent → skip planning LLM."""
-    payload = state.get("input_payload") or {}
-    if not payload.get("pre_planning_completed"):
-        return False
-    intent_obs = state.get("intent_observation") or {}
-    if not intent_obs.get("is_revision"):
-        return False
-    from app.services.writing.revision_command import revision_intent_executable
-
-    revision_intent = intent_obs.get("revision_intent") or payload.get("revision_intent")
-    if not revision_intent_executable(revision_intent):
-        return False
-    if planning_must_run_llm(state):
-        return False
-    return True
 
 
 def should_skip_planning_llm(state: AgentState) -> bool:

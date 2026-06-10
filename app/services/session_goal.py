@@ -6,8 +6,6 @@ from app.services.session.turn_policy import (
     classify_turn_intent,
     is_ephemeral_qa_goal,
     resolve_session_turn,
-    restore_archived_mission,
-    should_enter_mission_runtime,
 )
 
 __all__ = [
@@ -16,6 +14,4 @@ __all__ = [
     "classify_turn_intent",
     "is_ephemeral_qa_goal",
     "resolve_session_turn",
-    "restore_archived_mission",
-    "should_enter_mission_runtime",
 ]

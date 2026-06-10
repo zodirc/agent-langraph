@@ -154,39 +154,12 @@ def _explicit_event_type(payload: dict[str, Any]) -> Optional[EventType]:
     return None
 
 
-def _active_mission_block(state: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Resolve active mission dict from state / payload (post AgentStateModel normalization)."""
-    for source in (
-        state.get("mission"),
-        payload.get("mission"),
-        (state.get("input_payload") or {}).get("mission"),
-    ):
-        if isinstance(source, dict) and source:
-            return source
-        if source is not None and not isinstance(source, dict):
-            continue
-    return None
-
-
 def _mission_steerable(state: dict[str, Any], payload: dict[str, Any]) -> bool:
-    """True when an active mission run can be steered / superseded (not idle QA)."""
+    """True when an active run can be steered / superseded (not idle QA)."""
+    _ = payload
     from app.services.graph_run_registry import executor_active_for_state
-    from app.services.session_fsm import FSM_REPLANNING, FSM_RUNNING, get_fsm_state
 
-    if executor_active_for_state(state):
-        return True
-    mission = _active_mission_block(state, payload)
-    if mission and not payload.get("mission_suspended"):
-        ip = state.get("input_payload") or {}
-        if not ip.get("mission_suspended"):
-            return True
-    fsm = get_fsm_state(state)
-    if fsm in (FSM_RUNNING, FSM_REPLANNING) and mission:
-        return True
-    status = str(state.get("status") or "")
-    if status in ("MISSION_RUNNING", "MISSION_PAUSED") and mission:
-        return True
-    return False
+    return executor_active_for_state(state)
 
 
 def _is_follow_up_turn(state: dict[str, Any]) -> bool:
@@ -340,21 +313,6 @@ def _resume_signals(state: dict[str, Any], payload: dict[str, Any], goal: str) -
             or payload.get("resume_from_step_id")
         ):
             return False
-    if status == TaskStatus.COMPLETED.value:
-        from app.services.manuscript_service import is_continue_writing_goal
-        from app.services.session.turn_policy import _goal_requires_steer_replan
-
-        if _goal_requires_steer_replan(goal) and _active_mission_block(state, payload):
-            return False
-        decision = payload.get("turn_policy_decision")
-        if (
-            isinstance(decision, dict)
-            and decision.get("intent") == "resume_mission"
-            and _active_mission_block(state, payload)
-            and not is_continue_writing_goal(goal)
-            and not payload.get("resume")
-        ):
-            return False
     if payload.get("resume") is True:
         return True
     if payload.get("resume_checkpoint_ref") or payload.get("resume_from_step_id"):
@@ -362,26 +320,15 @@ def _resume_signals(state: dict[str, Any], payload: dict[str, Any], goal: str) -
     ctx = state.get("interrupt_context") or {}
     if isinstance(ctx, dict) and ctx.get("resume_from_checkpoint"):
         return True
-    from app.services.manuscript_service import is_continue_writing_goal
-
-    if is_continue_writing_goal(goal):
-        return True
-    decision = payload.get("turn_policy_decision")
-    if isinstance(decision, dict) and decision.get("intent") == "resume_mission":
-        return True
     return False
 
 
 def _resend_steer_redirect(state: dict[str, Any], payload: dict[str, Any], goal: str) -> bool:
-    """Resend on an active writing mission with steer correction → redirect, not new_task."""
+    """Resend with a steer correction while an executor is live → redirect, not new_task."""
     if not _is_user_resend(payload):
         return False
-    mission = _active_mission_block(state, payload)
-    if not mission or payload.get("mission_suspended"):
+    if not _mission_steerable(state, payload):
         return False
-    decision = payload.get("turn_policy_decision")
-    if isinstance(decision, dict) and decision.get("intent") == "supersede_active_mission":
-        return True
     from app.services.session.turn_policy import _goal_requires_steer_replan
 
     return bool(goal) and _goal_requires_steer_replan(goal)
@@ -516,17 +463,6 @@ def classify_user_event(
             event_id=event_id,
             source="redirect_signal",
             reason="goal replacement or supersede replan",
-        )
-
-    from app.services.revision_detection import detect_structural_revision
-
-    if goal and detect_structural_revision(state, goal):
-        return EventClassification(
-            event_type="revision",
-            event_id=event_id,
-            source="revision_signal",
-            reason="existing artifact local edit/polish",
-            confidence=0.9,
         )
 
     if _is_constraint_supplement(state, payload, goal):

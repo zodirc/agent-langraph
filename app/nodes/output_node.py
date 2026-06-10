@@ -17,15 +17,11 @@ from app.services.state_store import get_state_store
 
 
 def _resolve_output_status(state: AgentState) -> str:
-    """Keep orchestrated missions resumable when a step ends in pause, not user-facing complete."""
-    from app.services.mission_invariants import mission_output_must_pause
+    """Pause (not complete) when a side-effect contract was left unfulfilled."""
     from app.services.turn_contract import (
         contract_requires_side_effects,
         is_turn_contract_fulfilled,
     )
-
-    if mission_output_must_pause(state):
-        return TaskStatus.MISSION_PAUSED.value
 
     payload = state.get("input_payload") or {}
     if contract_requires_side_effects(payload, state=state) and not is_turn_contract_fulfilled(
@@ -35,17 +31,8 @@ def _resolve_output_status(state: AgentState) -> str:
 
     if state.get("status") == TaskStatus.REJECTED.value:
         return TaskStatus.REJECTED.value
-    control = state.get("mission_control") or {}
-    if control.get("done") and control.get("action") == "pause":
-        return TaskStatus.MISSION_PAUSED.value
     if state.get("status") == TaskStatus.MISSION_PAUSED.value:
         return TaskStatus.MISSION_PAUSED.value
-    mission = state.get("mission") or {}
-    if mission and control.get("action") == "pause":
-        from app.services.mission_orchestrator import orchestration_enabled, work_plan_completed
-
-        if orchestration_enabled(mission) and not work_plan_completed(state):
-            return TaskStatus.MISSION_PAUSED.value
     return TaskStatus.COMPLETED.value
 
 
@@ -69,21 +56,6 @@ def output_node(state: AgentState) -> AgentState:
                 str(reasoning.get("summary") or ""),
                 structured_body,
             ) or "No reasoning summary available."
-            from app.services.mission_steer import review_outline_requested
-
-            if review_outline_requested(state.get("input_payload") or {}):
-                for item in state.get("tool_results") or []:
-                    if str(item.get("tool")) != "read_text_artifact":
-                        continue
-                    raw = item.get("result") if isinstance(item.get("result"), dict) else {}
-                    content = str(raw.get("content") or "").strip()
-                    if content:
-                        fname = str(raw.get("filename") or "outline.txt")
-                        note = ""
-                        if raw.get("truncated"):
-                            note = f"\n\n（已截断展示，全文约 {raw.get('total_chars')} 字）"
-                        answer = f"── {fname} ──\n\n{content}{note}"
-                        break
             retrieved = state.get("retrieved_knowledge") or []
             if settings.RAG_CITATION_ENABLED and retrieved and "[" not in answer:
                 refs = " ".join(

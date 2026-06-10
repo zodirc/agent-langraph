@@ -132,12 +132,6 @@ def build_runtime_capabilities(
             "If mission is set, the runtime switches to the mission graph after planning in the same turn.",
         ],
     }
-    if state is not None:
-        from app.services.mission.batch_unit_capability import batch_unit_context_for_planning
-
-        batch_ctx = batch_unit_context_for_planning(state)  # type: ignore[arg-type]
-        if batch_ctx:
-            caps["batch_unit_context"] = batch_ctx
     return caps
 
 

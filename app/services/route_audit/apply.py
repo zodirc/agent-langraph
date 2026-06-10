@@ -10,7 +10,7 @@ from app.services.delivery_policy import (
     resolve_delivery_plan,
     rewrite_manuscript_filenames_for_code,
 )
-from app.services.manuscript_service import WRITING_TOOL_NAMES
+from app.services.route_audit.audit import WRITING_TOOL_NAMES
 from app.services.route_audit.config import load_route_audit_config
 
 
@@ -59,9 +59,8 @@ def apply_route_corrections(
         payload = _attach_delivery_metadata(state, audit, payload)
         return merge_state(state, input_payload=payload)
 
-    from app.services.manuscript_service import _coerce_dict
-
-    intent = dict(_coerce_dict(payload.get("writing_intent")))
+    raw_intent = payload.get("writing_intent")
+    intent = dict(raw_intent) if isinstance(raw_intent, dict) else {}
     tools = list(state.get("selected_tools") or [])
 
     if "disable_writing_intent" in corrections:

@@ -34,9 +34,9 @@ def _grant_block(payload: dict[str, Any]) -> dict[str, Any]:
 
 def steer_planning_pending(payload: dict[str, Any]) -> bool:
     """True while steer or contract invalidation still requires a planning pass."""
-    from app.services.mission_steer import steer_requires_planning
-
-    return steer_requires_planning(payload)
+    if payload.get("require_planning_after_steer") and not payload.get("steer_planning_done"):
+        return True
+    return bool(payload.get("steer_applied_at") and not payload.get("steer_planning_done"))
 
 
 def grant_scope(payload: dict[str, Any]) -> str:
@@ -76,23 +76,6 @@ def grant_may_mechanical_forward(
     scope = grant_scope(payload)
     if scope != GRANT_SCOPE_MECHANICAL_RESUME:
         return False
-    if state is not None:
-        from app.services.mission_intervention import intervention_from_payload, is_forced
-
-        intervention = intervention_from_payload(payload) or {}
-        if intervention and is_forced(intervention):
-            material = frozenset(
-                {
-                    "rewrite_outline",
-                    "reset_body",
-                    "edit_plot",
-                    "run_tools",
-                    "enqueue_work",
-                    "batch_unit_quality",
-                }
-            )
-            if str(intervention.get("action") or "") in material:
-                return False
     return True
 
 
@@ -128,28 +111,3 @@ def record_grant_steer_conflict(payload: dict[str, Any], *, reason: str) -> dict
     return out
 
 
-def classify_revision_override(payload: dict[str, Any], state: AgentState) -> bool:
-    """
-    True when revision should replace the active mission goal for this turn.
-
-    Rules:
-    1. Existing artifacts + edit verb → replaces_active_goal
-    2. no_continue / keep_structure constraints force mission freeze (handled upstream)
-    3. explicit continue signals → False
-    """
-    from app.services.revision_detection import (
-        _CONTINUE_RE,
-        detect_structural_revision,
-        has_writing_artifacts,
-    )
-
-    goal = str(payload.get("goal") or payload.get("query") or "").strip()
-    if _CONTINUE_RE.search(goal) and not detect_structural_revision(state, goal):
-        return False
-    intent_obs = state.get("intent_observation") or {}
-    if intent_obs.get("is_revision"):
-        rev = intent_obs.get("revision_intent") or {}
-        if isinstance(rev, dict) and rev.get("replaces_active_goal") is False:
-            return False
-        return True
-    return has_writing_artifacts(state) and detect_structural_revision(state, goal)

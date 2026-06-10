@@ -1,21 +1,23 @@
+"""LLM content generation for artifact write actions (unified-core WP-6).
+
+When a planned ``write_artifact`` action carries no usable inline content, the
+executor calls :func:`generate_artifact_content` to draft it via the LLM
+gateway. All manuscript/outline/mission-specific context plumbing was removed;
+generation context is the goal, conversation history, and an excerpt of the
+target file when it already exists.
+"""
+
 from __future__ import annotations
 
-import json
 import re
 from typing import Any, Optional
 
 from app.config.settings import settings
-from app.services.manuscript_context import (
-    build_writing_context,
-    is_near_duplicate_append,
-    read_body_text,
-)
+from app.services.artifact_resolver import resolve_artifact_target, sanitize_artifact_basename
 from app.services.artifact_tools import task_artifact_dir
-from app.services.artifact_resolver import resolve_artifact_target
-from app.services.manuscript_service import resolve_manuscript, sanitize_artifact_basename
 from app.services.llm_gateway import invoke_artifact_draft, stream_artifact_draft
-from app.services.writing_stream import writing_stream_enabled
 from app.services.reasoning_trace import report_block, report_status_trace, trace_enabled
+from app.services.writing_stream import writing_stream_enabled
 
 _PLACEHOLDER_MARKERS = ("占位", "请在本任务完成后", "由助手生成", "示例）", "章节规划（示例）")
 _SHORT_GOAL_RE = re.compile(r"^(续写|追加|继续|下一章|append)$", re.IGNORECASE)
@@ -28,7 +30,11 @@ class SteerPreempted(Exception):
 
 
 def _check_generation_control(task_id: str, *, step_epoch: int | None = None) -> None:
-    from app.services.execution_control import CancelRequested, PauseRequested, check_for_control_signal
+    from app.services.execution_control import (
+        CancelRequested,
+        PauseRequested,
+        check_for_control_signal,
+    )
     from app.services.foreground_execution import EpochStale, get_foreground_epoch
 
     bound_epoch = step_epoch
@@ -54,36 +60,6 @@ def _check_generation_control(task_id: str, *, step_epoch: int | None = None) ->
         raise SteerPreempted(str(exc)) from exc
     except (PauseRequested, CancelRequested) as exc:
         raise SteerPreempted(str(exc)) from exc
-    # Legacy steer queue still honored when task control registry is absent
-    try:
-        from app.services.foreground_execution import INTERRUPT_P0, classify_steer_interrupt
-        from app.services.mission_steer import (
-            has_pending_steer,
-            normalize_pending_entries,
-            pending_has_forced_action,
-            pending_steer_priority,
-        )
-        from app.services.state_store import get_state_store
-
-        stored = get_state_store().load(task_id, read_only=True) or {}
-        pending = stored.get("pending_user_message")
-        if pending_has_forced_action(pending, "pause"):
-            raise SteerPreempted("forced pause requested")
-        if has_pending_steer(str(task_id)) and pending_steer_priority(pending) > 0:
-            raise SteerPreempted("steer preempt requested")
-        for entry in normalize_pending_entries(pending):
-            tier = classify_steer_interrupt(
-                str(entry.get("message") or ""),
-                intervention=entry.get("intervention") if isinstance(entry.get("intervention"), dict) else None,
-                priority=int(entry.get("priority") or 0),
-                preempt=bool(entry.get("preempt")),
-            )
-            if tier == INTERRUPT_P0:
-                raise SteerPreempted("steer P0 preempt requested")
-    except SteerPreempted:
-        raise
-    except Exception:
-        pass
 
 
 def parse_requested_chars(goal: str) -> Optional[int]:
@@ -115,11 +91,6 @@ def needs_generated_content(content: Optional[str], goal: str) -> bool:
         return True
     if any(marker in text for marker in _PLACEHOLDER_MARKERS):
         return True
-    from app.services.manuscript_service import validate_manuscript_content
-
-    ok, _ = validate_manuscript_content(text, action="append_body", min_chars=50)
-    if not ok and len(text) < 500:
-        return True
     if goal_text and text == goal_text and (len(goal_text) < 40 or _SHORT_GOAL_RE.match(goal_text)):
         return True
     return False
@@ -141,7 +112,10 @@ def _read_artifact_snippet(
                 require_exists=False,
             ).filename
         except Exception:
-            filename = sanitize_artifact_basename(filename)
+            try:
+                filename = sanitize_artifact_basename(filename)
+            except ValueError:
+                return ""
     path = task_artifact_dir(task_id) / filename
     if not path.exists():
         return ""
@@ -171,50 +145,14 @@ def generate_artifact_content(
     chunk_index: int = 0,
     chunk_total: int = 1,
 ) -> str:
-    """Use LLM to produce outline or chapter text when planning did not supply real content."""
+    """Use the LLM gateway to draft file content when the plan supplied none."""
     task_id = str(state["task_id"])
     _check_generation_control(task_id)
     payload = state.get("input_payload") or {}
     history = payload.get("conversation_history") or state.get("conversation_history") or []
 
-    payload = state.get("input_payload") or {}
-    ms = resolve_manuscript(task_id, state.get("manuscript") if isinstance(state.get("manuscript"), dict) else None)
-    outline_name = resolve_artifact_target(
-        state,
-        action="write_outline",
-        target_hint="outline",
-        require_exists=False,
-    ).filename
-    novel_name = resolve_artifact_target(
-        state,
-        action="append_body",
-        target_hint="body",
-        require_exists=False,
-    ).filename
-    outline_excerpt = _read_artifact_snippet(task_id, outline_name, state=state)
-    intent = payload.get("writing_intent") or {}
-    action = str(intent.get("action") or "")
-    chapter_hint = intent.get("chapter_index")
-    writing_ctx = build_writing_context(
-        task_id=task_id,
-        state=state,
-        body_filename=novel_name,
-        outline_filename=outline_name,
-        chapter_index=int(chapter_hint) if chapter_hint is not None else None,
-    )
-    is_outline_step = action in ("write_outline", "rewrite_outline") or bool(
-        writing_ctx.get("writing_mode") == "outline"
-    )
-    chapter_n = writing_ctx.get("chapter_index")
-
-    mission = state.get("mission") or {}
-    sp = mission.get("step_policy") or {}
-    chars = int(
-        target_chars
-        or intent.get("target_chars")
-        or sp.get("chars_per_step")
-        or _effective_target_chars(goal, tool_name)
-    )
+    chars = int(target_chars or _effective_target_chars(goal, tool_name))
+    existing_excerpt = _read_artifact_snippet(task_id, filename, state=state)
 
     profile = str(
         payload.get("artifact_profile")
@@ -226,41 +164,34 @@ def generate_artifact_content(
 
         if is_code_filename(filename):
             profile = "source_code"
-        elif "outline" in filename.lower():
+        elif "outline" in filename.lower() or "大纲" in filename:
             profile = "outline"
         else:
-            profile = "manuscript_prose"
+            profile = "text"
 
-    if profile == "outline" or (
-        tool_name == "write_text_artifact" and "outline" in filename.lower()
-    ):
+    if profile == "outline":
         task_desc = (
-            f"Write a complete story OUTLINE in Chinese (markdown), about {chars} characters. "
-            "Include title, genre, characters, foreshadowing notes per chapter, and "
-            "chapter-by-chapter plot beats. Obey writing_context.writing_guidelines_excerpt when present "
-            "(natural Chinese prose, anti-AI phrasing, TXT layout rules). "
-            "Do NOT write full chapter prose in the outline file."
+            f"Write a complete document OUTLINE in the user's language (markdown), "
+            f"about {chars} characters, into {filename}. "
+            "Structure it with clear sections the user can expand later. "
+            "Do NOT write full prose in the outline file."
         )
     elif profile == "source_code":
         task_desc = (
             f"Write complete source code for the user's goal in file {filename}. "
-            "Preserve indentation and newlines. Output code only — no story prose, no markdown essay."
+            "Preserve indentation and newlines. Output code only — no prose, no markdown essay."
         )
-    elif tool_name == "append_text_artifact" or profile == "manuscript_prose":
+    elif tool_name == "append_text_artifact":
         part = f" (part {chunk_index + 1}/{chunk_total})" if chunk_total > 1 else ""
         task_desc = (
-            f"Write ONE new chapter in Chinese{part}: chapter_index={chapter_n}, "
-            f"title header ### 第{chapter_n}章 (or equivalent), target ~{chars} characters (±10%). "
-            "Continue immediately after novel_tail; obey outline_for_chapter and "
-            "writing_context.writing_guidelines_excerpt when present "
-            "(plot continuity with novel_tail, de-AI tone, UTF-8 TXT paragraph/dialogue format, "
-            "chapter header and footer （第N章完）); "
-            "do NOT repeat any scene from novel_tail; do NOT restart earlier chapters."
+            f"Continue the existing document {filename}{part}: write the next section, "
+            f"target ~{chars} characters (±10%). Continue immediately after "
+            "previous_artifact_excerpt; do NOT repeat existing text."
         )
     else:
         task_desc = (
-            f"Write plain text for the user's goal in {filename}, about {chars} characters. "
-            "No story prose unless the goal explicitly requests fiction."
+            f"Write the requested content for {filename}, about {chars} characters, "
+            "directly satisfying the user's goal. No filler or meta commentary."
         )
 
     user_payload = {
@@ -270,13 +201,8 @@ def generate_artifact_content(
         "tool": tool_name,
         "target_chars": chars,
         "chunk_index": chunk_index,
-        "chapter_index": chapter_n,
-        "writing_mode": "outline" if is_outline_step else "body",
-        "writing_action": action or None,
         "conversation_history": history[-12:],
-        "existing_outline": outline_excerpt or None,
-        "writing_context": writing_ctx,
-        "mission": {k: mission.get(k) for k in ("kind", "objective", "step_policy") if mission},
+        "previous_artifact_excerpt": existing_excerpt or None,
     }
     from app.services.prompt_context_gateway import (
         context_governance_enabled,
@@ -326,142 +252,3 @@ def generate_artifact_content(
     if len(encoded) > max_bytes:
         content = encoded[:max_bytes].decode("utf-8", errors="ignore")
     return content
-
-
-def _build_append_chunks(
-    state: dict[str, Any],
-    goal: str,
-    filename: str,
-) -> list[str]:
-    payload = state.get("input_payload") or {}
-    intent = payload.get("writing_intent") or {}
-    per_step = int(
-        intent.get("target_chars")
-        or (state.get("mission") or {}).get("step_policy", {}).get("chars_per_step")
-        or payload.get("chars_per_step")
-        or settings.ARTIFACT_CHUNK_CHARS
-    )
-    budget = min(per_step, settings.ARTIFACT_MAX_CHARS_PER_TURN)
-    chunk_size = settings.ARTIFACT_CHUNK_CHARS
-    max_chunks = settings.ARTIFACT_MAX_CHUNKS_PER_TURN
-    chunks: list[str] = []
-    remaining = budget
-    rolling_body = read_body_text(str(state["task_id"]), filename, state=state)
-    from app.services.stream_progress import report_progress
-
-    from app.services.mission_steer import has_pending_steer
-
-    planned_chunks = max(1, min(max_chunks, (budget + chunk_size - 1) // chunk_size))
-    while remaining > 0 and len(chunks) < max_chunks:
-        _check_generation_control(str(state["task_id"]))
-        if has_pending_steer(str(state["task_id"])):
-            report_status_trace(
-                "writing",
-                "检测到用户介入排队，分段生成提前结束（已生成段落将 append）",
-            )
-            break
-        this_size = min(remaining, chunk_size)
-        report_progress(
-            f"正在生成 {filename} 第 {len(chunks) + 1} 段（约 {this_size} 字，剩余目标 {remaining} 字）…"
-        )
-        report_status_trace(
-            "writing",
-            f"第 {len(chunks) + 1}/{planned_chunks} 段：约 {this_size} 字，剩余 {remaining} 字",
-        )
-        tail_chars = int(getattr(settings, "MANUSCRIPT_TAIL_EXCERPT_CHARS", 2400))
-        state_for_chunk = state
-        if rolling_body.strip():
-            payload_mut = dict(state.get("input_payload") or {})
-            payload_mut["previous_artifact_excerpt"] = rolling_body[-tail_chars:]
-            state_for_chunk = {**state, "input_payload": payload_mut}
-
-        piece = generate_artifact_content(
-            state=state_for_chunk,
-            tool_name="append_text_artifact",
-            filename=filename,
-            goal=goal,
-            target_chars=this_size,
-            chunk_index=len(chunks),
-            chunk_total=max_chunks,
-        )
-        if rolling_body.strip():
-            dup, ratio = is_near_duplicate_append(
-                rolling_body,
-                piece,
-                threshold=float(
-                    getattr(settings, "MANUSCRIPT_APPEND_DEDUP_RATIO", 0.82)
-                ),
-            )
-            if dup:
-                raise ValueError(
-                    f"Generated chunk duplicates recent tail (similarity={ratio:.2f}); "
-                    "aborting append loop"
-                )
-        chunks.append(piece)
-        remaining = max(0, remaining - len(piece))
-        rolling_body = (
-            f"{rolling_body.rstrip()}\n\n{piece}" if rolling_body.strip() else piece
-        )
-    return chunks
-
-
-def prefill_writing_tool_params(
-    state: dict[str, Any],
-    payload: dict[str, Any],
-    selected_tools: list[str],
-) -> dict[str, Any]:
-    """
-    Generate file content during planning so tool_execution does not block on LLM.
-    """
-    goal = str(
-        payload.get("goal") or payload.get("query") or payload.get("question") or ""
-    ).strip()
-    tool_params = dict(payload.get("tool_params") or {})
-    writing_tools = {"write_text_artifact", "append_text_artifact"}
-
-    try:
-        for tool_name in selected_tools:
-            if tool_name not in writing_tools:
-                continue
-            cfg = dict(tool_params.get(tool_name) or {})
-            action = "write_outline" if (
-                tool_name == "write_text_artifact" and ("outline" in goal.lower() or "大纲" in goal)
-            ) else "append_body"
-            filename = resolve_artifact_target(
-                state,
-                action=action,
-                requested_filename=str(cfg.get("filename") or ""),
-                target_hint="outline" if action == "write_outline" else "body",
-                require_exists=False,
-            ).filename
-            if tool_name == "append_text_artifact":
-                requested = parse_requested_chars(goal)
-                if requested and requested > settings.ARTIFACT_CHUNK_CHARS:
-                    chunks = _build_append_chunks(state, goal, filename)
-                    if chunks:
-                        payload["append_chunks"] = chunks
-                        cfg["content"] = chunks[0]
-                    continue
-            content = str(cfg.get("content") or "")
-            if needs_generated_content(content, goal):
-                from app.services.stream_progress import report_progress
-
-                report_progress(f"正在生成 {filename} 正文（约 30–120 秒）…")
-                content = generate_artifact_content(
-                    state=state,
-                    tool_name=tool_name,
-                    filename=filename,
-                    goal=goal,
-                )
-            cfg["filename"] = filename
-            cfg["content"] = content
-            tool_params[tool_name] = cfg
-    except Exception as exc:
-        payload["prefill_error"] = str(exc)
-        payload["force_slow_reasoning"] = False
-
-    if writing_tools.intersection(selected_tools) and "prefill_error" not in payload:
-        payload = {**payload, "tool_params": tool_params}
-    elif tool_params:
-        payload = {**payload, "tool_params": tool_params}
-    return payload

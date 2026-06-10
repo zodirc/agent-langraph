@@ -1,19 +1,5 @@
-"""Human-in-the-loop confirmation gates — registry, preview, block builder."""
+"""Client display helpers for turn-end SSE surfaces (unified-core WP-6).
 
-from app.services.confirmation.block_builder import (
-    build_intent_confirmation_block,
-    build_outcome_confirmation_block,
-)
-from app.services.confirmation.gate_registry import (
-    GateContext,
-    intent_gate_required,
-    outcome_gate_required,
-)
-
-__all__ = [
-    "GateContext",
-    "build_intent_confirmation_block",
-    "build_outcome_confirmation_block",
-    "intent_gate_required",
-    "outcome_gate_required",
-]
+The steer intent/outcome confirmation gates were removed with the mission
+runtime; only generic stream display helpers remain.
+"""

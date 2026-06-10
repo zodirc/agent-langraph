@@ -448,19 +448,10 @@ def _artifact_filename(
     tool_params: dict[str, Any],
     require_exists: bool = True,
 ) -> str:
-    action = action_for_tool(tool_name, state)
-    hint = ""
-    payload = state.get("input_payload") or {}
-    record = payload.get("writing_intent_record") or {}
-    if isinstance(record, dict):
-        anchor = record.get("anchor") or {}
-        if isinstance(anchor, dict):
-            hint = str(anchor.get("target_hint") or "")
     target = resolve_artifact_target(
         state,
-        action=action,
+        action=action_for_tool(tool_name, state),
         requested_filename=str(tool_params.get("filename") or ""),
-        target_hint=hint,
         require_exists=require_exists,
     )
     return target.filename

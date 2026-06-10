@@ -3,7 +3,6 @@
 同步入口 start_task（POST /tasks）：
   task_api.create_task
     → prepare_session_turn（session_turn.py：新会话或续聊）
-    → _prepare_mission_for_turn（mission 初始化或 steer 续轮）
     → apply_skill_from_payload（skill_task_attach.py）
     → init_trace_context → state_store.save
     → 租户配额（可选）→ _run_with_slot(_invoke_graph_safe)
@@ -13,36 +12,28 @@
 流式入口 stream_task（POST /tasks/stream）：
   task_api.stream_task → _stream_single 或 _stream_supervisor
   主线程 drain progress/trace/answer/thinking/writing 队列并输出 SSE
-  工作线程 _run_graph 执行 stream_graph 或 stream_mission_graph（含 handoff）
+  工作线程 _run_graph 执行 stream_graph
 
 图选择 _invoke_graph_safe(execution_mode)：
-  supervisor → run_supervisor_graph；exploration → run_exploration_graph
-  mission → run_mission_graph
+  supervisor → run_supervisor_graph
   默认 single → run_graph（app.runtime.graph）
   失败时 handle_invoke_failure 可 checkpoint_reset 后按同 mode 重试
-
-Mission steer（POST /tasks/{id}/steer）：
-  steer_mission → mission_steer.queue_steer_message
-  MISSION_PAUSED/REASONED 立即 apply_steer_message；RUNNING 写入 pending_user_message
 
 Task orchestration: sole bridge from HTTP/CLI to LangGraph.
 
 Sync start_task (POST /tasks):
-  task_api.create_task → prepare_session_turn → _prepare_mission_for_turn
+  task_api.create_task → prepare_session_turn
   → apply_skill_from_payload → init_trace_context → state_store.save
   → tenant quota → _run_with_slot(_invoke_graph_safe) → _maybe_pause_for_review
   → _finalize_turn → persist and skill_metrics
 
 Streaming stream_task (POST /tasks/stream):
   task_api.stream_task → _stream_single or _stream_supervisor; main thread drains
-  side queues to SSE; worker thread runs stream_graph or stream_mission_graph.
+  side queues to SSE; worker thread runs stream_graph.
 
 Graph selection _invoke_graph_safe(execution_mode):
-  supervisor/exploration/mission modes; default run_graph;
-  handle_invoke_failure may reset checkpoint and retry.
-
-Mission steer: steer_mission → queue_steer_message; paused applies immediately,
-running queues pending_user_message for consume_pending_steer at step boundary.
+  supervisor mode; default run_graph; handle_invoke_failure may reset
+  checkpoint and retry.
 """
 
 from __future__ import annotations
@@ -57,8 +48,6 @@ from app.config.settings import settings
 from app.nodes.human_review_node import human_review_node
 from app.runtime.graph import resume_graph, run_graph, stream_graph
 from app.runtime.supervisor_graph import run_supervisor_graph, stream_supervisor_graph
-from app.services.mission_schema import should_use_mission_runtime
-from app.services.mission_service import init_mission_state
 from app.runtime.state import AgentState, TaskStatus, create_initial_state, merge_state
 from app.services.audit_store import get_audit_store
 from app.services.metrics_service import get_metrics_service
@@ -136,88 +125,6 @@ from app.services.tenant_quota import (
     get_tenant_quota_store,
     require_quota,
 )
-
-
-def _prepare_mission_for_turn(
-    state: AgentState,
-    payload: dict[str, Any],
-    *,
-    created: bool,
-) -> AgentState:
-    """
-    Mission 轮次准备：图 invoke 前处理 mission 状态。
-
-    首轮 created=True：init_mission_state(payload)，绑定 domain pack。
-    续轮有 goal：apply_steer_message；有 execution_grant 则机械 apply_mission_step_to_payload，
-    否则清除 skip_planning_llm 等待 planning 解释 steer。
-    编排未完成且 COMPLETED 无 grant 时保持 MISSION_PAUSED。
-
-    Prepare mission state before graph invoke.
-    First turn: init_mission_state; continuation with goal uses steer and optional grant.
-    """
-    from app.runtime.state_field_access import mission_from_state
-    from app.services.mission_orchestrator import orchestration_enabled, work_plan_completed
-    from app.services.mission_steer import apply_steer_message, steer_requires_planning
-
-    if not should_use_mission_runtime(payload, str(state.get("execution_mode") or "")):
-        return state
-
-    goal = str(payload.get("goal") or "").strip()
-    if not created and mission_from_state(state):
-        payload_before = dict(state.get("input_payload") or {})
-        if goal and not steer_requires_planning(payload_before):
-            state = apply_steer_message(state, goal)
-            payload_after = dict(state.get("input_payload") or {})
-            from app.services.mission_execution import has_execution_grant
-            from app.services.mission_schema import apply_mission_step_to_payload
-
-            from app.services.intent_composer import grant_may_mechanical_forward
-
-            if has_execution_grant(payload_after) and grant_may_mechanical_forward(
-                payload_after, state=state
-            ):
-                payload_after = apply_mission_step_to_payload(state)
-                state = merge_state(
-                    state,
-                    input_payload=payload_after,
-                    status=TaskStatus.MISSION_RUNNING.value,
-                )
-            elif has_execution_grant(payload_after):
-                from app.services.intent_composer import record_grant_steer_conflict
-
-                payload_after = record_grant_steer_conflict(
-                    payload_after, reason="steer_requires_planning"
-                )
-                payload_after["skip_planning_llm"] = False
-                state = merge_state(state, input_payload=payload_after)
-            else:
-                payload_after["skip_planning_llm"] = False
-                payload_after["writing_intent"] = {
-                    "enabled": False,
-                    "source": "await_steer_planning",
-                }
-                payload_after.pop("current_work_item", None)
-                state = merge_state(
-                    state,
-                    input_payload=payload_after,
-                    status=TaskStatus.MISSION_RUNNING.value,
-                )
-        mission = mission_from_state(state) or {}
-        from app.services.mission_execution import has_execution_grant
-
-        if orchestration_enabled(mission) and not work_plan_completed(state):
-            prev = str(state.get("status") or "")
-            payload_check = state.get("input_payload") or {}
-            if prev in (
-                TaskStatus.COMPLETED.value,
-                TaskStatus.MISSION_PAUSED.value,
-            ) and not has_execution_grant(payload_check):
-                state = merge_state(state, status=TaskStatus.MISSION_PAUSED.value)
-            elif has_execution_grant(payload_check):
-                state = merge_state(state, status=TaskStatus.MISSION_RUNNING.value)
-        return merge_state(state, execution_mode="mission")
-
-    return init_mission_state(state, payload)
 
 
 def _begin_task_graph_run(state: AgentState) -> tuple[AgentState, str]:
@@ -695,15 +602,7 @@ def _emit_tool_preview(
         )
 
 
-_MISSION_QUIET_NODES = frozenset(
-    {
-        "mission_init",
-        "mission_decide",
-        "mission_act",
-        "mission_observe",
-        "mission_eval",
-    }
-)
+_MISSION_QUIET_NODES = frozenset()
 
 _FOREGROUND_RUNTIME_NODES = frozenset(
     {
@@ -772,9 +671,6 @@ def _format_delivered_event(state: AgentState) -> str:
 
 
 def _node_stream_payload(state: AgentState, node_name: str) -> dict[str, Any]:
-    manuscript = state.get("manuscript") or {}
-    writing_intent = (state.get("input_payload") or {}).get("writing_intent") or {}
-    writing_action = str(writing_intent.get("action") or "")
     errors = list(state.get("errors") or [])
     status = str(state.get("status") or "")
     payload: dict[str, Any] = {
@@ -784,19 +680,7 @@ def _node_stream_payload(state: AgentState, node_name: str) -> dict[str, Any]:
         "event_type": state.get("event_type"),
         "current_node": state.get("current_node"),
         "policy_result": state.get("policy_result"),
-        "mission_step": state.get("mission_step"),
-        "writing_action": writing_action,
-        "body_bytes": manuscript.get("body_bytes"),
-        "body_path": manuscript.get("body_path"),
-        "outline_bytes": manuscript.get("outline_bytes"),
-        "outline_path": manuscript.get("outline_path"),
     }
-    if writing_action in ("write_outline", "rewrite_outline"):
-        payload["written_path"] = manuscript.get("outline_path")
-        payload["written_bytes"] = manuscript.get("outline_bytes")
-    else:
-        payload["written_path"] = manuscript.get("body_path")
-        payload["written_bytes"] = manuscript.get("body_bytes")
     if errors and (
         status.endswith("FAILED") or status == TaskStatus.DEAD_LETTER.value
     ):
@@ -822,11 +706,10 @@ class GraphRunner:
     """
     图执行门面，封装 LangGraph 编译图的选择与同步/流式执行。
 
-    对外 API：start_task、stream_task、steer_mission、supersede_mission、prepare_resume_mission、resume_task。
+    对外 API：start_task、stream_task、pause_task、cancel_task、resume_task。
 
-    Facade over compiled LangGraph graphs: start_task, stream_task, steer_mission,
-    supersede_mission_with_input, prepare_resume_mission (checkpoint only),
-    resume_task (human review resume via resume_graph).
+    Facade over compiled LangGraph graphs: start_task, stream_task,
+    pause/cancel controls, resume_task (human review resume via resume_graph).
     """
 
     def _run_with_slot(self, runner_fn):
@@ -859,7 +742,6 @@ class GraphRunner:
             raise
 
     def _finalize_turn(self, state: AgentState) -> AgentState:
-        from app.services.mission_worker_lost import reconcile_worker_lost
         from app.services.otel_export import finalize_trace_export
         from app.services.turn_guard import can_finalize_turn
 
@@ -884,8 +766,7 @@ class GraphRunner:
         from app.services.close_turn_async import close_turn_async
 
         close_turn_async(state)
-        # Graph worker already ended (_end_task_graph_run); persist orphan MISSION_RUNNING as PAUSED.
-        return reconcile_worker_lost(state, persist=False)
+        return state
 
     def start_task(
         self,
@@ -1299,10 +1180,6 @@ class GraphRunner:
                         "task_id": latest["task_id"],
                         "plan": latest.get("plan", []),
                         "selected_tools": latest.get("selected_tools", []),
-                        "mission": (latest.get("input_payload") or {}).get("mission"),
-                        "writing_intent": (latest.get("input_payload") or {}).get(
-                            "writing_intent"
-                        ),
                     }
                     _record_ui_telemetry(msg_ctx, "ui_plan", meta=plan_payload)
                     yield _format_stream_event("plan", plan_payload)
@@ -1597,24 +1474,10 @@ class GraphRunner:
         record_skill_task_finished(latest)
         if latest.get("status") == TaskStatus.MISSION_PAUSED.value:
             from app.services.client_display import build_mission_paused_payload
-            from app.services.mission_orchestrator import mission_is_autonomous
-            from app.services.steer_confirmation_actions import confirmation_sse_fields
 
-            payload_lp = latest.get("input_payload") or {}
-            control = latest.get("mission_control") or {}
-            steer_pause = "steer" in str(control.get("reason") or "").lower()
-            autonomous = mission_is_autonomous(latest.get("mission") or {})
-            paused_body = build_mission_paused_payload(
-                latest,
-                autonomous=autonomous,
-                steer_pause=steer_pause,
-                confirmation_actions=confirmation_sse_fields(latest["task_id"], payload_lp).get(
-                    "confirmation_actions"
-                ),
-            )
+            paused_body = build_mission_paused_payload(latest)
             yield _format_stream_event("mission_paused", paused_body)
         done_payload_lp = latest.get("input_payload") or {}
-        from app.services.mission_steer import review_outline_requested
         from app.services.confirmation.stream_display import (
             build_gate_sse_fields,
             client_final_answer,
@@ -1634,7 +1497,7 @@ class GraphRunner:
             "review_required": latest.get("review_required"),
             "worker_results": latest.get("worker_results"),
             "subtasks": latest.get("subtasks"),
-            "steer_review_only": review_outline_requested(done_payload_lp),
+            "steer_review_only": False,
             **build_gate_sse_fields(latest["task_id"], latest),
         }
         if revoked:
@@ -1644,421 +1507,6 @@ class GraphRunner:
             done_body["assistant_message_id"] = msg_ctx.assistant_message_id
             done_body["last_event_seq"] = max(0, msg_ctx.next_seq - 1)
         yield _format_stream_event("done", done_body)
-
-    def steer_mission(
-        self,
-        task_id: str,
-        message: str = "",
-        *,
-        intervention: Optional[dict[str, Any]] = None,
-        confirm: bool = False,
-        priority: int = 0,
-        preempt: bool = False,
-        replace_goal: bool = False,
-    ) -> AgentState:
-        """
-        委托 mission_steer.queue_steer_message，由 API 层写 audit。
-
-        Delegates to mission_steer.queue_steer_message.
-        """
-        from app.services.mission_steer import queue_steer_message
-
-        updated = queue_steer_message(
-            task_id,
-            message,
-            intervention=intervention,
-            confirm=confirm,
-            priority=priority,
-            preempt=preempt,
-            replace_goal=replace_goal,
-        )
-        get_audit_store().append_events(task_id, updated.get("audit_log", []))
-        return updated
-
-    def prepare_resume_mission(self, task_id: str, *, confirm: bool = False) -> AgentState:
-        """
-        恢复 Mission：处理 steer 确认门、发放 execution_grant，不直接 invoke 图。
-
-        纯 checkpoint resume；纠偏重规划请走 prepare_supersede_replan / supersede stream。
-
-        Prepare resume: confirm steer gates, issue_execution_grant, MISSION_RUNNING, no graph invoke.
-        """
-        from app.services.mission_worker_lost import reconcile_worker_lost
-
-        stored = get_state_store().load(task_id)
-        if not stored:
-            raise KeyError(f"Task not found: {task_id}")
-        stored = reconcile_worker_lost(stored)
-        status = str(stored.get("status", ""))
-        if status == TaskStatus.CANCELLED.value:
-            raise ValueError(f"Task {task_id} is cancelled and cannot resume")
-        from app.services.session_fsm import (
-            FSM_IDLE,
-            FSM_WAITING_USER,
-            get_fsm_state,
-            is_fsm_replanning,
-            sync_fsm_state,
-        )
-
-        stored = sync_fsm_state(stored)
-        if is_fsm_replanning(stored):
-            return self.prepare_supersede_replan(task_id)
-
-        fsm = get_fsm_state(stored)
-        if fsm not in (FSM_IDLE, FSM_WAITING_USER) and status not in (
-            TaskStatus.MISSION_PAUSED.value,
-            TaskStatus.REASONED.value,
-        ):
-            payload = stored.get("input_payload") or {}
-            goal = str(payload.get("goal") or payload.get("latest_steer_message") or "").strip()
-            from app.services.session.turn_policy import _goal_requires_steer_replan
-
-            if (
-                status.endswith("FAILED")
-                and goal
-                and _goal_requires_steer_replan(goal)
-                and (stored.get("mission") or payload.get("mission"))
-            ):
-                return self.prepare_supersede_replan(task_id)
-            raise ValueError(f"Task {task_id} cannot resume from fsm={fsm} status={status}")
-
-        from app.services.mission_steer_confirm import (
-            confirm_steer_intent,
-            steer_confirmation_pending,
-        )
-        from app.services.mission_steer_outcome_confirm import (
-            confirm_steer_outcome,
-            steer_outcome_confirmation_pending,
-        )
-
-        payload = stored.get("input_payload") or {}
-        if steer_confirmation_pending(payload):
-            if not confirm:
-                raise ValueError(
-                    f"Task {task_id} awaits steer intent confirmation; "
-                    "POST /message/stream with {\"message\": \"\", \"confirm\": true}"
-                )
-            stored = confirm_steer_intent(stored)
-            get_state_store().save(stored)
-            payload = stored.get("input_payload") or {}
-        if steer_outcome_confirmation_pending(payload):
-            if not confirm:
-                raise ValueError(
-                    f"Task {task_id} awaits steer outcome confirmation; "
-                    "POST /message/stream with {\"message\": \"\", \"confirm\": true}"
-                )
-            stored = confirm_steer_outcome(stored)
-            get_state_store().save(stored)
-
-        from app.services.mission_execution import issue_execution_grant
-        from app.services.mission_steer import normalize_pending_entries
-
-        pending_entries = normalize_pending_entries(stored.get("pending_user_message"))
-        kept_entries: list[dict[str, Any]] = []
-        for entry in pending_entries:
-            intervention = entry.get("intervention")
-            is_forced_pause = bool(
-                isinstance(intervention, dict)
-                and str(intervention.get("action") or "") == "pause"
-                and bool(intervention.get("force"))
-            )
-            if not is_forced_pause:
-                kept_entries.append(entry)
-        pending_user_message = None
-        if kept_entries:
-            pending_user_message = {
-                "queued_at": kept_entries[0].get("queued_at"),
-                "messages": kept_entries,
-                "message": "\n\n".join(
-                    str(e.get("message") or "").strip()
-                    for e in kept_entries
-                    if e.get("message")
-                ).strip(),
-            }
-
-        base = merge_state(
-            stored,
-            status=TaskStatus.MISSION_RUNNING.value,
-            mission_control=None,
-            pending_user_message=pending_user_message,
-        )
-        resumed = issue_execution_grant(base, source="resume_api")
-        from app.services.mission_schema import apply_mission_step_to_payload
-
-        payload_after = apply_mission_step_to_payload(resumed)
-        resumed = merge_state(resumed, input_payload=payload_after)
-        from app.services.execution_control import apply_checkpoint_to_resume_state
-        from app.services.mission_supersede import (
-            FG_STATUS_RUNNING,
-            FOREGROUND_KIND_RESUME,
-            record_foreground_operation,
-        )
-
-        resumed = apply_checkpoint_to_resume_state(resumed)
-        resumed = record_foreground_operation(
-            resumed,
-            kind=FOREGROUND_KIND_RESUME,
-            status=FG_STATUS_RUNNING,
-            source="api_resume",
-        )
-        get_state_store().save(resumed)
-        return resumed
-
-    def prepare_supersede_replan(self, task_id: str) -> AgentState:
-        """Dispatch supersede replan — no execution_grant, routes to planner."""
-        from app.services.mission_worker_lost import reconcile_worker_lost
-        from app.services.mission_supersede import (
-            FG_STATUS_DISPATCHING,
-            FOREGROUND_KIND_SUPERSEDE,
-            prepare_supersede_replan_payload,
-            record_foreground_operation,
-        )
-        from app.services.session_fsm import routing_needs_replan, sync_fsm_state
-
-        stored = get_state_store().load(task_id)
-        if not stored:
-            raise KeyError(f"Task not found: {task_id}")
-        stored = reconcile_worker_lost(stored)
-        stored = sync_fsm_state(stored)
-        status = str(stored.get("status", ""))
-        if status == TaskStatus.CANCELLED.value:
-            raise ValueError(f"Task {task_id} is cancelled")
-        payload = dict(stored.get("input_payload") or {})
-        if not routing_needs_replan(stored):
-            raise ValueError(f"Task {task_id} has no pending supersede replan")
-        if status == TaskStatus.NEW.value:
-            # Completed-turn correction resets to NEW — fresh planning, not supersede.
-            prepared = merge_state(
-                stored,
-                execution_mode="single",
-                current_node="api",
-            )
-            get_state_store().save(prepared)
-            return prepared
-        if status not in (
-            TaskStatus.MISSION_PAUSED.value,
-            TaskStatus.MISSION_RUNNING.value,
-            TaskStatus.REASONED.value,
-            TaskStatus.POLICY_CHECKED.value,
-            TaskStatus.REJECTED.value,
-            TaskStatus.FAILED.value,
-        ):
-            raise ValueError(f"Task {task_id} cannot supersede from status {status}")
-
-        payload = prepare_supersede_replan_payload(payload)
-        base = merge_state(
-            stored,
-            status=TaskStatus.MISSION_RUNNING.value,
-            mission_control=None,
-            reasoning_result=None,
-            policy_result=None,
-            final_answer=None,
-            current_node="api",
-            input_payload=payload,
-        )
-        base = record_foreground_operation(
-            base,
-            kind=FOREGROUND_KIND_SUPERSEDE,
-            status=FG_STATUS_DISPATCHING,
-            source="api_supersede",
-            intent_revision=int(payload.get("intent_revision") or 0),
-        )
-        from app.services.mission_supersede import apply_supersede_dispatch_state
-
-        prepared = apply_supersede_dispatch_state(base)
-        get_state_store().save(prepared)
-        return prepared
-
-    def supersede_mission_with_input(
-        self,
-        task_id: str,
-        *,
-        message: str = "",
-        intervention: dict[str, Any] | None = None,
-        source: str = "user_message",
-    ) -> AgentState:
-        """Apply new input and run supersede replan (sync)."""
-        if message.strip() or intervention:
-            self.steer_mission(
-                task_id,
-                message,
-                intervention=intervention,
-                preempt=True,
-            )
-        prepared = self.prepare_supersede_replan(task_id)
-        prepared, run_id = _begin_task_graph_run(prepared)
-        get_state_store().save(prepared)
-        thread = graph_thread_id(prepared)
-        try:
-            final_state = self._run_with_slot(
-                lambda: self._invoke_graph_safe(prepared, thread=thread, mode="mission")
-            )
-        finally:
-            _end_task_graph_run(str(prepared["task_id"]), run_id)
-        final_state = self._finalize_turn(final_state)
-        from app.services.mission_supersede import settle_foreground_operation
-
-        final_state = settle_foreground_operation(final_state)
-        get_state_store().save(final_state)
-        get_audit_store().append_events(task_id, final_state.get("audit_log", []))
-        return final_state
-
-    def stream_supersede_mission(self, task_id: str, *, quiet: bool = False) -> Iterator[str]:
-        """SSE stream for supersede replan (optional control events → graph)."""
-        try:
-            prepared = self.prepare_supersede_replan(task_id)
-        except (KeyError, ValueError) as exc:
-            raise exc
-        payload = prepared.get("input_payload") or {}
-        if not quiet:
-            ctx = prepared.get("interrupt_context") or {}
-            op = (ctx.get("foreground_operation") or {}) if isinstance(ctx, dict) else {}
-            yield _format_stream_event(
-                "foreground_superseded",
-                {
-                    "task_id": task_id,
-                    "intent_revision": payload.get("intent_revision"),
-                    "latest_steer_message": str(payload.get("latest_steer_message") or "")[:300],
-                    "goal": str(payload.get("goal") or "")[:300],
-                    "turn_contract_primary_op": str(
-                        (payload.get("turn_contract") or {}).get("primary_op") or ""
-                    ),
-                    "supersedes_run_id": op.get("supersedes_run_id"),
-                },
-            )
-            yield _format_stream_event(
-                "replan_started",
-                {
-                    "task_id": task_id,
-                    "intent_revision": payload.get("intent_revision"),
-                    "latest_steer_message": str(payload.get("latest_steer_message") or "")[:300],
-                    "goal": str(payload.get("goal") or "")[:300],
-                    "source": "api_supersede",
-                },
-            )
-        # Steer replan must run full planning graph (not mission-step skip).
-        stream_state = merge_state(prepared, execution_mode="single")
-        get_state_store().save(stream_state)
-        yield from self._stream_single(stream_state, created=False)
-
-    def _sync_steer_message_for_stream(
-        self,
-        task_id: str,
-        message: str,
-        *,
-        replace_goal: bool = False,
-    ) -> AgentState:
-        """Ensure steer/stream uses the request message as latest_steer_message."""
-        from app.services.mission_steer import apply_steer_message
-
-        stored = get_state_store().load(task_id)
-        if not stored:
-            raise KeyError(f"Task not found: {task_id}")
-        want = str(message or "").strip()
-        if not want:
-            return stored
-        payload = dict(stored.get("input_payload") or {})
-        have = str(payload.get("latest_steer_message") or "").strip()
-        goal = str(payload.get("goal") or "").strip()
-        if have == want and (not replace_goal or goal == want):
-            return stored
-        updated = apply_steer_message(
-            stored,
-            want,
-            replace_goal=bool(replace_goal),
-            source="steer_stream_sync",
-        )
-        get_state_store().save(updated)
-        return updated
-
-    def stream_steer_mission(
-        self,
-        task_id: str,
-        message: str = "",
-        *,
-        intervention: dict[str, Any] | None = None,
-        confirm: bool = False,
-        priority: int = 0,
-        preempt: bool = False,
-        replace_goal: bool = False,
-    ) -> Iterator[str]:
-        """Steer then immediately stream supersede replan (Cursor-like single SSE)."""
-        self.steer_mission(
-            task_id,
-            message,
-            intervention=intervention,
-            confirm=confirm,
-            priority=int(priority or 0),
-            preempt=bool(preempt),
-            replace_goal=bool(replace_goal),
-        )
-        from app.services.mission_steer import consume_pending_steer, pending_steer_is_set
-        from app.services.session_fsm import routing_needs_replan, sync_fsm_state
-
-        stored = self._sync_steer_message_for_stream(
-            task_id,
-            message,
-            replace_goal=bool(replace_goal),
-        )
-        stored = sync_fsm_state(stored)
-        if pending_steer_is_set(stored.get("pending_user_message")):
-            if routing_needs_replan(stored):
-                stored = consume_pending_steer(stored)
-                get_state_store().save(stored)
-                stored = self._sync_steer_message_for_stream(
-                    task_id,
-                    message,
-                    replace_goal=bool(replace_goal),
-                )
-                stored = sync_fsm_state(stored)
-            else:
-                yield _format_stream_event(
-                    "steer_queued",
-                    {"task_id": task_id, "status": str(stored.get("status") or "")},
-                )
-                return
-        if routing_needs_replan(stored):
-            if str(stored.get("status") or "") == TaskStatus.NEW.value:
-                stream_state = merge_state(stored, execution_mode="single")
-                get_state_store().save(stream_state)
-                yield from self._stream_single(stream_state, created=False)
-                return
-            yield from self.stream_supersede_mission(task_id, quiet=False)
-            return
-        yield _format_stream_event(
-            "steer_applied",
-            {"task_id": task_id, "status": str(stored.get("status") or "")},
-        )
-
-    def resume_mission(self, task_id: str, *, confirm: bool = False) -> AgentState:
-        """Continue an orchestrated mission from MISSION_PAUSED (one or more steps)."""
-        resumed = self.prepare_resume_mission(task_id, confirm=confirm)
-        resumed, run_id = _begin_task_graph_run(resumed)
-        get_state_store().save(resumed)
-        thread = graph_thread_id(resumed)
-        try:
-            final_state = self._run_with_slot(
-                lambda: self._invoke_graph_safe(resumed, thread=thread, mode="mission")
-            )
-        finally:
-            _end_task_graph_run(str(resumed["task_id"]), run_id)
-        final_state = self._finalize_turn(final_state)
-        get_state_store().save(final_state)
-        get_audit_store().append_events(task_id, final_state.get("audit_log", []))
-        return final_state
-
-    def stream_resume_mission(self, task_id: str, *, confirm: bool = False) -> Iterator[str]:
-        """SSE stream for mission resume (same events as /tasks/stream)."""
-        from app.services.session_fsm import FSM_REPLANNING, get_fsm_state, sync_fsm_state
-
-        stored = get_state_store().load(task_id)
-        if stored:
-            stored = sync_fsm_state(stored)
-            if get_fsm_state(stored) == FSM_REPLANNING:
-                yield from self.stream_supersede_mission(task_id, quiet=False)
-                return
-        resumed = self.prepare_resume_mission(task_id, confirm=confirm)
-        yield from self._stream_single(resumed, created=False)
 
     def _apply_control_request(
         self,

@@ -12,9 +12,9 @@ from app.services.conversation_context import (
     conversation_history_for_llm,
     conversation_history_from_state,
 )
-from app.services.manuscript_service import WRITING_TOOL_NAMES, resolve_manuscript
-from app.services.mission_schema import should_use_mission_runtime
 from app.services.route_audit.config import RouteAuditConfig, load_route_audit_config
+
+WRITING_TOOL_NAMES = frozenset({"write_text_artifact", "append_text_artifact"})
 
 
 def _collect_inference_text(state: AgentState | dict[str, Any]) -> str:
@@ -43,16 +43,20 @@ def collect_structural_signals(
     cfg = cfg or load_route_audit_config()
     payload = state.get("input_payload") or {}
     intent = payload.get("writing_intent") or {}
-    mission = payload.get("mission") or state.get("mission") or {}
     tools = list(state.get("selected_tools") or [])
     tool_params = payload.get("tool_params") or {}
 
     task_id = str(state.get("task_id") or "")
-    ms = resolve_manuscript(task_id, state.get("manuscript")) if task_id else None
-    has_body = bool(ms and ms.body_path and (ms.body_bytes or 0) > 0)
+    has_body = False
+    body_name = ""
+    if task_id:
+        from app.services.artifact_resolver import build_artifact_manifest
 
-    default_body = str(getattr(settings, "MANUSCRIPT_DEFAULT_BODY", "novel.txt")).lower()
-    body_name = (ms.body_path or default_body).lower() if ms else default_body
+        entries = build_artifact_manifest(task_id)
+        prose = [e for e in entries if e.filename.lower().endswith((".txt", ".md")) and e.bytes > 0]
+        has_body = bool(prose)
+        if prose:
+            body_name = prose[0].filename.lower()
 
     outcomes = list(payload.get("session_outcomes") or [])
     recent_rejected = any(
@@ -69,10 +73,8 @@ def collect_structural_signals(
 
     return {
         "writing_intent_enabled": bool(intent.get("enabled")),
-        "mission_writing": str(mission.get("kind") or "").lower() == "writing",
-        "mission_runtime": should_use_mission_runtime(
-            payload, str(state.get("execution_mode") or "")
-        ),
+        "mission_writing": False,
+        "mission_runtime": False,
         "writing_tools_selected": any(t in WRITING_TOOL_NAMES for t in tools),
         "manuscript_body_exists": has_body,
         "manuscript_default_body": body_name in cfg.manuscript_body_names,

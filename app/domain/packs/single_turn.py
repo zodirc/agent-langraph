@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from app.domain.mission import MissionBudget, SuccessCriteria
 from app.domain.packs.base import DomainPack
 from app.runtime.state import AgentState
 
@@ -25,15 +24,13 @@ class SingleTurnPack(DomainPack):
             "id": state["task_id"],
             "kind": "single_turn",
             "objective": block.get("objective") or goal,
-            "success_criteria": SuccessCriteria(
-                type="steps_done", target=1
-            ).to_dict(),
+            "success_criteria": {"type": "steps_done", "target": 1},
             "constraints": dict(block.get("constraints") or {}),
             "execution_mode": block.get("execution_mode", "interactive"),
-            "budget": MissionBudget(
-                max_steps=int(block.get("max_steps") or 1),
-                max_wall_sec=int(block.get("max_wall_sec") or 600),
-            ).to_dict(),
+            "budget": {
+                "max_steps": int(block.get("max_steps") or 1),
+                "max_wall_sec": int(block.get("max_wall_sec") or 600),
+            },
         }
 
     def collect_metrics(

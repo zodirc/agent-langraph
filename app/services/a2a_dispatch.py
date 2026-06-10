@@ -97,43 +97,6 @@ def _dispatch_external(message: AgentMessage, capability: str) -> AgentMessage |
 def dispatch_message(message: AgentMessage, *, parent_task_id: str, user_id: str) -> AgentMessage:
     """Execute an AgentMessage and return a result envelope."""
     capability = message.capability.lower().strip()
-    ctx = message.payload.get("context") if isinstance(message.payload.get("context"), dict) else {}
-    if ctx.get("manuscript_paths") and ctx.get("parent_task_id"):
-        from app.services.state_store import get_state_store
-        from app.services.mission_oma.oma_a2a import dispatch_oma_manuscript_message
-
-        parent = get_state_store().load(str(ctx.get("parent_task_id") or parent_task_id), read_only=True)
-        if parent and str((parent.get("mission") or {}).get("kind", "")).lower() == "writing":
-            return dispatch_oma_manuscript_message(
-                message,
-                parent_state=parent,
-                user_id=user_id,
-            )
-    if capability in ("review_chapter", "polish_chapter", "write_chapter") and ctx.get("chapter_index") is not None:
-        from app.services.state_store import get_state_store
-        from app.services.mission_oma.oma_a2a import dispatch_oma_manuscript_message
-
-        parent = get_state_store().load(parent_task_id, read_only=True)
-        if parent and str((parent.get("mission") or {}).get("kind", "")).lower() == "writing":
-            if not ctx.get("manuscript_paths"):
-                from app.services.manuscript_service import resolve_manuscript
-
-                ms = resolve_manuscript(parent_task_id, parent.get("manuscript"))
-                ctx = {
-                    **ctx,
-                    "manuscript_paths": {
-                        "body_path": ms.body_path,
-                        "outline_path": ms.outline_path,
-                        "task_id": parent_task_id,
-                    },
-                    "parent_task_id": parent_task_id,
-                }
-                message.payload["context"] = ctx
-            return dispatch_oma_manuscript_message(
-                message,
-                parent_state=parent,
-                user_id=user_id,
-            )
     external = _dispatch_external(message, capability)
     if external is not None:
         return external

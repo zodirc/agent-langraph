@@ -528,22 +528,10 @@ def get_task_state_debug(
 
     Returns store (DB), live (in-process stream), and merged views when available.
     """
-    from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
-
     store_state = get_state_store().load(task_id, read_only=True)
     live_entry = get_live(task_id)
     if not store_state and not live_entry:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
-    if store_state:
-        store_state = enrich_agent_state_manuscript(store_state)
-    if live_entry is not None:
-        from app.services.live_task_state import LiveTaskEntry
-
-        live_entry = LiveTaskEntry(
-            state=enrich_agent_state_manuscript(live_entry.state),
-            updated_at=live_entry.updated_at,
-            running=live_entry.running,
-        )
     return build_task_state_debug_response(
         task_id=task_id,
         store_state=store_state,
@@ -558,13 +546,11 @@ def get_task_session_usage(
     _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> dict[str, Any]:
     """Provider-reported token usage for chat panel (no heuristic estimates)."""
-    from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
     from app.services.prompt_context_gateway import resolve_context_panel_meta
 
     state = get_state_store().load(task_id, read_only=True)
     if not state:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
-    state = enrich_agent_state_manuscript(state)
     return {
         "task_id": task_id,
         "session": resolve_context_panel_meta(state),
@@ -596,7 +582,6 @@ def get_task_context_composition(
 
     Builds a fresh envelope from current store+live state without invoking the LLM.
     """
-    from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
     from app.services.prompt_context_gateway import build_prompt_composition_for_state
     from app.services.state_debug_view import build_merged_debug_state
 
@@ -604,14 +589,11 @@ def get_task_context_composition(
     live_entry = get_live(task_id)
     if not store_state and not live_entry:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
-    if store_state:
-        store_state = enrich_agent_state_manuscript(store_state)
     if live_entry is not None:
-        live_state = enrich_agent_state_manuscript(live_entry.state)
         state = (
-            build_merged_debug_state(store_state, live_state)
+            build_merged_debug_state(store_state, live_entry.state)
             if store_state
-            else live_state
+            else live_entry.state
         )
     else:
         state = store_state
@@ -689,13 +671,11 @@ def post_task_context_compress(
     """
     Policy-constrained manual context compress (ADR §1.1 #6).
     """
-    from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
     from app.services.prompt_context_gateway import manual_compress_context
 
     state = get_state_store().load(task_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
-    state = enrich_agent_state_manuscript(state)
     updated, envelope = manual_compress_context(
         state,
         scope=body.scope,
@@ -725,12 +705,8 @@ def get_task_status(
     task_id: str,
     _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> TaskStatusResponse:
-    from app.services.manuscript_checkpoint import enrich_agent_state_manuscript
-
     from app.services.graph_run_registry import executor_active_for_state
     from app.services.live_task_state import get_live
-    from app.services.mission_steer import pending_steer_is_set
-    from app.services.mission_worker_lost import reconcile_worker_lost
     from app.services.session_fsm import get_fsm_state, session_mode, sync_fsm_state
     from app.services.state_debug_view import build_merged_debug_state
     from app.services.streaming_draft import resolve_streaming_draft, resolve_thinking_text_for_restore
@@ -738,14 +714,12 @@ def get_task_status(
     state = get_state_store().load(task_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
-    state = reconcile_worker_lost(state)
     state = sync_fsm_state(state)
     live_entry = get_live(task_id)
     if live_entry is not None:
         state = build_merged_debug_state(state, live_entry.state)
     fsm = get_fsm_state(state)
     mode = session_mode(state)
-    state = enrich_agent_state_manuscript(state)
     history = [
         NodeHistoryEntry(
             node=str(item.get("node", "")),
@@ -756,10 +730,6 @@ def get_task_status(
         for item in (state.get("node_history") or [])
     ]
     display_node = str(state.get("current_node") or "")
-    if display_node == "mission_act" and str(state.get("status", "")) == "MISSION_RUNNING":
-        manuscript = state.get("manuscript") or {}
-        if manuscript.get("body_path"):
-            display_node = "writing"
     mission_control = state.get("mission_control") if isinstance(state.get("mission_control"), dict) else {}
     payload = state.get("input_payload") or {}
     ctx = state.get("interrupt_context") or {}
@@ -779,7 +749,10 @@ def get_task_status(
         review_requested_at=state.get("review_requested_at"),
         executor_active=executor_active_for_state(state),
         pause_reason=str(mission_control.get("pause_reason") or "") or None,
-        pending_steer_queued=pending_steer_is_set(state.get("pending_user_message")),
+        pending_steer_queued=bool(
+            isinstance(state.get("pending_user_message"), dict)
+            and (state.get("pending_user_message") or {}).get("messages")
+        ),
         foreground_operation=dict(fg_op) if isinstance(fg_op, dict) else None,
         latest_steer_message=latest_steer,
         intent_revision=int(payload.get("intent_revision") or 0) or None,

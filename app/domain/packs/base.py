@@ -32,18 +32,16 @@ class DomainPack:
         mission_block: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Build mission dict from user payload. Override per domain."""
-        from app.domain.mission import MissionBudget, SuccessCriteria
-
         block = mission_block or {}
         goal = str(payload.get("goal") or block.get("objective") or "").strip()
         return {
             "id": state["task_id"],
             "kind": self.name,
             "objective": block.get("objective") or goal,
-            "success_criteria": SuccessCriteria(type="steps_done", target=1).to_dict(),
+            "success_criteria": {"type": "steps_done", "target": 1},
             "constraints": dict(block.get("constraints") or {}),
             "execution_mode": block.get("execution_mode", self.default_execution_mode),
-            "budget": MissionBudget(max_steps=self.default_max_steps).to_dict(),
+            "budget": {"max_steps": self.default_max_steps},
         }
 
     def collect_metrics(
@@ -102,15 +100,7 @@ class DomainPack:
 
         progress = state.get("progress") or {}
         metrics = progress.get("metrics") or {}
-        payload = state.get("input_payload") or {}
-        from app.services.mission_intervention import intervention_from_payload, is_forced
-
-        intervention = intervention_from_payload(payload)
         forced = None
-        if intervention:
-            forced = str(intervention.get("action") or "") if is_forced(intervention) else str(
-                intervention.get("action") or ""
-            ) or None
         target = int((mission.get("success_criteria") or {}).get("target") or 0)
         failure_count = int(state.get("retry_count") or 0) + len(state.get("errors") or [])
         return TaskSnapshot(

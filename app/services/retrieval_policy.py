@@ -110,7 +110,7 @@ def restrict_memory_to_current_session(state: AgentState | dict) -> bool:
         return False
     payload = state.get("input_payload") or {}
     goal = str(payload.get("goal") or payload.get("query") or payload.get("question") or "")
-    from app.services.manuscript_service import is_continue_writing_goal
+    from app.services.session.turn_policy import is_continue_writing_goal
 
     if is_continue_writing_goal(goal):
         return False

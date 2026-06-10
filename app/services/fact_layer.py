@@ -145,11 +145,7 @@ def _engineering_trace_digest(state: AgentState) -> Optional[dict[str, Any]]:
 
 
 def attach_turn_facts(state: AgentState) -> AgentState:
-    """Backward-compatible alias; delegates to observation layer when possible."""
-    from app.services.observation import attach_observation
-
-    if state.get("mission"):
-        return attach_observation(state)
+    """Rebuild turn_facts from state and store on state + payload."""
     from app.runtime.state import merge_state
 
     facts = build_turn_facts(state)

@@ -6,11 +6,14 @@ from typing import Any
 
 from app.config.settings import settings
 from app.runtime.state import AgentState
-from app.services.manuscript_service import WRITING_TOOL_NAMES, resolve_manuscript
-from app.services.mission_schema import should_use_mission_runtime
 from app.services.route_audit.config import RouteAuditConfig, load_route_audit_config
-from app.services.manuscript_service import _coerce_dict
 from app.services.route_audit.inference import infer_task_kind
+
+WRITING_TOOL_NAMES = frozenset({"write_text_artifact", "append_text_artifact"})
+
+
+def _coerce_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def is_code_filename(name: str, cfg: RouteAuditConfig | None = None) -> bool:
@@ -29,21 +32,13 @@ def detect_planned_route(
     if str(payload.get("target_mode") or "") == "engineering_mode":
         return "engineering_bounded"
     intent = _coerce_dict(payload.get("writing_intent"))
-    mission = _coerce_dict(payload.get("mission") or state.get("mission"))
     tools = list(state.get("selected_tools") or [])
-
-    if should_use_mission_runtime(payload, str(state.get("execution_mode") or "")):
-        if str(mission.get("kind") or "").lower() == "writing":
-            return "mission_writing"
 
     if intent.get("enabled"):
         action = str(intent.get("action") or "")
         if action == "write_outline":
             return "writing_outline"
-        task_id = str(state.get("task_id") or "")
-        ms = resolve_manuscript(task_id, state.get("manuscript")) if task_id else None
-        default_body = str(getattr(settings, "MANUSCRIPT_DEFAULT_BODY", "novel.txt"))
-        body = (ms.body_path if ms else None) or default_body
+        body = ""
         tool_params = payload.get("tool_params") or {}
         param_blob = " ".join(str(k) + " " + str(v) for k, v in tool_params.items())
         wt_params = tool_params.get("write_text_artifact")

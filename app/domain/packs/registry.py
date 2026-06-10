@@ -8,11 +8,9 @@ from app.domain.packs.base import DomainPack
 from app.domain.packs.code import CODE_PACK
 from app.domain.packs.document import DOCUMENT_PACK
 from app.domain.packs.single_turn import SINGLE_TURN_PACK
-from app.domain.packs.writing import WRITING_PACK
 
 _PACKS: dict[str, DomainPack] = {
     SINGLE_TURN_PACK.name: SINGLE_TURN_PACK,
-    WRITING_PACK.name: WRITING_PACK,
     DOCUMENT_PACK.name: DOCUMENT_PACK,
     CODE_PACK.name: CODE_PACK,
     ANALYSIS_PACK.name: ANALYSIS_PACK,
