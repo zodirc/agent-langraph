@@ -22,6 +22,18 @@ from app.services.session_fs_tools import handle_mkdir_path, handle_read_file, h
 
 logger = logging.getLogger(__name__)
 
+
+def _engineering_control_checkpoint(task_id: str, phase: str) -> None:
+    """Honor pause/cancel between engineering_bounded steps."""
+    from app.services.execution_control import check_for_control_signal
+
+    check_for_control_signal(
+        str(task_id),
+        phase=phase,
+        raise_on_pause=True,
+        raise_on_cancel=True,
+    )
+
 _NON_RETRYABLE_VERIFY_ISSUES = frozenset(
     {
         "no_backend_for_intent",
@@ -481,6 +493,7 @@ def run_engineering_bounded(state: AgentState) -> AgentState:
         or "code"
     )
     task_id = str(state["task_id"])
+    _engineering_control_checkpoint(task_id, "engineering_entry")
     contract = get_mode_contract("engineering_mode")
     max_repairs = max(0, int(contract.execution.max_repair_attempts if contract else 3))
     max_steps = max(3, int(contract.execution.max_steps if contract else 6))
@@ -533,9 +546,11 @@ def run_engineering_bounded(state: AgentState) -> AgentState:
             issues=["verify_skipped_budget"],
         )
     else:
+        _engineering_control_checkpoint(task_id, "before_structure_plan")
         plan, plan_err = _unwrap_plan_result(
             _generate_files_via_llm(state, goal=goal, intent_kind=intent_kind)
         )
+        _engineering_control_checkpoint(task_id, "after_structure_plan")
         if plan_err:
             trace["plan_error"] = plan_err
             degraded_reason = degraded_reason or f"结构规划异常，已使用默认骨架：{plan_err}"
@@ -543,6 +558,7 @@ def run_engineering_bounded(state: AgentState) -> AgentState:
         plan_files = _plan_file_dicts(plan)
 
         if not budget.exhausted() and budget.consume("write_files"):
+            _engineering_control_checkpoint(task_id, "before_write_files")
             wf = _write_files(task_id, plan.get("files") or [])
             written = wf.written
             write_errors = wf.errors
@@ -560,9 +576,12 @@ def run_engineering_bounded(state: AgentState) -> AgentState:
                 plan_files=plan_files,
                 trace=trace,
             )
+            _engineering_control_checkpoint(task_id, "after_write_files")
 
         if not budget.exhausted() and written and budget.consume("read_back"):
+            _engineering_control_checkpoint(task_id, "before_read_back")
             _read_key_files(task_id, written)
+            _engineering_control_checkpoint(task_id, "after_read_back")
 
         verify = ProjectVerifyResult(
             ok=False,
@@ -571,6 +590,7 @@ def run_engineering_bounded(state: AgentState) -> AgentState:
             issues=["verify_skipped_budget"],
         )
         if not budget.exhausted() and budget.consume("verify"):
+            _engineering_control_checkpoint(task_id, "before_verify")
             verify = _run_verify(
                 task_id,
                 intent_kind=intent_kind,
@@ -578,6 +598,7 @@ def run_engineering_bounded(state: AgentState) -> AgentState:
                 backend_id=backend_id,
                 written=written,
             )
+            _engineering_control_checkpoint(task_id, "after_verify")
         trace["verify_result"] = verify.to_dict()
 
         repair_attempts = 0
@@ -588,6 +609,7 @@ def run_engineering_bounded(state: AgentState) -> AgentState:
             and not _verify_is_non_retryable(verify)
             and not budget.exhausted()
         ):
+            _engineering_control_checkpoint(task_id, "repair_loop")
             repair_attempts += 1
             trace["repair_attempts"] = repair_attempts
             err_text = (verify.stderr or "").strip() or "\n".join(verify.issues)
@@ -595,6 +617,7 @@ def run_engineering_bounded(state: AgentState) -> AgentState:
                 break
 
             if repair_attempts == 1 and budget.consume("repair_minimal"):
+                _engineering_control_checkpoint(task_id, "before_repair_minimal")
                 if minimal_repair_files(
                     task_id, written, stderr=err_text, intent_kind=intent_kind
                 ):
@@ -608,6 +631,7 @@ def run_engineering_bounded(state: AgentState) -> AgentState:
                     trace["verify_result"] = verify.to_dict()
                     if verify.ok:
                         break
+                _engineering_control_checkpoint(task_id, "after_repair_minimal")
                 if budget.exhausted():
                     break
 
@@ -615,6 +639,7 @@ def run_engineering_bounded(state: AgentState) -> AgentState:
                 degraded_reason = degraded_reason or "步数预算耗尽（LLM 修复前）"
                 break
 
+            _engineering_control_checkpoint(task_id, "before_repair_llm")
             plan, plan_err = _unwrap_plan_result(
                 _generate_files_via_llm(
                     state,
@@ -624,12 +649,14 @@ def run_engineering_bounded(state: AgentState) -> AgentState:
                     prior_files=_read_key_files(task_id, written),
                 )
             )
+            _engineering_control_checkpoint(task_id, "after_repair_llm")
             if plan_err:
                 trace.setdefault("repair_plan_errors", []).append(plan_err)
             summary = str(plan.get("summary") or summary)
             plan_files = _plan_file_dicts(plan)
 
             if budget.consume("write_files"):
+                _engineering_control_checkpoint(task_id, "before_repair_write_files")
                 wf = _write_files(task_id, plan.get("files") or [])
                 written = wf.written or written
                 write_errors = list(write_errors) + wf.errors
@@ -642,9 +669,11 @@ def run_engineering_bounded(state: AgentState) -> AgentState:
                     plan_files=plan_files,
                     trace=trace,
                 )
+                _engineering_control_checkpoint(task_id, "after_repair_write_files")
             if budget.exhausted():
                 break
             if budget.consume("verify"):
+                _engineering_control_checkpoint(task_id, "before_repair_verify")
                 verify = _run_verify(
                     task_id,
                     intent_kind=intent_kind,
@@ -652,6 +681,7 @@ def run_engineering_bounded(state: AgentState) -> AgentState:
                     backend_id=backend_id,
                     written=written,
                 )
+                _engineering_control_checkpoint(task_id, "after_repair_verify")
                 trace["verify_result"] = verify.to_dict()
 
     if not verify.ok and _verify_is_non_retryable(verify):

@@ -4,6 +4,7 @@ from app.runtime.state import TaskStatus, merge_state
 from app.services.client_display import (
     build_mission_paused_payload,
     build_steer_task_client_display,
+    build_stop_task_client_display,
     confirmation_panel_display,
 )
 
@@ -58,6 +59,21 @@ def test_paused_payload_defaults_when_no_context():
     body = build_mission_paused_payload(state)
     assert body["system_lines"] == ["task_paused"]
     assert body["display"]["pause_kind"] == "stepwise"
+
+
+def test_stop_task_client_display():
+    state = merge_state(
+        {
+            "task_id": "t-stop",
+            "session_id": "s1",
+            "status": TaskStatus.RUNNING.value,
+        },
+    )
+    d = build_stop_task_client_display(state, effective_state="PAUSE_REQUESTED")
+    assert d["kind"] == "pause_requested"
+    assert d["display"]["pause_kind"] == "user_control"
+    assert any("暂停" in line for line in d["system_lines"])
+    assert not any("steer" in line.lower() for line in d["system_lines"])
 
 
 def test_steer_queued_display():

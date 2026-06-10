@@ -220,3 +220,25 @@ def test_task_control_endpoints(isolated_stores, monkeypatch):
     assert cancel.json()["control_action"] == "cancel_task"
     cancelled = store.load(state["task_id"])
     assert cancelled["status"] == "CANCELLED"
+
+
+def test_stop_task_returns_pause_display(isolated_stores, monkeypatch):
+    from app.api import task_api
+    from app.runtime.state import create_initial_state, merge_state
+
+    store = isolated_stores
+    state = merge_state(
+        create_initial_state(task_id="stop-display-task"),
+        status="RUNNING",
+    )
+    store.save(state)
+    monkeypatch.setattr(task_api, "get_state_store", lambda: store)
+
+    client = TestClient(app)
+    resp = client.post(f"/tasks/{state['task_id']}/stop")
+    assert resp.status_code == 200
+    body = resp.json()
+    display = body.get("client_display") or {}
+    assert display.get("kind") == "pause_requested"
+    assert any("暂停" in line for line in display.get("system_lines") or [])
+    assert not any("steer_applied" in line for line in display.get("system_lines") or [])

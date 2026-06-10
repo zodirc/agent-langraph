@@ -67,6 +67,31 @@ def _pending_message_preview(pending: dict[str, Any]) -> Optional[str]:
     return str(last).strip()[:200] or None
 
 
+def build_stop_task_client_display(
+    state: AgentState,
+    *,
+    effective_state: str = "",
+) -> dict[str, Any]:
+    """POST /stop response — pause at next engineering/checkpoint boundary."""
+    lines = [
+        "pause_requested: 已请求暂停；将在当前工程步骤完成后暂停。",
+        "已落盘内容会保留；发送「继续」可续跑。",
+    ]
+    eff = str(effective_state or "").strip()
+    if eff:
+        lines.append(f"control_state: {eff}")
+    return {
+        "kind": "pause_requested",
+        "system_lines": lines,
+        "supersede_stream_recommended": False,
+        "display": {
+            "pause_kind": "user_control",
+            "effective_state": eff or None,
+            "status": state.get("status"),
+        },
+    }
+
+
 def build_steer_task_client_display(state: AgentState, *, queued: bool) -> dict[str, Any]:
     pending = state.get("pending_user_message") or {}
     depth = len((pending.get("messages") if isinstance(pending, dict) else []) or [])

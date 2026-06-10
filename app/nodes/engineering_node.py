@@ -18,6 +18,13 @@ def engineering_execution_node(state: AgentState) -> AgentState:
         get_state_store().save(updated)
         return updated
     except Exception as exc:
+        from app.services.execution_control import handle_control_exception
+
+        handled = handle_control_exception(state, exc)
+        if handled is not None:
+            get_state_store().save(handled)
+            return handled
+
         answer = format_engineering_answer(
             summary="工程执行节点异常",
             written_files=[],

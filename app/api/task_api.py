@@ -395,9 +395,12 @@ def stop_task(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     stored = get_state_store().load(task_id) or {}
-    from app.services.client_display import build_steer_task_client_display
+    from app.services.client_display import build_stop_task_client_display
 
-    display = build_steer_task_client_display(stored, queued=False)
+    display = build_stop_task_client_display(
+        stored,
+        effective_state=str(control.get("effective_state") or "pause_requested"),
+    )
     return StopTaskResponse(
         task_id=task_id,
         status=str(stored.get("status") or ""),

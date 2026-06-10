@@ -320,8 +320,20 @@ function syncRunTimerFromProgressPayload(payload) {
   reanchorRunTimer(payload.elapsed_sec, payload.message);
 }
 
+function isStopPendingForTask(taskId) {
+  const tid = String(taskId || activeTaskId || getSessionId() || "");
+  return Boolean(userStopPendingTaskId && tid && userStopPendingTaskId === tid);
+}
+
 function refreshRunStatusDisplay() {
-  if (!runStatusEl || !running || !runStartedAt) return;
+  if (!runStatusEl) return;
+  if (isStopPendingForTask() && backendExecutorActive) {
+    runStatusEl.hidden = false;
+    runStatusEl.classList.add("is-busy");
+    runStatusEl.textContent = "暂停中…";
+    return;
+  }
+  if (!running || !runStartedAt) return;
   const sec = Math.max(0, Math.floor((Date.now() - runStartedAt) / 1000));
   runStatusEl.hidden = false;
   runStatusEl.classList.add("is-busy");
@@ -874,11 +886,10 @@ function stopDetachedBackendWatch() {
 
 function refreshStopPendingStatus() {
   if (!runStatusEl) return false;
-  const tid = userStopPendingTaskId || activeTaskId || getSessionId();
-  if (userStopPendingTaskId && userStopPendingTaskId === tid && backendExecutorActive) {
+  if (isStopPendingForTask() && backendExecutorActive) {
     runStatusEl.hidden = false;
     runStatusEl.classList.add("is-busy");
-    runStatusEl.textContent = "停止中…";
+    runStatusEl.textContent = "暂停中…";
     return true;
   }
   return false;
@@ -3961,8 +3972,8 @@ async function stopActiveMission() {
   if (!display.system_lines?.length) {
     appendLine(
       hadClientStream
-        ? "已请求停止；流式输出已断开，任务将在当前步骤安全点暂停。"
-        : "已请求停止任务。",
+        ? "已请求暂停；流式输出已断开，任务将在当前工程步骤完成后暂停。"
+        : "已请求暂停任务。",
       "system"
     );
   }
