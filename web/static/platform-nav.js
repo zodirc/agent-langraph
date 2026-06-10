@@ -12,6 +12,7 @@
   const links = [
     { href: "/", page: "home", label: "平台" },
     { href: "/chat", page: "chat", label: "对话" },
+    { href: "/dashboard", page: "dashboard", label: "监控" },
     { href: "/skills", page: "skills", label: "Skills" },
   ];
 
@@ -39,9 +40,8 @@
     <div class="platform-nav-end">
       <label class="platform-theme-label" title="主题">
         <span class="sr-only">主题</span>
-        <select id="platform-theme-select" class="platform-theme-select">
+        <select id="platform-theme-select" class="platform-theme-select" title="界面颜色主题">
           <option value="dark">深色</option>
-          <option value="light">淡色</option>
         </select>
       </label>
       <span id="platform-runtime-badge" class="platform-runtime-badge">…</span>
@@ -92,9 +92,8 @@
   document.body.classList.add("platform-shell", "has-platform-nav");
 
   const themeSel = document.getElementById("platform-theme-select");
-  if (themeSel && window.PlatformAuth) {
-    const stored = localStorage.getItem(window.PlatformAuth.THEME_KEY) || "dark";
-    themeSel.value = stored === "light" ? "light" : "dark";
+  if (themeSel && window.PlatformAuth?.populateThemeSelect) {
+    window.PlatformAuth.populateThemeSelect(themeSel);
   }
 
   function wireAuth() {

@@ -9,6 +9,50 @@
   const THEME_KEY = "agent_theme";
   const PANEL_COLLAPSED_KEY = "platform_auth_panel_collapsed";
 
+  const THEMES = [
+    { id: "dark", label: "深色", family: "dark" },
+    { id: "light", label: "淡色", family: "light" },
+    { id: "warm", label: "暖夜", family: "dark" },
+    { id: "warm-light", label: "暖纸", family: "light" },
+    { id: "forest", label: "森林", family: "dark" },
+    { id: "rose", label: "玫瑰", family: "light" },
+    { id: "ocean", label: "海洋", family: "dark" },
+  ];
+
+  const THEME_IDS = THEMES.map((t) => t.id);
+
+  function normalizeTheme(theme) {
+    const id = String(theme || "dark").trim();
+    return THEME_IDS.includes(id) ? id : "dark";
+  }
+
+  function getThemeFamily(themeId) {
+    const item = THEMES.find((t) => t.id === themeId);
+    return item?.family || "dark";
+  }
+
+  function getThemeId() {
+    return normalizeTheme(localStorage.getItem(THEME_KEY) || "dark");
+  }
+
+  function populateThemeSelect(selectEl) {
+    if (!selectEl) return;
+    selectEl.innerHTML = THEMES.map(
+      (t) => `<option value="${t.id}">${t.label}</option>`
+    ).join("");
+    selectEl.value = getThemeId();
+  }
+
+  function applyThemeClasses(root, themeId) {
+    const family = getThemeFamily(themeId);
+    for (const id of THEME_IDS) {
+      root.classList.remove(`theme-${id}`);
+    }
+    root.classList.add(`theme-${themeId}`);
+    root.dataset.themeFamily = family;
+    return family;
+  }
+
   let navUiAttached = false;
   let loginInFlight = false;
   let skipVerifyUntil = 0;
@@ -68,18 +112,17 @@
   }
 
   function applyTheme(theme) {
-    const t = theme === "light" ? "light" : "dark";
-    const root = document.documentElement;
-    root.classList.remove("theme-light", "theme-dark");
-    root.classList.add(`theme-${t}`);
-    document.body.classList.remove("theme-light", "theme-dark");
-    document.body.classList.add(`theme-${t}`);
+    const t = normalizeTheme(theme);
+    applyThemeClasses(document.documentElement, t);
+    applyThemeClasses(document.body, t);
     localStorage.setItem(THEME_KEY, t);
     const sel = document.getElementById("platform-theme-select");
     if (sel) sel.value = t;
     const chatSel = document.getElementById("theme-select");
     if (chatSel) chatSel.value = t;
-    global.dispatchEvent(new CustomEvent("platform-theme-change", { detail: { theme: t } }));
+    global.dispatchEvent(
+      new CustomEvent("platform-theme-change", { detail: { theme: t, family: getThemeFamily(t) } })
+    );
   }
 
   function initThemeFromStorage() {
@@ -412,6 +455,7 @@
     const loginForm = document.getElementById("platform-login-form");
 
     if (themeSel) {
+      populateThemeSelect(themeSel);
       themeSel.addEventListener("change", () => applyTheme(themeSel.value));
     }
 
@@ -481,6 +525,12 @@
     TENANT_KEY,
     USER_KEY,
     THEME_KEY,
+    THEMES,
+    THEME_IDS,
+    normalizeTheme,
+    getThemeId,
+    getThemeFamily,
+    populateThemeSelect,
     getAuthHeaders,
     authFetch,
     handleUnauthorizedResponse,

@@ -1,7 +1,10 @@
 const TOKEN_KEY = "agent_access_token";
+const TASK_LIST_LIMIT = 100;
 
 let llmPanelTaskId = null;
 let llmSummaries = [];
+let cachedTasks = [];
+let taskFilterQuery = "";
 
 function getAuthHeaders() {
   const headers = {};
@@ -186,27 +189,98 @@ async function openLlmPanel(taskId) {
   await refreshLlmPanel({ preserveIndex: false });
 }
 
-function renderTasks(data) {
-  const tbody = document.querySelector("#tasks-table tbody");
-  tbody.innerHTML = (data.tasks || [])
-    .map(
-      (t) =>
-        `<tr>
-          <td title="${escapeHtml(t.task_id)}">${t.task_id.slice(0, 8)}…</td>
-          <td>${escapeHtml(t.status)}</td>
-          <td>${escapeHtml(t.current_node)}</td>
-          <td>${escapeHtml(t.goal || "-")}</td>
-          <td>${escapeHtml(t.updated_at)}</td>
-          <td><button type="button" class="tasks-table-btn" data-task-id="${escapeHtml(t.task_id)}">LLM</button></td>
-        </tr>`
-    )
-    .join("");
+function formatTaskOptionLabel(task) {
+  const goal = String(task.goal || "(无目标)").slice(0, 72);
+  const id = String(task.task_id || "").slice(0, 8);
+  return `${id}… · ${task.status || "-"} · ${goal}`;
+}
+
+function taskMatchesFilter(task, query) {
+  if (!query) return true;
+  const hay = [
+    task.task_id,
+    task.status,
+    task.current_node,
+    task.goal,
+    task.updated_at,
+  ]
+    .map((v) => String(v || "").toLowerCase())
+    .join(" ");
+  return hay.includes(query);
+}
+
+function populateTaskQuickSelect(tasks, { preserveSelection = true } = {}) {
+  const sel = document.getElementById("task-quick-select");
+  if (!sel) return;
+  const prev = preserveSelection ? sel.value : "";
+  const visible = tasks.filter((t) => taskMatchesFilter(t, taskFilterQuery));
+  sel.innerHTML =
+    '<option value="">选择任务…</option>' +
+    visible
+      .map(
+        (t) =>
+          `<option value="${escapeHtml(t.task_id)}">${escapeHtml(formatTaskOptionLabel(t))}</option>`
+      )
+      .join("");
+  if (prev && visible.some((t) => t.task_id === prev)) {
+    sel.value = prev;
+  }
+}
+
+function highlightTaskRow(taskId) {
+  const row = document.querySelector(`#tasks-table tbody tr[data-task-row="${taskId}"]`);
+  if (!row) return;
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.classList.add("tasks-row-highlight");
+  window.setTimeout(() => row.classList.remove("tasks-row-highlight"), 2200);
+}
+
+function wireTaskTableActions(tbody) {
   tbody.querySelectorAll(".tasks-table-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const id = btn.getAttribute("data-task-id");
       if (id) openLlmPanel(id);
     });
   });
+  tbody.querySelectorAll(".tasks-table-chat-link").forEach((link) => {
+    link.addEventListener("click", (ev) => {
+      const id = link.getAttribute("data-task-id");
+      if (!id) return;
+      ev.preventDefault();
+      localStorage.setItem("agent_session_id", id);
+      window.location.href = "/chat";
+    });
+  });
+}
+
+function renderTasks(data) {
+  cachedTasks = Array.isArray(data.tasks) ? data.tasks : [];
+  const tbody = document.querySelector("#tasks-table tbody");
+  const visible = cachedTasks.filter((t) => taskMatchesFilter(t, taskFilterQuery));
+  if (!visible.length) {
+    tbody.innerHTML =
+      '<tr><td colspan="6" class="tasks-empty-cell">没有匹配的任务。</td></tr>';
+    populateTaskQuickSelect(cachedTasks);
+    return;
+  }
+  tbody.innerHTML = visible
+    .map(
+      (t) =>
+        `<tr data-task-row="${escapeHtml(t.task_id)}">
+          <td title="${escapeHtml(t.task_id)}">${t.task_id.slice(0, 8)}…</td>
+          <td>${escapeHtml(t.status)}</td>
+          <td>${escapeHtml(t.current_node)}</td>
+          <td>${escapeHtml(t.goal || "-")}</td>
+          <td>${escapeHtml(t.updated_at)}</td>
+          <td class="tasks-actions-cell">
+            <a href="/chat" class="tasks-table-link tasks-table-chat-link" data-task-id="${escapeHtml(t.task_id)}" title="在对话页打开此会话">对话</a>
+            <button type="button" class="tasks-table-btn" data-task-id="${escapeHtml(t.task_id)}">LLM</button>
+          </td>
+        </tr>`
+    )
+    .join("");
+  wireTaskTableActions(tbody);
+  populateTaskQuickSelect(cachedTasks);
 }
 
 function renderDlq(data) {
@@ -253,7 +327,7 @@ async function refresh() {
   try {
     const [metrics, tasks, dlq] = await Promise.all([
       fetchJson("/metrics/summary"),
-      fetchJson("/tasks?limit=20"),
+      fetchJson(`/tasks?limit=${TASK_LIST_LIMIT}`),
       fetchJson("/dead-letter?limit=20"),
     ]);
     renderMetrics(metrics);
@@ -291,6 +365,31 @@ document.getElementById("llm-panel-refresh")?.addEventListener("click", () => {
   });
 });
 
+document.getElementById("task-filter-input")?.addEventListener("input", (ev) => {
+  taskFilterQuery = String(ev.target.value || "")
+    .trim()
+    .toLowerCase();
+  renderTasks({ tasks: cachedTasks });
+});
+
+document.getElementById("task-quick-select")?.addEventListener("change", (ev) => {
+  const taskId = String(ev.target.value || "");
+  if (!taskId) return;
+  highlightTaskRow(taskId);
+  const quickSel = document.getElementById("task-quick-select");
+  if (quickSel) quickSel.value = taskId;
+});
+
+function applyTaskFromUrl() {
+  const taskId = new URLSearchParams(window.location.search).get("task");
+  if (!taskId) return;
+  const sel = document.getElementById("task-quick-select");
+  if (sel) sel.value = taskId;
+  highlightTaskRow(taskId);
+}
+
 syncMetricsLink();
-refresh();
+refresh().then(() => {
+  applyTaskFromUrl();
+});
 setInterval(refresh, 10000);

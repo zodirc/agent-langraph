@@ -33,7 +33,7 @@ def health_full() -> dict[str, object]:
     return {
         "status": "ok" if checks["ready"] else "degraded",
         "env": settings.APP_ENV,
-        "version": "0.10.0",
+        "version": "0.20.0",
         "model_enabled": settings.MODEL_ENABLED,
         "model_name": settings.MODEL_NAME,
         "model_base_url": settings.MODEL_BASE_URL,

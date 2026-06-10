@@ -110,7 +110,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="Agent LangGraph Runtime",
     description="Multi-domain agent runtime based on LangGraph",
-    version="0.10.0",
+    version="0.20.0",
     lifespan=lifespan,
 )
 app.include_router(health_router)

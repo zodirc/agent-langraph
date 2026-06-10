@@ -15,6 +15,7 @@ const inputEl = document.getElementById("command-input");
 const stopBtnEl = document.getElementById("stop-btn");
 const runStatusEl = document.getElementById("terminal-run-status");
 const sessionBadgeEl = document.getElementById("session-badge");
+const monitorLinkBtn = document.getElementById("monitor-link-btn");
 const flowMetaEl = document.getElementById("flow-meta");
 const flowTaskEl = document.getElementById("flow-task");
 const flowGraphEl = document.getElementById("flow-graph");
@@ -172,22 +173,57 @@ function isNearScrollBottom(el, threshold = SCROLL_PIN_THRESHOLD) {
 }
 
 function scrollToBottomIfPinned(el) {
-  if (!el || !isNearScrollBottom(el)) return;
-  el.scrollTop = el.scrollHeight;
+  if (el && el.scrollHeight > el.clientHeight && isNearScrollBottom(el)) {
+    el.scrollTop = el.scrollHeight;
+  }
+  scheduleOutputScrollIfPinned();
 }
 
 function updateOutputAutoFollow() {
   outputAutoFollow = isNearScrollBottom(outputEl);
 }
 
-function scrollOutputIfPinned() {
+let outputScrollRaf = 0;
+
+function scheduleOutputScrollIfPinned() {
   if (!outputEl || !outputAutoFollow) return;
-  outputEl.scrollTop = outputEl.scrollHeight;
+  if (outputScrollRaf) return;
+  outputScrollRaf = requestAnimationFrame(() => {
+    outputScrollRaf = 0;
+    if (!outputEl || !outputAutoFollow) return;
+    outputEl.scrollTop = outputEl.scrollHeight;
+  });
+}
+
+function scrollOutputIfPinned() {
+  scheduleOutputScrollIfPinned();
+}
+
+/** Re-engage bottom follow when the user sends a message (Enter). Streaming still respects manual scroll-up. */
+function scrollOutputOnUserSubmit() {
+  if (!outputEl) return;
   outputAutoFollow = true;
+  if (outputScrollRaf) {
+    cancelAnimationFrame(outputScrollRaf);
+    outputScrollRaf = 0;
+  }
+  const pin = () => {
+    if (!outputEl) return;
+    outputEl.scrollTop = outputEl.scrollHeight;
+  };
+  pin();
+  requestAnimationFrame(() => {
+    pin();
+    requestAnimationFrame(pin);
+  });
 }
 
 if (outputEl) {
   outputEl.addEventListener("scroll", updateOutputAutoFollow, { passive: true });
+  // Any output DOM growth while auto-follow is on (e.g. answer_delta) keeps the viewport pinned.
+  new MutationObserver(() => {
+    scheduleOutputScrollIfPinned();
+  }).observe(outputEl, { childList: true, subtree: true, characterData: true });
 }
 
 function isTerminalTaskStatus(status) {
@@ -724,7 +760,7 @@ function buildFlowPopupHtml() {
   return `<!doctype html><html><head><meta charset="utf-8"/><title>Flow Graph</title>
   <style>
     body{margin:0;background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Menlo,Consolas,monospace}
-    body.theme-light{background:#f6f8fb;color:#1f2937}
+    body[data-theme-family="light"]{background:#f6f8fb;color:#1f2937}
     .wrap{padding:14px}
     .meta{font-size:13px;color:#93c5fd;margin:0 0 8px}
     .task{font-size:12px;color:#8b949e;margin:0 0 10px}
@@ -750,23 +786,23 @@ function buildFlowPopupHtml() {
     .flow-status{font-size:11px;color:#bfdbfe;white-space:nowrap}
     .flow-time{margin-top:4px;font-size:11px;color:#8b949e}
     @keyframes flowEdgeWave{to{stroke-dashoffset:-30}}
-    body.theme-light .meta{color:#1d4ed8}
-    body.theme-light .task{color:#475569}
-    body.theme-light .graph,body.theme-light .timeline{border-color:#cbd5e1;background:#ffffff}
-    body.theme-light .flow-edge-arrow{stroke:#2563eb}
-    body.theme-light .flow-edge-arrow.current{stroke:#0891b2;filter:drop-shadow(0 0 4px rgba(8,145,178,.45))}
-    body.theme-light .flow-node-box{fill:#f8fafc;stroke:#94a3b8}
-    body.theme-light .flow-node-box.active{fill:#dbeafe;stroke:#3b82f6}
-    body.theme-light .flow-node-box.done{fill:#dcfce7;stroke:#16a34a}
-    body.theme-light .flow-node-box.error{fill:#fee2e2;stroke:#dc2626}
-    body.theme-light .flow-node-label{fill:#0f172a}
-    body.theme-light .flow-item{border-color:#cbd5e1;background:#f8fafc}
-    body.theme-light .flow-item.done{border-color:#86efac;background:#f0fdf4}
-    body.theme-light .flow-item.error{border-color:#fca5a5;background:#fef2f2}
-    body.theme-light .flow-item.selected{border-color:#3b82f6;background:#dbeafe}
-    body.theme-light .flow-node{color:#065f46}
-    body.theme-light .flow-status{color:#1e3a8a}
-    body.theme-light .flow-time{color:#64748b}
+    body[data-theme-family="light"] .meta{color:#1d4ed8}
+    body[data-theme-family="light"] .task{color:#475569}
+    body[data-theme-family="light"] .graph,body[data-theme-family="light"] .timeline{border-color:#cbd5e1;background:#ffffff}
+    body[data-theme-family="light"] .flow-edge-arrow{stroke:#2563eb}
+    body[data-theme-family="light"] .flow-edge-arrow.current{stroke:#0891b2;filter:drop-shadow(0 0 4px rgba(8,145,178,.45))}
+    body[data-theme-family="light"] .flow-node-box{fill:#f8fafc;stroke:#94a3b8}
+    body[data-theme-family="light"] .flow-node-box.active{fill:#dbeafe;stroke:#3b82f6}
+    body[data-theme-family="light"] .flow-node-box.done{fill:#dcfce7;stroke:#16a34a}
+    body[data-theme-family="light"] .flow-node-box.error{fill:#fee2e2;stroke:#dc2626}
+    body[data-theme-family="light"] .flow-node-label{fill:#0f172a}
+    body[data-theme-family="light"] .flow-item{border-color:#cbd5e1;background:#f8fafc}
+    body[data-theme-family="light"] .flow-item.done{border-color:#86efac;background:#f0fdf4}
+    body[data-theme-family="light"] .flow-item.error{border-color:#fca5a5;background:#fef2f2}
+    body[data-theme-family="light"] .flow-item.selected{border-color:#3b82f6;background:#dbeafe}
+    body[data-theme-family="light"] .flow-node{color:#065f46}
+    body[data-theme-family="light"] .flow-status{color:#1e3a8a}
+    body[data-theme-family="light"] .flow-time{color:#64748b}
   </style></head><body>
   <div class="wrap">
     <p id="m" class="meta">等待数据</p><p id="t" class="task">task: -</p>
@@ -783,9 +819,7 @@ function syncFlowPopup() {
     const g = d.getElementById("g");
     const tl = d.getElementById("tl");
     if (!m || !t || !g || !tl) return;
-    const currentTheme = document.body.classList.contains("theme-light") ? "theme-light" : "theme-dark";
-    d.body.classList.remove("theme-light", "theme-dark");
-    d.body.classList.add(currentTheme);
+    applyThemeToPopupDocument(d);
     m.textContent = flowMetaEl?.textContent || "等待数据";
     t.textContent = flowTaskEl?.textContent || "task: -";
     g.innerHTML = flowGraphEl?.innerHTML || "";
@@ -993,24 +1027,145 @@ function isWritingMissionActive(statusData) {
   return isMissionFsmActive(statusData) || Boolean(statusData.executor_active);
 }
 
+function refreshPendingQueueStatusLine() {
+  const n = pendingStreamInputQueue.length;
+  if (!n) {
+    if (pendingQueueStatusEl) {
+      pendingQueueStatusEl.remove();
+      pendingQueueStatusEl = null;
+    }
+    return;
+  }
+  const text =
+    n === 1
+      ? "（已排队 1 条，将在本轮输出结束后发送；可点「删除」取消）"
+      : `（已排队 ${n} 条，将在本轮输出结束后一并处理；可逐条删除）`;
+  if (!pendingQueueStatusEl) {
+    pendingQueueStatusEl = document.createElement("p");
+    pendingQueueStatusEl.className = "line system pending-queue-status";
+    outputEl.appendChild(pendingQueueStatusEl);
+  }
+  pendingQueueStatusEl.textContent = text;
+  scrollOutputIfPinned();
+}
+
+function addUserBubbleResendAction(wrap, text) {
+  if (!wrap || wrap.querySelector(".user-resend-btn")) return;
+  let actions = wrap.querySelector(".user-bubble-actions");
+  if (!actions) {
+    actions = document.createElement("div");
+    actions.className = "user-bubble-actions";
+    wrap.appendChild(actions);
+  }
+  const resendBtn = document.createElement("button");
+  resendBtn.type = "button";
+  resendBtn.className = "user-resend-btn";
+  resendBtn.textContent = "重新发送";
+  resendBtn.title = "按原消息重新发送";
+  resendBtn.addEventListener("click", async () => {
+    const raw = String(text || "").replace(/^>\s*/, "").trim();
+    if (!raw) return;
+    const taskId = activeTaskId || getSessionId();
+    const statusData = await fetchTaskStatus(taskId);
+    const st = String(statusData?.status || "");
+    const executorActive = Boolean(statusData?.executor_active);
+    const inFlight =
+      running || executorActive || backendExecutorActive || sessionHasInFlightMission;
+    if (inFlight && (executorActive || !isTerminalTaskStatus(st))) {
+      appendLine("当前任务仍在运行，请先停止或等待完成后再重发。", "error");
+      return;
+    }
+    if (running && isTerminalTaskStatus(st)) {
+      setRunning(false);
+    }
+    await sendMessage(taskId, raw, {
+      suppressUserEcho: true,
+      meta: { resend: true },
+    });
+  });
+  actions.appendChild(resendBtn);
+}
+
+function markQueueItemSent(item) {
+  if (!item?.wrapEl) return;
+  item.wrapEl.classList.remove("user-bubble-wrap-queued");
+  item.wrapEl.querySelector(".user-queue-badge")?.remove();
+  item.wrapEl.querySelector(".user-queue-delete-btn")?.remove();
+  addUserBubbleResendAction(item.wrapEl, item.text);
+}
+
+function dismissPendingQueueUi({ removeWraps = false } = {}) {
+  for (const item of pendingStreamInputQueue) {
+    if (!item.wrapEl) continue;
+    if (removeWraps) item.wrapEl.remove();
+    else markQueueItemSent(item);
+  }
+  pendingStreamInputQueue = [];
+  if (pendingQueueStatusEl) {
+    pendingQueueStatusEl.remove();
+    pendingQueueStatusEl = null;
+  }
+}
+
+function removePendingQueueItem(queueId) {
+  const idx = pendingStreamInputQueue.findIndex((item) => item.id === queueId);
+  if (idx < 0) return;
+  const [item] = pendingStreamInputQueue.splice(idx, 1);
+  item.wrapEl?.remove();
+  refreshPendingQueueStatusLine();
+}
+
+function appendQueuedUserMessage(text, queueId) {
+  const wrap = document.createElement("div");
+  wrap.className = "user-bubble-wrap user-bubble-wrap-queued";
+  wrap.dataset.queueId = queueId;
+
+  const bubble = document.createElement("div");
+  bubble.className = "user-bubble";
+  bubble.textContent = `> ${text}`;
+  wrap.appendChild(bubble);
+
+  const actions = document.createElement("div");
+  actions.className = "user-bubble-actions";
+
+  const badge = document.createElement("span");
+  badge.className = "user-queue-badge";
+  badge.textContent = "排队中";
+  actions.appendChild(badge);
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "user-queue-delete-btn";
+  deleteBtn.textContent = "删除";
+  deleteBtn.title = "从排队中移除，发送前可取消";
+  deleteBtn.addEventListener("click", () => removePendingQueueItem(queueId));
+  actions.appendChild(deleteBtn);
+
+  wrap.appendChild(actions);
+  outputEl.appendChild(wrap);
+  scrollOutputIfPinned();
+  return wrap;
+}
+
 function enqueuePendingStreamInput(text) {
   const t = String(text || "").trim();
   if (!t) return;
-  pendingStreamInputQueue.push(t);
-  appendLine(`> ${t}`, "user");
-  const n = pendingStreamInputQueue.length;
-  appendLine(
-    n === 1
-      ? "（已排队，将在本轮输出结束后发送）"
-      : `（已合并排队，共 ${n} 条，将在本轮输出结束后一并处理）`,
-    "system"
-  );
+  const id = `pq-${++pendingStreamQueueSeq}`;
+  const item = { id, text: t, wrapEl: null };
+  pendingStreamInputQueue.push(item);
+  item.wrapEl = appendQueuedUserMessage(t, id);
+  refreshPendingQueueStatusLine();
 }
 
 async function flushPendingStreamInputQueue() {
   if (!pendingStreamInputQueue.length || (running && !turnDelivered)) return;
-  const merged = pendingStreamInputQueue.join("\n\n");
+  const items = pendingStreamInputQueue.slice();
+  const merged = items.map((item) => item.text).join("\n\n");
+  for (const item of items) {
+    markQueueItemSent(item);
+  }
   pendingStreamInputQueue = [];
+  refreshPendingQueueStatusLine();
   const taskId = activeTaskId || getSessionId();
   if (isMissionStatusQuery(merged)) {
     await handleMissionStatusInquiry(merged, { suppressUserEcho: true });
@@ -1296,7 +1451,10 @@ let userStopPendingTaskId = null;
 let sessionRecoveringFromPageLoad = false;
 const DETACHED_BACKEND_POLL_MS = 2500;
 /** QA stream: queue follow-up inputs until current SSE turn finishes. */
+/** @type {{ id: string, text: string, wrapEl: HTMLElement | null }[]} */
 let pendingStreamInputQueue = [];
+let pendingStreamQueueSeq = 0;
+let pendingQueueStatusEl = null;
 const ORCHESTRATION_COMPLETED_DISPLAY_MAX = 8;
 
 /** UUID v4; works on http://<LAN-IP> where crypto.randomUUID is unavailable. */
@@ -1330,11 +1488,16 @@ function getSessionId() {
 }
 
 function updateSessionBadge(sessionId) {
-  if (!sessionBadgeEl) return;
   const id = sessionId || getSessionId();
-  const short = `${id.slice(0, 8)}…`;
-  sessionBadgeEl.textContent = `session ${short}`;
-  sessionBadgeEl.title = `会话 ID（完整）: ${id}\n点击查看；新会话请用侧栏「新会话」或 /new`;
+  if (sessionBadgeEl) {
+    const short = `${id.slice(0, 8)}…`;
+    sessionBadgeEl.textContent = `session ${short}`;
+    sessionBadgeEl.title = `会话 ID（完整）: ${id}\n点击查看；新会话请用侧栏「新会话」或 /new`;
+  }
+  if (monitorLinkBtn && id) {
+    monitorLinkBtn.href = `/dashboard?task=${encodeURIComponent(id)}`;
+    monitorLinkBtn.title = `打开任务监控并定位会话 ${id.slice(0, 8)}…`;
+  }
 }
 
 function normalizeInteractionMode(raw) {
@@ -1400,6 +1563,36 @@ function showSessionIdInfo() {
   }
 }
 
+function getPopupThemeState() {
+  const family =
+    document.documentElement.dataset.themeFamily ||
+    (window.PlatformAuth?.getThemeFamily?.(getThemeId()) ?? "dark");
+  const themeId = window.PlatformAuth?.getThemeId?.() || getThemeId();
+  return { themeId, family };
+}
+
+function getThemeId() {
+  const raw = localStorage.getItem(THEME_KEY) || "dark";
+  const ids = window.PlatformAuth?.THEME_IDS || ["dark", "light"];
+  return ids.includes(raw) ? raw : "dark";
+}
+
+function applyThemeToPopupDocument(doc) {
+  if (!doc?.body) return;
+  const { themeId, family } = getPopupThemeState();
+  const ids = window.PlatformAuth?.THEME_IDS || ["dark", "light", "warm", "warm-light", "forest", "rose", "ocean"];
+  for (const id of ids) {
+    doc.body.classList.remove(`theme-${id}`);
+    doc.documentElement?.classList?.remove?.(`theme-${id}`);
+  }
+  doc.body.classList.add(`theme-${themeId}`);
+  doc.body.dataset.themeFamily = family;
+  if (doc.documentElement) {
+    doc.documentElement.classList.add(`theme-${themeId}`);
+    doc.documentElement.dataset.themeFamily = family;
+  }
+}
+
 function applyTheme(theme) {
   if (window.PlatformAuth) {
     window.PlatformAuth.applyTheme(theme);
@@ -1409,13 +1602,13 @@ function applyTheme(theme) {
     }
     return;
   }
-  const t = theme === "light" ? "light" : "dark";
-  document.documentElement.classList.remove("theme-light", "theme-dark");
-  document.documentElement.classList.add(`theme-${t}`);
-  document.body.classList.remove("theme-light", "theme-dark");
-  document.body.classList.add(`theme-${t}`);
-  if (themeSelectEl) themeSelectEl.value = t;
-  localStorage.setItem(THEME_KEY, t);
+  const t = getThemeId();
+  const normalized = String(theme || "dark").trim();
+  const next = ["dark", "light", "warm", "warm-light", "forest", "rose", "ocean"].includes(normalized)
+    ? normalized
+    : t;
+  localStorage.setItem(THEME_KEY, next);
+  if (themeSelectEl) themeSelectEl.value = next;
   syncFlowPopup();
   for (const [, view] of sessionFileViewerMap) {
     if (view?.win && !view.win.closed) syncSessionFileViewerTheme(view.win);
@@ -1469,6 +1662,8 @@ function attachSessionFlags(body) {
 
 function clearScreen() {
   clearUiSnapshot(activeTaskId || getSessionId());
+  pendingStreamInputQueue = [];
+  pendingQueueStatusEl = null;
   resetOutputForRestore();
   shownConfirmationKeys.clear();
   writingStreamCharsThisTurn = 0;
@@ -1855,7 +2050,7 @@ function buildSessionFileViewerHtml() {
   <style>
     html,body{height:100%;margin:0;overflow:hidden}
     body{display:flex;flex-direction:column;background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Menlo,Consolas,monospace}
-    body.theme-light{background:#f6f8fb;color:#1f2937}
+    body[data-theme-family="light"]{background:#f6f8fb;color:#1f2937}
     .head{flex-shrink:0;padding:10px 12px;border-bottom:1px solid #30363d;background:#010409}
     .title{margin:0;font-size:12px;color:#93c5fd;word-break:break-all}
     .meta{margin:4px 0 0;font-size:11px;color:#8b949e}
@@ -1877,8 +2072,8 @@ function buildSessionFileViewerHtml() {
     .save-btn{flex-shrink:0;margin-left:auto}
     .body-wrap{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
     textarea{flex:1;min-height:0;width:100%;height:100%;padding:12px;border:none;outline:none;background:transparent;color:inherit;font:inherit;line-height:1.55;resize:none;overflow-y:auto;overscroll-behavior:contain;box-sizing:border-box;white-space:pre-wrap;word-wrap:break-word}
-    body.theme-light .head{background:#e2e8f0;border-bottom-color:#cbd5e1}
-    body.theme-light .sel{background:#fff}
+    body[data-theme-family="light"] .head{background:#e2e8f0;border-bottom-color:#cbd5e1}
+    body[data-theme-family="light"] .sel{background:#fff}
   </style></head><body>
     <div class="head">
       <p id="title" class="title">-</p>
@@ -1913,9 +2108,7 @@ function buildSessionFileViewerHtml() {
 function syncSessionFileViewerTheme(win) {
   if (!win || win.closed) return;
   try {
-    const currentTheme = document.body.classList.contains("theme-light") ? "theme-light" : "theme-dark";
-    win.document.body.classList.remove("theme-light", "theme-dark");
-    win.document.body.classList.add(currentTheme);
+    applyThemeToPopupDocument(win.document);
   } catch {
     /* ignore */
   }
@@ -2710,37 +2903,7 @@ function appendLine(text, className = "system") {
     bubble.textContent = text;
     wrap.appendChild(bubble);
 
-    const actions = document.createElement("div");
-    actions.className = "user-bubble-actions";
-    const resendBtn = document.createElement("button");
-    resendBtn.type = "button";
-    resendBtn.className = "user-resend-btn";
-    resendBtn.textContent = "重新发送";
-    resendBtn.title = "按原消息重新发送";
-    resendBtn.addEventListener("click", async () => {
-      const raw = String(text || "").replace(/^>\s*/, "").trim();
-      if (!raw) return;
-      const taskId = activeTaskId || getSessionId();
-      const statusData = await fetchTaskStatus(taskId);
-      const st = String(statusData?.status || "");
-      const executorActive = Boolean(statusData?.executor_active);
-      const inFlight =
-        running || executorActive || backendExecutorActive || sessionHasInFlightMission;
-      if (inFlight && (executorActive || !isTerminalTaskStatus(st))) {
-        appendLine("当前任务仍在运行，请先停止或等待完成后再重发。", "error");
-        return;
-      }
-      if (running && isTerminalTaskStatus(st)) {
-        setRunning(false);
-      }
-      await sendMessage(taskId, raw, {
-        suppressUserEcho: true,
-        meta: { resend: true },
-      });
-    });
-    actions.appendChild(resendBtn);
-    wrap.appendChild(actions);
-
+    addUserBubbleResendAction(wrap, text);
     outputEl.appendChild(wrap);
     scrollOutputIfPinned();
     return;
@@ -3305,6 +3468,73 @@ function appendWritingDelta(text, payload = {}) {
   scheduleWritingFlush();
 }
 
+async function copyTextToClipboard(text) {
+  const body = String(text || "");
+  if (!body) return false;
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(body);
+    return true;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = body;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    ta.remove();
+  }
+}
+
+function flashActionButton(btn, label, restoreMs = 1200) {
+  if (!btn) return;
+  const orig = btn.textContent;
+  btn.textContent = label;
+  window.setTimeout(() => {
+    btn.textContent = orig;
+  }, restoreMs);
+}
+
+function resolveAnswerStreamText(fromBtn) {
+  const header = fromBtn?.closest?.(".content-header-with-actions");
+  const panel = header?.nextElementSibling;
+  const stream = panel?.querySelector(".answer-stream");
+  if (stream?.textContent) return stream.textContent.trim();
+  return String(answerStreamText || answerStreamEl?.textContent || "").trim();
+}
+
+function attachAnswerStreamCopyButton(headerEl) {
+  if (!headerEl || headerEl.querySelector(".stream-copy-btn")) return;
+  headerEl.classList.add("content-header-with-actions");
+  const actions = document.createElement("span");
+  actions.className = "content-header-actions";
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "stream-copy-btn";
+  copyBtn.textContent = "复制";
+  copyBtn.title = "复制当前回答（含流式进行中内容）";
+  copyBtn.addEventListener("click", async () => {
+    const text = resolveAnswerStreamText(copyBtn);
+    if (!text) {
+      flashActionButton(copyBtn, "无内容");
+      return;
+    }
+    try {
+      const ok = await copyTextToClipboard(text);
+      flashActionButton(copyBtn, ok ? "已复制" : "失败");
+    } catch {
+      flashActionButton(copyBtn, "失败");
+    }
+  });
+  actions.appendChild(copyBtn);
+  headerEl.appendChild(actions);
+}
+
 function ensureAnswerStreamLine() {
   if (answerStreamEl) {
     if (!answerStreamEl.closest(".turn-frozen")) return answerStreamEl;
@@ -3319,6 +3549,7 @@ function ensureAnswerStreamLine() {
   });
   answerStreamEl = block.bodyEl;
   answerStreamEl.classList.add("answer-stream");
+  attachAnswerStreamCopyButton(block.headerEl);
   return answerStreamEl;
 }
 
@@ -3329,12 +3560,14 @@ function setAnswerStreamText(text) {
   const line = ensureAnswerStreamLine();
   line.replaceChildren();
   line.appendChild(document.createTextNode(answerStreamText));
+  scrollOutputIfPinned();
 }
 
 function appendAnswerDelta(text) {
   if (!text) return;
   answerStreamText += text;
   ensureAnswerStreamLine().appendChild(document.createTextNode(text));
+  scrollOutputIfPinned();
 }
 
 function clearAnswerStream() {
@@ -3394,7 +3627,7 @@ function setRunning(value, opts = {}) {
   running = value;
   const preserveStreamUi = Boolean(opts.preserveStreamUi);
   if (value) {
-    pendingStreamInputQueue = [];
+    dismissPendingQueueUi();
     stopDetachedBackendWatch();
     detachedBackendAnnouncedForTask = null;
     if (!preserveStreamUi) {
@@ -3666,7 +3899,7 @@ async function stopActiveMission() {
     Boolean(activeSseAbortController) || Boolean(activeResumeAbortController) || running;
   const taskId = activeTaskId || getSessionId();
   userStopPendingTaskId = taskId;
-  pendingStreamInputQueue = [];
+  dismissPendingQueueUi();
   if (activeResumeAbortController) {
     try {
       activeResumeAbortController.abort();
@@ -5228,6 +5461,7 @@ formEl.addEventListener("submit", async (event) => {
   inputEl.value = "";
   resetCommandInputHeight();
   if (!value) return;
+  scrollOutputOnUserSubmit();
   const taskId = activeTaskId || getSessionId();
   const statusData = await fetchTaskStatus(taskId);
   const st = String(statusData?.status || "");
@@ -5483,6 +5717,9 @@ if (sessionFilesBreadcrumbEl) {
 }
 
 if (themeSelectEl) {
+  if (window.PlatformAuth?.populateThemeSelect) {
+    window.PlatformAuth.populateThemeSelect(themeSelectEl);
+  }
   themeSelectEl.addEventListener("change", () => {
     applyTheme(themeSelectEl.value);
   });

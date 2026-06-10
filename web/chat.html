@@ -6,8 +6,9 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/static/favicon.svg" />
   <title>对话 — Agent Runtime</title>
-  <link rel="stylesheet" href="/static/terminal.css?v=ui-27" />
-  <link rel="stylesheet" href="/static/platform.css?v=ui-22" />
+  <link rel="stylesheet" href="/static/themes.css?v=1" />
+  <link rel="stylesheet" href="/static/terminal.css?v=ui-31" />
+  <link rel="stylesheet" href="/static/platform.css?v=ui-23" />
 </head>
 <body class="platform-shell chat-page-shell" data-active-page="chat">
   <div id="platform-nav"></div>
@@ -38,10 +39,6 @@
             <option value="dark">深色</option>
             <option value="light">淡色</option>
           </select>
-          <span class="dot red"></span>
-          <span class="dot yellow"></span>
-          <span class="dot green"></span>
-          <span class="title">对话</span>
           <div id="context-governance-panel" class="ctx-gov-anchor is-collapsed" aria-label="会话用量">
             <button type="button" id="ctx-gov-toggle" class="ctx-gov-trigger flow-btn" aria-expanded="false" aria-controls="ctx-gov-dropdown" title="展开/收起会话 token 用量（厂商实际回报）">
               用量
@@ -78,6 +75,7 @@
             <span id="skill-active-badge" class="badge badge-skill" title="下一条任务使用的 Skill" hidden>—</span>
             <span id="terminal-run-status" class="terminal-run-status" hidden></span>
             <button type="button" id="session-badge" class="badge badge-session badge-session-btn" title="点击查看完整会话 ID">session …</button>
+            <a id="monitor-link-btn" href="/dashboard" class="flow-btn flow-btn-link" title="打开任务监控面板">监控</a>
             <button id="state-debug-btn" type="button" class="flow-btn" title="查看当前会话 AgentState">State</button>
             <button id="flow-open-btn" type="button" class="flow-btn">Flow</button>
           </div>
@@ -184,10 +182,10 @@
       </div>
     </div>
   </dialog>
-  <script src="/static/platform-nav.js?v=6"></script>
-  <script src="/static/platform-auth.js?v=7"></script>
+  <script src="/static/platform-nav.js?v=8"></script>
+  <script src="/static/platform-auth.js?v=8"></script>
   <script src="/static/skill_form.js?v=1"></script>
-  <script src="/static/app.js?v=ui-28"></script>
+  <script src="/static/app.js?v=ui-31"></script>
   <script src="/static/context_governance_panel.js?v=9"></script>
 </body>
 </html>

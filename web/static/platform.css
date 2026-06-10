@@ -116,6 +116,11 @@
   align-items: center;
 }
 
+.platform-theme-select {
+  min-width: 5.5rem;
+  max-width: 7.5rem;
+}
+
 .platform-theme-select,
 .platform-btn,
 .skills-page .flow-btn,
@@ -389,9 +394,9 @@
   opacity: 0.85;
 }
 
-body.theme-light .platform-shell input:-webkit-autofill,
-body.theme-light .platform-shell textarea:-webkit-autofill,
-body.theme-light .platform-shell select:-webkit-autofill {
+html[data-theme-family="light"] .platform-shell input:-webkit-autofill,
+html[data-theme-family="light"] .platform-shell textarea:-webkit-autofill,
+html[data-theme-family="light"] .platform-shell select:-webkit-autofill {
   -webkit-box-shadow: 0 0 0 1000px var(--input-bg) inset;
   -webkit-text-fill-color: var(--input-text, var(--text));
 }
@@ -608,19 +613,19 @@ body.platform-shell main.dashboard-main {
 }
 
 /* Light theme tweaks */
-body.theme-light .platform-nav {
+html[data-theme-family="light"] .platform-nav {
   box-shadow: var(--shadow-sm);
 }
 
-body.theme-light .platform-links {
+html[data-theme-family="light"] .platform-links {
   background: var(--border-subtle);
 }
 
-body.theme-light .platform-auth-panel {
+html[data-theme-family="light"] .platform-auth-panel {
   box-shadow: var(--shadow-lg);
 }
 
-body.theme-light .platform-card:hover {
+html[data-theme-family="light"] .platform-card:hover {
   box-shadow: var(--shadow-md);
 }
 

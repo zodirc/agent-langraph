@@ -6,9 +6,10 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/static/favicon.svg" />
   <title>监控 — Agent Runtime</title>
-  <link rel="stylesheet" href="/static/terminal.css?v=ui-8" />
-  <link rel="stylesheet" href="/static/platform.css?v=ui-8" />
-  <link rel="stylesheet" href="/static/dashboard.css?v=ui-11" />
+  <link rel="stylesheet" href="/static/themes.css?v=1" />
+  <link rel="stylesheet" href="/static/terminal.css?v=ui-31" />
+  <link rel="stylesheet" href="/static/platform.css?v=ui-23" />
+  <link rel="stylesheet" href="/static/dashboard.css?v=ui-12" />
 </head>
 <body class="platform-shell" data-active-page="dashboard">
   <div id="platform-nav"></div>
@@ -45,7 +46,23 @@
     <main class="dashboard-main">
       <section id="metrics-cards" class="cards" aria-label="指标卡片"></section>
       <section class="dashboard-section">
-        <h2>最近任务</h2>
+        <div class="tasks-section-head">
+          <h2>最近任务</h2>
+          <div class="tasks-toolbar" aria-label="任务筛选与快速跳转">
+            <input
+              type="search"
+              id="task-filter-input"
+              class="task-filter-input"
+              placeholder="筛选 ID / 状态 / 目标…"
+              autocomplete="off"
+              aria-label="筛选任务"
+            />
+            <label class="task-quick-label" for="task-quick-select">快速跳转</label>
+            <select id="task-quick-select" class="task-quick-select" aria-label="快速跳转到任务">
+              <option value="">选择任务…</option>
+            </select>
+          </div>
+        </div>
         <table id="tasks-table">
           <thead><tr><th>ID</th><th>状态</th><th>节点</th><th>目标</th><th>更新</th><th></th></tr></thead>
           <tbody></tbody>
@@ -86,8 +103,8 @@
       <p id="dashboard-status" class="dashboard-status" role="status" hidden></p>
     </main>
   </div>
-  <script src="/static/platform-nav.js?v=6"></script>
-  <script src="/static/platform-auth.js?v=7"></script>
-  <script src="/static/dashboard.js?v=6"></script>
+  <script src="/static/platform-nav.js?v=8"></script>
+  <script src="/static/platform-auth.js?v=8"></script>
+  <script src="/static/dashboard.js?v=7"></script>
 </body>
 </html>
