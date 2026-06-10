@@ -60,4 +60,23 @@ def route_after_reasoning_or_writing(state: AgentState) -> str:
         return "reasoning_or_writing"
     if status.endswith("FAILED") or status == TaskStatus.DEAD_LETTER.value:
         return "dead_letter"
+
+    # Single convergence gate (unified-core WP-2): if the turn goal is not met
+    # and replan budget remains, go back to planning instead of emitting a
+    # dishonest final answer. Legacy guards above remain as fallback.
+    from app.services.converge import NEXT_REPLAN, evaluate_convergence
+
+    conv = evaluate_convergence(state)
+    if conv.next == NEXT_REPLAN:
+        from app.services.planning_retry_signals import (
+            apply_planning_replan_signal,
+            can_planning_replan_again,
+        )
+        from app.services.turn_contract import validate_turn_contract_execution
+
+        if can_planning_replan_again(state):
+            issues = validate_turn_contract_execution(state) or [f"converge:{conv.reason}"]
+            replanned = apply_planning_replan_signal(state, issues=issues)
+            get_state_store().save(replanned)
+            return "incremental_planning"
     return "verification"

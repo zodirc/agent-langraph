@@ -73,20 +73,25 @@ def route_after_retrieval(state: AgentState) -> str:
 
 
 def route_after_tool(state: AgentState) -> str:
-    """Retry tool node or route to dead letter (architecture §22)."""
+    """Retry tool node or route to dead letter (architecture §22).
+
+    Convergence judgment comes from the single gate (`evaluate_convergence`);
+    legacy guards remain as fallback during the unified-core transition.
+    """
     from app.runtime.revision_loop_guard import (
         apply_revision_loop_guard,
         should_block_incremental_planning,
     )
+    from app.services.converge import NEXT_FINALIZE, NEXT_REPLAN, evaluate_convergence
     from app.services.planning_retry_signals import (
         apply_planning_replan_signal,
         can_planning_replan_again,
-        execution_contract_replan_needed,
     )
 
+    conv = evaluate_convergence(state)
     if (
         not graph_last_tool_failed(state)
-        and execution_contract_replan_needed(state)
+        and conv.next == NEXT_REPLAN
         and can_planning_replan_again(state)
         and not should_block_incremental_planning(state)
     ):
@@ -94,7 +99,7 @@ def route_after_tool(state: AgentState) -> str:
 
         replanned = apply_planning_replan_signal(
             state,
-            issues=validate_turn_contract_execution(state),
+            issues=validate_turn_contract_execution(state) or [f"converge:{conv.reason}"],
         )
         from app.services.state_store import get_state_store
 
@@ -109,6 +114,10 @@ def route_after_tool(state: AgentState) -> str:
         if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
             return "dead_letter"
         return "tool_execution"
+    if conv.done or conv.next == NEXT_FINALIZE:
+        # Single gate says this turn converged (or is stuck): finalize forward,
+        # never re-enter the tool loop.
+        return "context_governance"
     payload = state.get("input_payload") or {}
     if _writing_route_allowed(state):
         return "context_governance"
