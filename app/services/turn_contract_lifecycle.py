@@ -105,7 +105,9 @@ def detect_non_recoverable_step_failure(state: AgentState) -> Optional[str]:
     for item in state.get("tool_results") or []:
         if not isinstance(item, dict):
             continue
-        if item.get("non_retryable") or (item.get("result") or {}).get("non_retryable"):
+        from app.services.tool_result_helpers import tool_result_flag
+
+        if item.get("non_retryable") or tool_result_flag(item, "non_retryable"):
             return str(item.get("error") or item.get("error_code") or "non_retryable_tool")[
                 :240
             ]

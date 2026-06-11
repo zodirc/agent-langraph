@@ -409,13 +409,37 @@ def planning_node(state: AgentState) -> AgentState:
         actions, action_issues = _actions_from_result(result)
         plan = normalize_planning_plan(result.get("plan", []))
         from app.services.artifact_edit_intent import ensure_artifact_edit_write_action
+        from app.services.artifact_rename_intent import normalize_rename_actions
 
+        actions = normalize_rename_actions(actions, goal=goal_for_planning)
+        from app.services.writing_playbook import classify_and_apply_playbook
+
+        actions, playbook_plan, writing_operator, playbook_patched = classify_and_apply_playbook(
+            actions,
+            goal=goal_for_planning,
+            task_id=str(state["task_id"]),
+            state=state,
+            payload=payload,
+        )
+        if writing_operator:
+            payload["writing_operator"] = writing_operator
+        if playbook_patched and playbook_plan:
+            plan = playbook_plan
         actions, write_patched = ensure_artifact_edit_write_action(
             actions,
             plan,
             goal=goal_for_planning,
             task_id=str(state["task_id"]),
         )
+        if playbook_patched:
+            payload["writing_intent"] = {
+                "enabled": True,
+                "source": "writing_playbook",
+                "operator": writing_operator,
+            }
+            from app.services.metrics_service import get_metrics_service
+
+            get_metrics_service().inc_contract_event(f"writing_playbook_{writing_operator}")
         if write_patched:
             payload["thin_execution_profile"] = (
                 str(payload.get("thin_execution_profile") or "") or "artifact_edit"
@@ -471,7 +495,17 @@ def planning_node(state: AgentState) -> AgentState:
                 (a.rationale or a.type)[:60] for a in actions[:8]
             ]
 
-        payload["writing_intent"] = {"enabled": False, "source": "unified_actions"}
+        existing_intent = dict(payload.get("writing_intent") or {})
+        if existing_intent.get("enabled"):
+            payload["writing_intent"] = existing_intent
+        else:
+            from app.services.writing_context import resolve_writing_intent_for_plan
+
+            payload["writing_intent"] = resolve_writing_intent_for_plan(
+                payload=payload,
+                actions=actions,
+                goal=goal_for_planning,
+            )
         payload["tool_params"] = tool_params
         if action_stages:
             payload["tool_stages"] = action_stages
@@ -482,6 +516,10 @@ def planning_node(state: AgentState) -> AgentState:
         has_retrieve = any(a.type == "retrieve" for a in actions)
         skip_retrieval = bool(result.get("skip_retrieval", not has_retrieve))
         if has_retrieve:
+            skip_retrieval = False
+        from app.services.writing_context import should_force_writing_retrieval
+
+        if should_force_writing_retrieval(payload):
             skip_retrieval = False
         review_required = str(result.get("risk_level", "LOW")).upper() in (
             "HIGH",

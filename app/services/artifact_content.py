@@ -215,6 +215,17 @@ def generate_artifact_content(
         "conversation_history": history[-12:],
         "previous_artifact_excerpt": existing_excerpt or None,
     }
+    from app.services.writing_context import (
+        applied_writing_guideline_ids,
+        build_writing_guidelines_excerpt,
+    )
+
+    guidelines_excerpt = build_writing_guidelines_excerpt(state)
+    if guidelines_excerpt:
+        writing_ctx = dict(user_payload.get("writing_context") or {})
+        writing_ctx["writing_guidelines_excerpt"] = guidelines_excerpt
+        user_payload["writing_context"] = writing_ctx
+    applied_guidelines = applied_writing_guideline_ids(state)
     from app.services.prompt_context_gateway import (
         context_governance_enabled,
         mutate_state_context_trace,
@@ -252,10 +263,13 @@ def generate_artifact_content(
         )
     if trace_enabled():
         preview = content[:200].replace("\n", " ")
+        guideline_note = ""
+        if applied_guidelines:
+            guideline_note = f"\n  风格规范: {', '.join(applied_guidelines)}"
         report_block(
             "writing",
             "done",
-            f"【写作完成】{filename} — {len(content)} 字\n  开头: {preview}…",
+            f"【写作完成】{filename} — {len(content)} 字\n  开头: {preview}…{guideline_note}",
             field="content_preview",
         )
     max_bytes = settings.ARTIFACT_MAX_WRITE_BYTES

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.services.converge import (
     NEXT_FINALIZE,
+    NEXT_FORCE_WRITE,
     NEXT_PROCEED,
     NEXT_REPLAN,
     READ_LOOP_THRESHOLD,
@@ -71,6 +72,77 @@ def test_read_loop_triggers_safe_finalize():
     assert result.done is False
     assert result.next == NEXT_FINALIZE
     assert result.reason == "read_loop"
+
+
+def test_read_loop_write_budget_exhausted_finalizes():
+    reads = [
+        {"tool": "read_text_artifact", "status": "ok", "result": {"status": "ok"}}
+        for _ in range(READ_LOOP_THRESHOLD)
+    ]
+    failed_writes = [
+        {"tool": "write_text_artifact", "status": "error", "error": "generation failed"}
+        for _ in range(4)
+    ]
+    state = _base_state(
+        tool_results=reads + failed_writes,
+        input_payload={
+            "writing_intent": {"enabled": True},
+            "target_mode": "manuscript_mode",
+            "effective_mode_contract": {"execution": {"max_write_actions": 4}},
+        },
+    )
+    result = evaluate_convergence(state)
+    assert result.next == NEXT_FINALIZE
+    assert result.reason == "write_budget_exhausted"
+
+
+def test_edit_not_applied_writing_forces_write():
+    state = _base_state(
+        tool_results=[_edit_result(0)],
+        turn_facts={"edits_attempted": 1, "edits_applied": 0},
+        input_payload={
+            "writing_intent": {"enabled": True},
+            "target_mode": "manuscript_mode",
+        },
+    )
+    result = evaluate_convergence(state)
+    assert result.next == NEXT_FORCE_WRITE
+    assert result.reason == "edit_not_applied_force_write"
+
+
+def test_read_loop_with_failed_edit_counts_as_read_loop():
+    items = [
+        {"tool": "read_text_artifact", "status": "ok", "result": {"status": "ok"}}
+        for _ in range(READ_LOOP_THRESHOLD)
+    ] + [_edit_result(0)]
+    state = _base_state(
+        tool_results=items,
+        input_payload={
+            "writing_intent": {"enabled": True},
+            "target_mode": "manuscript_mode",
+        },
+    )
+    result = evaluate_convergence(state)
+    assert result.next == NEXT_FORCE_WRITE
+
+
+def test_read_loop_with_writing_intent_forces_write_not_finalize():
+    reads = [
+        {"tool": "read_text_artifact", "status": "ok", "result": {"status": "ok"}}
+        for _ in range(READ_LOOP_THRESHOLD)
+    ]
+    state = _base_state(
+        tool_results=reads,
+        input_payload={
+            "writing_intent": {"enabled": True, "source": "manuscript_mode"},
+            "target_mode": "manuscript_mode",
+            "goal": "重写小说，内容太少",
+        },
+    )
+    result = evaluate_convergence(state)
+    assert result.done is False
+    assert result.next == NEXT_FORCE_WRITE
+    assert result.reason == "read_loop_force_write"
 
 
 def test_read_loop_with_pending_artifact_save_replans():
@@ -167,6 +239,37 @@ def test_pending_planned_side_effect_action_requests_replan():
     assert "actions_pending" in result.reason
 
 
+def test_failed_rm_after_successful_write_does_not_replan_forever():
+    state = _base_state(
+        planned_actions=[
+            {
+                "type": "write_artifact",
+                "params": {"filename": "利迪策之刃_大纲.md", "content": "x"},
+            },
+            {
+                "type": "run_tool",
+                "params": {"name": "rm_path", "path": "深空余烬_大纲.md"},
+            },
+        ],
+        tool_results=[
+            {
+                "tool": "write_text_artifact",
+                "status": "ok",
+                "result": {"filename": "利迪策之刃_大纲.md"},
+            },
+            {
+                "tool": "rm_path",
+                "status": "error",
+                "error": "preview_token required: run dry_run first",
+            },
+        ],
+        reasoning_result={"summary": "已写入新大纲文件。"},
+    )
+    result = evaluate_convergence(state)
+    assert result.done is True
+    assert result.next == NEXT_PROCEED
+
+
 def test_exploration_only_plan_returns_to_planning_after_reads():
     state = _base_state(
         planned_actions=[{"type": "read_artifact", "params": {"filename": "outline.txt"}}],
@@ -194,6 +297,34 @@ def test_executed_planned_actions_converge_done():
     result = evaluate_convergence(state)
     assert result.done is True
     assert result.reason == "edit_applied"
+
+
+def test_writing_answer_without_persist_forces_write():
+    state = _base_state(
+        reasoning_result={"summary": "已制定五步创作计划，准备开始撰写。"},
+        input_payload={
+            "writing_intent": {"enabled": True},
+            "target_mode": "manuscript_mode",
+        },
+    )
+    result = evaluate_convergence(state)
+    assert result.next == NEXT_FORCE_WRITE
+    assert result.reason == "writing_answer_without_persist"
+
+
+def test_writing_explicit_ask_converges_answer_ready():
+    state = _base_state(
+        reasoning_result={
+            "summary": "需先补充剧情信息或用户提供故事大纲，方可开始撰写小说正文。"
+        },
+        input_payload={
+            "writing_intent": {"enabled": True},
+            "target_mode": "manuscript_mode",
+        },
+    )
+    result = evaluate_convergence(state)
+    assert result.done is True
+    assert result.reason == "answer_ready"
 
 
 def test_answer_plan_with_no_tools_converges_on_answer():

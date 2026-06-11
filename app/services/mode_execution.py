@@ -166,9 +166,10 @@ def apply_manuscript_mode_contract(
     audit["writing_blocked"] = False
     payload["writing_intent"] = {
         **intent,
-        "enabled": bool(intent.get("enabled", True)),
+        "enabled": True,
         "source": intent.get("source") or "manuscript_mode",
     }
+    payload["skip_retrieval"] = False
     payload = _strip_disallowed_tool_params(payload, kept)
     payload.pop("mission", None)
     state = merge_state(state, execution_mode="single")

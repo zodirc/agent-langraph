@@ -369,6 +369,7 @@ mode_contracts:
     execution:
       path: reasoning
       max_steps: 6
+      max_write_actions: 4
       max_repair_attempts: 0
     verify:
       enabled: false

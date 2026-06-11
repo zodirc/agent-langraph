@@ -18,6 +18,7 @@ class ModeDelivery:
 class ModeExecution:
     path: str = "reasoning"
     max_steps: int = 2
+    max_write_actions: int = 0
     max_repair_attempts: int = 0
 
 
@@ -71,6 +72,7 @@ def _parse_contract(mode_id: str, raw: dict[str, Any]) -> ModeContract:
         execution=ModeExecution(
             path=str(exec_raw.get("path") or "reasoning"),
             max_steps=int(exec_raw.get("max_steps", 2)),
+            max_write_actions=int(exec_raw.get("max_write_actions", 0)),
             max_repair_attempts=int(exec_raw.get("max_repair_attempts", 0)),
         ),
         verify=ModeVerify(
@@ -116,6 +118,7 @@ def contract_to_trace_dict(contract: ModeContract) -> dict[str, Any]:
         "delivery_secondary": contract.delivery.secondary,
         "execution_path": contract.execution.path,
         "max_steps": contract.execution.max_steps,
+        "max_write_actions": contract.execution.max_write_actions,
         "max_repair_attempts": contract.execution.max_repair_attempts,
         "verify_enabled": contract.verify.enabled,
         "forbid_routes": sorted(contract.guards.forbid_routes),

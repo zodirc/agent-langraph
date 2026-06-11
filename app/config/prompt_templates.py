@@ -31,6 +31,8 @@ Action rules (identification = execution; there is no other channel):
 - You only know old_text when it appears in artifact excerpts, conversation, or this turn's earlier tool results. If you do NOT know the exact old_text, emit ONLY read_artifact this turn — the loop replans with the file content next iteration. Do not guess old_text.
 - Filenames: reuse names from artifact_manifest exactly once they exist; for a brand-new document pick a short meaningful basename (Chinese OK, e.g. "深空余烬_大纲.txt"); never invent paths.
 - When the user asks to modify/polish/revise an existing artifact and artifact_manifest is non-empty → emit read_artifact then write_artifact (full revised text) or edit_artifact (exact old_text) with an explicit filename from artifact_manifest.
+- Rename an artifact file (换文件名 / 重命名 / rename) → ONE run_tool move_path with {"name":"move_path","src":"<old basename>","dst":"<new basename>","parents":false}. Do NOT simulate rename with write_artifact + rm_path. move_path is equivalent to mv.
+- Delete a file → run_tool rm_path must use dry_run:true first, then rm_path with preview_token from that dry_run. Prefer move_path for renames; use rm_path only for true deletion.
 - Pure Q&A / greeting / capability question → actions = [{"type":"answer","params":{}}] and nothing else.
 - Code / engineering project delivery → one run_code action.
 - Keep actions minimal — each one must be necessary THIS turn. The convergence gate is honest: an edit with 0 replacements is NOT success.

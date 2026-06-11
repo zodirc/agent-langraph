@@ -52,7 +52,9 @@ def test_planning_maps_actions_to_planned_actions_and_transport(mock_invoke, iso
     assert tool_params["edit_text_artifact"]["new_text"] == "火星"
     stages = (out.get("input_payload") or {}).get("tool_stages")
     assert stages == [["read_text_artifact"], ["edit_text_artifact"]]
-    assert out.get("skip_retrieval") is True
+    # Writing actions enable retrieval for style guidelines.
+    assert out.get("skip_retrieval") is False
+    assert (out.get("input_payload") or {}).get("writing_intent", {}).get("enabled") is True
 
 
 @patch("app.nodes.planning_node.invoke_structured")
@@ -65,13 +67,12 @@ def test_planning_answer_only_actions_have_no_tools(mock_invoke, isolated_stores
             "risk_level": "LOW",
             "skip_retrieval": True,
         },
-        goal="解释一下大纲与正文的区别是什么？",
+        goal="什么是光合作用？",
         task_id="plan-act-2",
     )
     actions = out.get("planned_actions") or []
     assert [a["type"] for a in actions] == ["answer"]
     assert out.get("selected_tools") == []
-    # writing control plane is gone: writing_intent is permanently disabled.
     assert (out.get("input_payload") or {}).get("writing_intent", {}).get("enabled") is False
 
 

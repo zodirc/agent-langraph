@@ -1,4 +1,6 @@
-from app.services.artifact_content import _read_artifact_snippet, needs_generated_content
+from unittest.mock import patch
+
+from app.services.artifact_content import _read_artifact_snippet, generate_artifact_content, needs_generated_content
 from app.services.artifact_tools import handle_write_text_artifact
 
 
@@ -28,3 +30,32 @@ def test_read_artifact_snippet_uses_task_artifact_dir(isolated_stores, test_sett
         {"task_id": task_id, "filename": "outline.txt", "content": "大纲片段"}
     )
     assert _read_artifact_snippet(task_id, "outline.txt") == "大纲片段"
+
+
+@patch("app.services.artifact_content.artifact_stream_enabled", return_value=False)
+@patch("app.services.artifact_content.trace_enabled", return_value=False)
+@patch("app.services.artifact_content.invoke_artifact_draft")
+def test_generate_artifact_content_injects_writing_guidelines(
+    mock_invoke, _trace, _stream, isolated_stores
+):
+    mock_invoke.return_value = type("Draft", (), {"content": "第一章\n\n江湖夜雨。", "source": "tool"})()
+    state = {
+        "task_id": "writing-guidelines-task",
+        "input_payload": {"goal": "续写下一章"},
+        "retrieved_knowledge": [
+            {
+                "doc_id": "builtin-prose-voice-format",
+                "content": "对话单独成行，段落之间空一行。",
+                "metadata": {"domain": "writing"},
+            }
+        ],
+    }
+    generate_artifact_content(
+        state=state,
+        tool_name="append_text_artifact",
+        filename="novel.txt",
+        goal="续写下一章",
+    )
+    user_payload = mock_invoke.call_args.kwargs["user_payload"]
+    excerpt = (user_payload.get("writing_context") or {}).get("writing_guidelines_excerpt") or ""
+    assert "对话单独成行" in excerpt

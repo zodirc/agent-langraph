@@ -163,6 +163,26 @@ def test_no_planned_actions_is_noop():
     assert execute_actions(state) is state
 
 
+def test_rm_path_auto_preview_commit(artifact_env):
+    task_id = "task-rm-auto"
+    story = artifact_env / task_id
+    story.mkdir(parents=True)
+    old = story / "深空余烬_大纲.md"
+    old.write_text("大纲内容", encoding="utf-8")
+
+    state = _state_with_actions(
+        [run_tool("rm_path", {"path": "深空余烬_大纲.md"})],
+        task_id=task_id,
+    )
+    updated = execute_actions(state)
+
+    entry = updated["tool_results"][-1]
+    assert entry["tool"] == "rm_path"
+    assert entry["status"] == "ok"
+    assert not old.exists()
+
+
+
 def test_write_without_inline_content_generates_via_gateway(artifact_env, monkeypatch):
     from unittest.mock import patch
 

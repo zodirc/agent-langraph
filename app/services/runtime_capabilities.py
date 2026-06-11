@@ -76,9 +76,11 @@ def build_runtime_capabilities(
         "writing": {
             "mechanism": "write_artifact / edit_artifact actions with explicit filename",
             "file_tools": ["write_text_artifact", "append_text_artifact", "edit_text_artifact"],
+            "rename_tool": "move_path (run_tool: src/dst basenames under task artifact dir; equivalent to mv)",
+            "delete_tool": "rm_path (run_tool: dry_run first → preview_token → commit delete)",
             "note": (
                 "Long-form prose goes to artifact files via write/append actions; "
-                "source code uses reasoning structured.artifacts or engineering tools. "
+                "rename with move_path, not write+rm. "
                 "route_audit corrects planner misroutes post-planning."
             ),
         },

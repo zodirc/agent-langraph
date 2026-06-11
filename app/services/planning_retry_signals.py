@@ -61,3 +61,43 @@ def can_planning_replan_again(state: AgentState) -> bool:
     cfg = load_route_audit_config()
     revisions = int(state.get("planning_revision_count") or 0)
     return revisions < cfg.max_planning_revisions
+
+
+_FORCE_WRITE_FEEDBACK = (
+    "Writing turn requires persisted artifact content. Context gathering is sufficient. "
+    "Emit write_artifact (full rewrite) or append_artifact—do NOT plan read_artifact loops "
+    "or edit_artifact without exact old_text/new_text. For polish/rewrite goals use "
+    "write_artifact after at most one read."
+)
+
+_FORCE_EDIT_FEEDBACK = (
+    "Character/name correction: reads are sufficient. Emit edit_artifact with edits[] "
+    "(old_text, new_text, replace_all:true) for each affected file. Use with_line_numbers "
+    "on the preceding read only once per file. Do NOT plan further read_artifact loops "
+    "or write_artifact full rewrites."
+)
+
+
+def apply_force_write_signal(state: AgentState) -> AgentState:
+    """Re-enter planning with a write/edit mandate without consuming replan budget."""
+    from app.services.character_correction import (
+        extract_name_replacements,
+        is_character_correction_goal,
+    )
+
+    payload = dict(state.get("input_payload") or {})
+    goal = str(payload.get("goal") or payload.get("query") or "")
+    operator = str(payload.get("writing_operator") or "")
+    use_edit = (
+        operator == "character" or is_character_correction_goal(goal)
+    ) and bool(extract_name_replacements(goal))
+    if use_edit:
+        payload["force_edit_after_reads"] = True
+        payload.pop("force_write_after_reads", None)
+        payload["route_audit_replan_feedback"] = _FORCE_EDIT_FEEDBACK
+    else:
+        payload["force_write_after_reads"] = True
+        payload.pop("force_edit_after_reads", None)
+        payload["route_audit_replan_feedback"] = _FORCE_WRITE_FEEDBACK
+    payload.pop("route_audit_replan", None)
+    return merge_state(state, input_payload=payload)

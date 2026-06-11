@@ -577,11 +577,19 @@ def _emit_tool_preview(
     *,
     msg_ctx: StreamMessagePersistCtx | None = None,
 ) -> Iterator[str]:
+    from app.services.tool_result_helpers import format_tool_preview_snippet, tool_result_body
+
     svc = get_chat_message_service()
     for item in state.get("tool_results") or []:
-        result = item.get("result") if isinstance(item.get("result"), dict) else {}
-        preview: dict[str, Any] = {"tool": item.get("tool"), "status": item.get("status")}
-        if result.get("result") is not None:
+        if not isinstance(item, dict):
+            continue
+        tool = str(item.get("tool") or "")
+        result = tool_result_body(item)
+        preview: dict[str, Any] = {"tool": tool, "status": item.get("status")}
+        snippet = format_tool_preview_snippet(tool, result)
+        if snippet:
+            preview["snippet"] = snippet
+        elif result.get("result") is not None:
             preview["snippet"] = str(result.get("result"))[:200]
         elif result.get("model_name"):
             preview["snippet"] = str(result.get("model_name"))

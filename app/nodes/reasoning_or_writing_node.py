@@ -71,9 +71,15 @@ def route_after_reasoning_or_writing(state: AgentState) -> str:
     # Single convergence gate (unified-core WP-2): if the turn goal is not met
     # and replan budget remains, go back to planning instead of emitting a
     # dishonest final answer. Legacy guards above remain as fallback.
-    from app.services.converge import NEXT_REPLAN, evaluate_convergence
+    from app.services.converge import NEXT_FORCE_WRITE, NEXT_REPLAN, evaluate_convergence
 
     conv = evaluate_convergence(state)
+    if conv.next == NEXT_FORCE_WRITE:
+        from app.services.planning_retry_signals import apply_force_write_signal
+
+        replanned = apply_force_write_signal(state)
+        get_state_store().save(replanned)
+        return "incremental_planning"
     if conv.next == NEXT_REPLAN:
         from app.services.planning_retry_signals import (
             apply_planning_replan_signal,

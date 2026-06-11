@@ -147,12 +147,34 @@ def output_guard_node(state: AgentState) -> AgentState:
                 grounding_result["demoted_to_warning"] = True
                 guard_warnings.append(issue)
             else:
-                result = GuardResult(
-                    passed=False,
-                    issues=list(result.issues) + [issue],
-                    sanitized_summary=result.sanitized_summary,
-                    source=result.source,
+                from app.services.writing_context import (
+                    turn_has_persisted_write,
+                    writing_explicit_ask,
+                    writing_intent_active,
+                    writing_style_only_evidence,
                 )
+
+                summary = str(reasoning.get("summary") or state.get("final_answer") or "")
+                if (
+                    writing_intent_active(state)
+                    and writing_style_only_evidence(state)
+                    and not turn_has_persisted_write(state.get("tool_results") or [])
+                    and (
+                        writing_explicit_ask(summary)
+                        or "未执行" in summary
+                        or "未检索到" in summary
+                    )
+                ):
+                    faithfulness["demoted_to_warning"] = True
+                    grounding_result["demoted_to_warning"] = True
+                    guard_warnings.append(issue)
+                else:
+                    result = GuardResult(
+                        passed=False,
+                        issues=list(result.issues) + [issue],
+                        sanitized_summary=result.sanitized_summary,
+                        source=result.source,
+                    )
     guard_payload = {**result.to_dict(), "faithfulness": faithfulness}
     if grounding_result is not None:
         guard_payload["grounding_check"] = grounding_result

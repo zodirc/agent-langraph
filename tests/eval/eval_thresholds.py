@@ -92,3 +92,37 @@ def check_context_compress_thresholds(
                 f"mean entity retention {avg_ret:.3f} < min {min_entity_retention}"
             )
     return errors
+
+
+def check_writing_compliance_thresholds(
+    snapshot: dict[str, dict[str, float]],
+    *,
+    min_overall: float | None = None,
+    min_rag_delta: float | None = None,
+) -> list[str]:
+    """Gate writing RAG A/B eval: compliance scores and RAG uplift."""
+    errors: list[str] = []
+    overall_scores: list[float] = []
+    rag_deltas: list[float] = []
+
+    for task_id, metrics in snapshot.items():
+        if "writing_compliance" not in task_id and "writing_rag" not in task_id:
+            continue
+        if "overall" in metrics:
+            overall_scores.append(float(metrics["overall"]))
+        if "overall_delta" in metrics:
+            rag_deltas.append(float(metrics["overall_delta"]))
+        elif "rag_delta" in metrics:
+            rag_deltas.append(float(metrics["rag_delta"]))
+
+    if min_overall is not None and overall_scores:
+        avg = _mean(overall_scores)
+        if avg < min_overall:
+            errors.append(f"mean writing compliance {avg:.3f} < min {min_overall}")
+
+    if min_rag_delta is not None and rag_deltas:
+        avg_delta = _mean(rag_deltas)
+        if avg_delta < min_rag_delta:
+            errors.append(f"mean writing RAG delta {avg_delta:.3f} < min {min_rag_delta}")
+
+    return errors

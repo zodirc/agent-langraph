@@ -302,7 +302,10 @@ def _register_artifact_and_utility(registry: ToolRegistry) -> None:
             name="rm_path",
             description=(
                 "Remove file or directory in current session directory. "
-                "Use recursive=true for non-empty directories."
+                "Use recursive=true for non-empty directories. "
+                "Safety: call with dry_run=true first to obtain preview_token, "
+                "then call again with dry_run=false and preview_token to commit. "
+                "For renaming files, use move_path instead."
             ),
             input_schema={
                 "type": "object",

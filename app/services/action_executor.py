@@ -77,9 +77,13 @@ def _error_entry(
     return entry
 
 
-def _execute_run_tool(action: Action, state: AgentState) -> dict[str, Any]:
-    from app.services.tool_registry import get_tool_registry
+def _invoke_registry_tool(name: str, params: dict[str, Any], *, user_role: str) -> dict[str, Any]:
+    from app.services.tool_invoke_helpers import invoke_tool_with_guards
 
+    return invoke_tool_with_guards(name, params, user_role=user_role)
+
+
+def _execute_run_tool(action: Action, state: AgentState) -> dict[str, Any]:
     params = dict(action.params)
     name = str(params.pop("name", "") or "")
     if not name:
@@ -93,14 +97,45 @@ def _execute_run_tool(action: Action, state: AgentState) -> dict[str, Any]:
     user_role = str(payload.get("user_role", "user"))
     params.setdefault("task_id", str(state["task_id"]))
     try:
-        invoked = get_tool_registry().invoke(name, params, user_role=user_role)
+        invoked = _invoke_registry_tool(name, params, user_role=user_role)
     except KeyError as exc:
         return _error_entry(name, exc, action_type="run_tool", error_code="unknown_tool", non_retryable=True)
     except PermissionError as exc:
         return _error_entry(name, exc, action_type="run_tool", error_code="permission_denied", non_retryable=True)
     except Exception as exc:  # tool runtime failure stays a result, not a crash
         return _error_entry(name, exc, action_type="run_tool")
+    result_body = invoked.get("result") if isinstance(invoked.get("result"), dict) else {}
+    if str(result_body.get("status") or "ok") == "error":
+        return _error_entry(
+            name,
+            ValueError(str(result_body.get("error") or "tool failed")),
+            action_type="run_tool",
+        )
     return {**invoked, "status": "ok", "action_type": "run_tool"}
+
+
+def resolve_imprecise_edit_as_write(
+    state: AgentState,
+    tool_name: str,
+    params: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Redirect imprecise writing edits to write_text_artifact + LLM draft."""
+    if tool_name != "edit_text_artifact" or _edit_has_target(params):
+        return tool_name, params
+    payload = state.get("input_payload") or {}
+    if not (payload.get("writing_intent") or {}).get("enabled"):
+        return tool_name, params
+    write_params = dict(params)
+    write_params["content"] = _resolve_write_content(state, write_params)
+    return "write_text_artifact", write_params
+
+
+def _edit_has_target(params: dict[str, Any]) -> bool:
+    if isinstance(params.get("edits"), list) and params.get("edits"):
+        return True
+    if params.get("start_line") is not None:
+        return True
+    return bool(str(params.get("old_text") or "").strip())
 
 
 def _resolve_write_content(state: AgentState, params: dict[str, Any]) -> str:
@@ -140,6 +175,45 @@ def _execute_artifact(action: Action, state: AgentState) -> dict[str, Any]:
         params["_agent_state"] = state
     if action.type == "write_artifact":
         params["content"] = _resolve_write_content(state, params)
+    elif action.type == "edit_artifact" and not _edit_has_target(params):
+        params["content"] = _resolve_write_content(state, {**params, "filename": params.get("filename")})
+        action_type = "write_artifact"
+        try:
+            result = _artifact_handler("write_artifact")(params)
+        except FileNotFoundError as exc:
+            return _error_entry(
+                call["name"], exc, action_type=action.type,
+                error_code="artifact_not_found", non_retryable=True,
+            )
+        except ValueError as exc:
+            return _error_entry(call["name"], exc, action_type=action.type, non_retryable=True)
+        except Exception as exc:
+            return _error_entry(call["name"], exc, action_type=action.type)
+        result_body = result if isinstance(result, dict) else {"content": str(result)}
+        return {
+            "tool": "write_text_artifact",
+            "status": "ok",
+            "action_type": action.type,
+            "result": {**result_body, "mode": "write_fallback"},
+        }
+    if action.type == "read_artifact":
+        from app.services.artifact_read_guard import block_repeat_artifact_read
+
+        filename = str(params.get("filename") or "")
+        blocked = block_repeat_artifact_read(state, filename=filename)
+        if blocked is not None:
+            status = str(blocked.get("status") or "cached")
+            entry: dict[str, Any] = {
+                "tool": call["name"],
+                "status": status,
+                "action_type": action.type,
+                "result": blocked,
+            }
+            if blocked.get("error"):
+                entry["error"] = str(blocked["error"])
+                entry["error_code"] = blocked.get("error_code")
+                entry["non_retryable"] = bool(blocked.get("non_retryable"))
+            return entry
     try:
         result = _artifact_handler(action.type)(params)
     except FileNotFoundError as exc:

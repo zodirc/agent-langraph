@@ -81,8 +81,10 @@ def build_planning_system_prompt(state: dict | None = None) -> str:
     guide = (
         "Registry tools (for run_tool actions):\n"
         f"  [{tool_list}]\n"
-        "Artifact read/write/edit and retrieval have dedicated action types; "
-        "use run_tool only for other registry tools (calculator, get_runtime_info, …).\n"
+        "Artifact read/write/edit have dedicated action types; "
+        "use run_tool for registry tools (calculator, get_runtime_info, move_path, …).\n"
+        "Rename artifact files with run_tool move_path(src,dst) — never write_artifact + rm_path.\n"
+        "rm_path deletes require dry_run first, then commit with preview_token.\n"
         "When the user asks to modify/polish/revise an existing artifact and "
         "artifact_manifest in user JSON is non-empty, emit read_artifact then "
         "write_artifact (full revised text) or edit_artifact (exact old_text) "

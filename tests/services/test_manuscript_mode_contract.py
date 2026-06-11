@@ -25,3 +25,11 @@ def test_manuscript_mode_contract_applies_artifact_tools():
     payload = updated.get("input_payload") or {}
     assert payload.get("target_mode") == "manuscript_mode"
     assert (payload.get("writing_intent") or {}).get("enabled") is True
+
+
+def test_manuscript_mode_has_write_action_budget():
+    from app.services.mode_registry import get_mode_contract
+
+    contract = get_mode_contract("manuscript_mode")
+    assert contract is not None
+    assert contract.execution.max_write_actions == 4

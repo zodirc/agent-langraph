@@ -1,4 +1,4 @@
-from tests.eval.eval_thresholds import check_rag_thresholds
+from tests.eval.eval_thresholds import check_rag_thresholds, check_writing_compliance_thresholds
 
 
 def test_thresholds_pass():
@@ -26,3 +26,19 @@ def test_thresholds_ignore_negative_faithfulness_controls():
         "rag_llm_faithfulness_bad": {"score": 0.2},
     }
     assert not check_rag_thresholds(snapshot, min_faithfulness=0.75)
+
+
+def test_writing_compliance_thresholds_pass():
+    snapshot = {
+        "writing_rag_ab_w-prose-txt-format": {"overall": 0.72, "overall_delta": 0.25},
+        "writing_rag_ab_w-guidelines-structure": {"overall": 0.68, "overall_delta": 0.18},
+    }
+    assert not check_writing_compliance_thresholds(
+        snapshot, min_overall=0.55, min_rag_delta=0.15
+    )
+
+
+def test_writing_compliance_thresholds_fail_delta():
+    snapshot = {"writing_rag_ab_x": {"overall": 0.8, "overall_delta": 0.05}}
+    errors = check_writing_compliance_thresholds(snapshot, min_rag_delta=0.15)
+    assert any("delta" in e for e in errors)

@@ -83,6 +83,9 @@ def retrieval_domains_for_state(state: AgentState | dict) -> set[str]:
     - Other tasks: common
     """
     payload = state.get("input_payload") or {}
+    intent = payload.get("writing_intent") or {}
+    if intent.get("enabled") or str(payload.get("target_mode") or "") == "manuscript_mode":
+        return {"writing", "common"}
     mission = state.get("mission") or payload.get("mission") or {}
     if str(mission.get("kind") or "").lower() == "writing":
         return {"writing", "common"}

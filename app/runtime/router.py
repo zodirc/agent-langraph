@@ -48,7 +48,9 @@ def _is_non_retryable_tool_failure(state: AgentState) -> bool:
     for item in state.get("tool_results") or []:
         if item.get("status") not in ("error", "skipped") and not item.get("error"):
             continue
-        if item.get("non_retryable") or (item.get("result") or {}).get("non_retryable"):
+        from app.services.tool_result_helpers import tool_result_flag
+
+        if item.get("non_retryable") or tool_result_flag(item, "non_retryable"):
             return True
         if str(item.get("error_code") or "") == "artifact_not_found":
             return True
@@ -75,13 +77,25 @@ def route_after_tool(state: AgentState) -> str:
     Convergence judgment comes from the single gate (`evaluate_convergence`);
     legacy guards remain as fallback during the unified-core transition.
     """
-    from app.services.converge import NEXT_FINALIZE, NEXT_REPLAN, evaluate_convergence
+    from app.services.converge import (
+        NEXT_FINALIZE,
+        NEXT_FORCE_WRITE,
+        NEXT_REPLAN,
+        evaluate_convergence,
+    )
     from app.services.planning_retry_signals import (
+        apply_force_write_signal,
         apply_planning_replan_signal,
         can_planning_replan_again,
     )
 
     conv = evaluate_convergence(state)
+    if not graph_last_tool_failed(state) and conv.next == NEXT_FORCE_WRITE:
+        replanned = apply_force_write_signal(state)
+        from app.services.state_store import get_state_store
+
+        get_state_store().save(replanned)
+        return "incremental_planning"
     if (
         not graph_last_tool_failed(state)
         and conv.next == NEXT_REPLAN

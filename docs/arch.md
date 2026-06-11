@@ -457,7 +457,7 @@
 
 改写类动词（润色、修改、重写等）在 `interaction_goal` 层不再被「≤16 字」兜底误判为闲聊；是否真的走工具路径仍要求会话内**已有磁盘产物**。
 
-多产物时从 goal 关键词（如「故事」「散文」）匹配 `artifact_manifest` 文件名，仍可走 `read_artifact → write_artifact` 薄路径。LLM 规划若 plan 含「保存/写回」但 actions 仅有 read，规划节点自动补 `write_artifact`；连续 3 次只读且尚未写回时，收敛闸触发 `artifact_edit_needs_write` 再规划写回，而非 `read_loop` 提前 finalize。
+多产物时从 goal 关键词（如「故事」「散文」）匹配 `artifact_manifest` 文件名，仍可走 `read_artifact → write_artifact` 薄路径。LLM 规划若 plan 含「保存/写回」但 actions 仅有 read，规划节点自动补 `write_artifact`；连续 3 次只读且尚未写回时：产物编辑场景收敛闸触发 `artifact_edit_needs_write` 再规划写回；`manuscript_mode` 且 `writing_intent` 有效时则发 `NEXT_FORCE_WRITE` 强制写动作（不耗 replan 配额），避免 read-loop 提前 finalize 导致回合 `PAUSED`。
 
 ### 规划阶段的核心作用
 
@@ -909,9 +909,12 @@ budget ≈ clamp(200000 × 0.6 − 8192, 12000, 160000) ≈ 111808
 
 特点：
 
-- 已定义独立 `mode_contracts.manuscript_mode`（产物读写工具 + 较高 `max_steps`）
-- 默认启用写作意图；工程工具仍被契约过滤
-- 与 `qa_mode` 共用 Action 词汇表（`read_artifact` / `write_artifact` / `edit_artifact`）
+- 独立 `mode_contracts.manuscript_mode`（产物读写工具）；执行路径为 `reasoning`（`max_steps` 不对写作回合硬限制，真正约束来自写预算与收敛契约）
+- **写预算**：`max_write_actions`（默认 4）限制每回合写副作用次数；读动作不计入
+- **写作算子化**：规划前 `writing_intent_classifier` 分类（`append` / `rewrite` / `polish` / `character` / `replot`），`writing_playbook` 绑定固定 playbook；`writing_intent.enabled` 在 unified-actions 路径保持开启
+- **回合契约**：写作回合须以至少一次写动作或显式提问收尾；读满 3 次仍无写计划 → `NEXT_FORCE_WRITE`（见 §4.4 收敛闸）
+- **RAG 注入**：写作回合默认开检索（域 `{writing, common}`）；`writing_context.writing_guidelines_excerpt` 注入写作 payload；写回结果可记录 `applied_guidelines` 归因
+- 工程工具被契约过滤；与 `qa_mode` 共用 Action 词汇表（`read_artifact` / `write_artifact` / `edit_artifact`）
 
 ## 5.3 工程执行模式
 

@@ -129,6 +129,8 @@ RAG 流程并不是每次输入都强制执行，而是由前面的规划阶段�
 
 当系统判断需要知识支撑时，才会进入检索链路。
 
+**文稿写作例外**：`manuscript_mode` 且 `writing_intent.enabled` 时，规划阶段默认 `skip_retrieval=False`，检索域限定 `{writing, common}`（风格规范为横切约束，不依赖模型每回合自行 emit `retrieve`）。其余模式仍由规划 actions 与 `skip_retrieval` 决定。
+
 ---
 
 ## 4.2 检索意图与查询整理
@@ -385,6 +387,8 @@ RAG 的最终目标不是“找到内容”，而是“把合适的内容送进�
 ### 5.2 服务推理
 
 推理阶段需要证据材料来支撑结果组织与内容生成。
+
+**文稿写作消费**：`domain=writing` 的召回片段经 `writing_context` 组装为 `writing_guidelines_excerpt`，随写作 purpose 的 governed payload 注入生成阶段（与 `continuation_rules` 并列）；写回工具结果可附带 `applied_guidelines`（doc_id 列表）供回合摘要与归因。离线可用 `tests/eval/run_writing_rag_ab_eval.py` 对开/关 RAG 做规范遵循度 A/B，阈值门见 `eval_thresholds.check_writing_compliance_thresholds`。
 
 ### 5.3 服务工程判断与结果生成
 

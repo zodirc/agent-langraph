@@ -1,0 +1,39 @@
+from app.services.tool_result_helpers import format_tool_preview_snippet, tool_result_body, tool_result_flag
+
+
+def test_tool_result_body_ignores_string_result():
+    assert tool_result_body({"result": "oops"}) == {}
+
+
+def test_tool_result_flag_from_nested():
+    row = {"result": {"non_retryable": True}}
+    assert tool_result_flag(row, "non_retryable") is True
+
+
+def test_format_read_preview_with_lines():
+    snippet = format_tool_preview_snippet(
+        "read_text_artifact",
+        {
+            "filename": "chapter_01.md",
+            "scope": {"start_line": 10, "end_line": 20},
+            "content": "   1| 梁致远走进办公室\n   2| 秦池在等他",
+            "with_line_numbers": True,
+        },
+    )
+    assert "chapter_01.md" in snippet
+    assert "行 10" in snippet
+    assert "梁致远" in snippet
+
+
+def test_format_edit_preview():
+    snippet = format_tool_preview_snippet(
+        "edit_text_artifact",
+        {
+            "filename": "outline.md",
+            "replacements": 3,
+            "batch_details": [{"old_text": "秦池", "new_text": "秦梅", "replacements": 2}],
+            "diff_preview": "-秦池\n+秦梅",
+        },
+    )
+    assert "替换 3 处" in snippet
+    assert "秦池" in snippet

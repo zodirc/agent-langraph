@@ -136,6 +136,15 @@ def classify_grounding_turn(state: dict[str, Any]) -> GroundingMode:
     if state.get("skip_retrieval") and not has_injected_evidence(state):
         return "skip"
     if has_injected_evidence(state):
+        from app.services.writing_context import (
+            writing_intent_active,
+            writing_style_only_evidence,
+        )
+
+        # Writing turns: style-guideline RAG is not a factual corpus for
+        # faithfulness on execution-status or creative-fiction answers.
+        if writing_intent_active(state) and writing_style_only_evidence(state):
+            return "skip"
         return "rag"
     return "skip"
 

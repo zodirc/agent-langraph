@@ -39,8 +39,10 @@ def _classify_failures(new_results: list[dict[str, Any]]) -> tuple[list[dict[str
         for r in new_results
         if r.get("status") in ("error", "skipped") or r.get("error")
     ]
+    from app.services.tool_result_helpers import tool_result_flag
+
     all_non_retryable = bool(failures) and all(
-        bool(r.get("non_retryable")) or bool((r.get("result") or {}).get("non_retryable"))
+        bool(r.get("non_retryable")) or bool(tool_result_flag(r, "non_retryable"))
         for r in failures
     )
     return failures, all_non_retryable
@@ -193,6 +195,9 @@ def tool_execution_node(state: AgentState) -> AgentState:
             report_status_trace("tool_execution", f"调用工具: {tool_name}")
             try:
                 params = _build_tool_params(tool_name, st)
+                from app.services.action_executor import resolve_imprecise_edit_as_write
+
+                tool_name, params = resolve_imprecise_edit_as_write(st, tool_name, params)
             except ArtifactResolutionError as exc:
                 pending_events.append(
                     (
@@ -276,7 +281,9 @@ def tool_execution_node(state: AgentState) -> AgentState:
                     blocked_results.append(wrapped)
                     return blocked
             try:
-                result = registry.invoke(tool_name, params, user_role=user_role)
+                from app.services.tool_invoke_helpers import invoke_tool_with_guards
+
+                result = invoke_tool_with_guards(tool_name, params, user_role=user_role)
             except FileNotFoundError as exc:
                 pending_events.append(
                     (
@@ -297,13 +304,23 @@ def tool_execution_node(state: AgentState) -> AgentState:
                         "non_retryable": True,
                     },
                 }
-            pending_events.append(
-                (
-                    "tool_invoked",
-                    tool_name,
-                    {"status": "ok", "risk_level": spec.risk_level},
-                )
-            )
+            event_detail: dict[str, Any] = {
+                "status": "ok",
+                "risk_level": spec.risk_level,
+            }
+            if tool_name in ("write_text_artifact", "append_text_artifact", "edit_text_artifact"):
+                from app.services.writing_context import applied_writing_guideline_ids
+
+                guideline_ids = applied_writing_guideline_ids(st)
+                if guideline_ids:
+                    event_detail["applied_guidelines"] = guideline_ids
+                    if isinstance(result, dict):
+                        inner = result.get("result")
+                        if isinstance(inner, dict):
+                            inner["applied_guidelines"] = guideline_ids
+                        else:
+                            result["applied_guidelines"] = guideline_ids
+            pending_events.append(("tool_invoked", tool_name, event_detail))
             return result
 
         results = execute_tool_stages(
@@ -324,9 +341,11 @@ def tool_execution_node(state: AgentState) -> AgentState:
         ]
         tool_invocations = [r for r in results if r.get("tool") in tools]
         if tools and failures and len(failures) == len(tool_invocations):
+            from app.services.tool_result_helpers import tool_result_flag
+
             all_non_retryable = all(
                 bool(r.get("non_retryable"))
-                or bool((r.get("result") or {}).get("non_retryable"))
+                or bool(tool_result_flag(r, "non_retryable"))
                 for r in failures
             )
             if all_non_retryable:

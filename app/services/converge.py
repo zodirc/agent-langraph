@@ -25,6 +25,7 @@ from typing import Any, Mapping
 NEXT_PROCEED = "proceed"   # keep going down the normal pipeline
 NEXT_REPLAN = "replan"     # goal not met and progress is possible -> back to plan
 NEXT_FINALIZE = "finalize" # stuck/looping or budget exhausted -> safe finalize
+NEXT_FORCE_WRITE = "force_write"  # read-loop during writing -> replan with write mandate
 
 # Consecutive successful reads with zero side effects before declaring a loop.
 READ_LOOP_THRESHOLD = 3
@@ -101,6 +102,11 @@ def _pending_planned_actions(
         else:
             continue
         if tool and tool not in executed_ok:
+            if tool == "rm_path":
+                from app.services.artifact_rename_intent import rename_cleanup_obviated
+
+                if rename_cleanup_obviated(tool_results, raw):
+                    continue
             pending.append(a_type)
     return pending
 
@@ -125,13 +131,26 @@ def _exploratory_actions_only(state: Mapping[str, Any]) -> bool:
     )
 
 
+def _tool_counts_as_side_effect(item: dict[str, Any]) -> bool:
+    """True when a tool result materially changed artifacts (edit honesty applies)."""
+    tool = str(item.get("tool") or "")
+    status = str(item.get("status") or "ok")
+    if status not in ("ok", "cached"):
+        return False
+    if tool == "edit_text_artifact":
+        from app.domain.action import is_edit_applied
+
+        return is_edit_applied(item.get("result") or {})
+    return tool in _SIDE_EFFECT_TOOLS
+
+
 def _read_loop_detected(tool_results: list[dict[str, Any]]) -> bool:
     """True when the turn only keeps reading without producing any side effect."""
     reads = 0
     for item in tool_results:
         tool = str(item.get("tool") or "")
         status = str(item.get("status") or "ok")
-        if tool in _SIDE_EFFECT_TOOLS and status == "ok":
+        if _tool_counts_as_side_effect(item):
             return False
         if tool == "read_text_artifact" and status in ("ok", "cached"):
             reads += 1
@@ -153,13 +172,28 @@ def evaluate_convergence(state: Mapping[str, Any]) -> ConvergeResult:
     if attempted:
         if applied >= attempted:
             return ConvergeResult(True, NEXT_PROCEED, "edit_applied")
+        from app.services.writing_context import writing_intent_active
+
+        if writing_intent_active(state):
+            from app.services.writing_budget import write_budget_exhausted
+
+            if write_budget_exhausted(state, tool_results):
+                return ConvergeResult(False, NEXT_FINALIZE, "write_budget_exhausted")
+            return ConvergeResult(False, NEXT_FORCE_WRITE, "edit_not_applied_force_write")
         return ConvergeResult(False, NEXT_REPLAN, "edit_not_applied")
 
     # 2) Read loop: repeated reads with no side effects -> stop spinning,
     #    unless an artifact save edit is still owed (replan for write, not finalize).
     if _read_loop_detected(tool_results):
         from app.services.artifact_edit_intent import artifact_edit_needs_write_after_reads
+        from app.services.writing_context import read_loop_should_force_write
 
+        if read_loop_should_force_write(state, tool_results):
+            from app.services.writing_budget import write_budget_exhausted
+
+            if write_budget_exhausted(state, tool_results):
+                return ConvergeResult(False, NEXT_FINALIZE, "write_budget_exhausted")
+            return ConvergeResult(False, NEXT_FORCE_WRITE, "read_loop_force_write")
         if artifact_edit_needs_write_after_reads(state, tool_results):
             return ConvergeResult(False, NEXT_REPLAN, "artifact_edit_needs_write")
         return ConvergeResult(False, NEXT_FINALIZE, "read_loop")
@@ -191,6 +225,19 @@ def evaluate_convergence(state: Mapping[str, Any]) -> ConvergeResult:
     if not answer_text.strip():
         answer_text = str(state.get("final_answer") or "")
     if answer_text.strip():
+        from app.services.writing_context import (
+            turn_has_persisted_write,
+            writing_explicit_ask,
+            writing_intent_active,
+        )
+
+        if writing_intent_active(state) and not turn_has_persisted_write(tool_results):
+            if not writing_explicit_ask(answer_text):
+                return ConvergeResult(
+                    False,
+                    NEXT_FORCE_WRITE,
+                    "writing_answer_without_persist",
+                )
         return ConvergeResult(True, NEXT_PROCEED, "answer_ready")
 
     # No convergence signal yet: let the pipeline keep flowing (reasoning will
@@ -204,5 +251,6 @@ __all__ = [
     "NEXT_PROCEED",
     "NEXT_REPLAN",
     "NEXT_FINALIZE",
+    "NEXT_FORCE_WRITE",
     "READ_LOOP_THRESHOLD",
 ]
