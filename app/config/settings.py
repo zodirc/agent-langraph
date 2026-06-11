@@ -109,6 +109,12 @@ class Settings:
         self.MODEL_TEMPERATURE = float(model.get("temperature", 0))
         self.MODEL_MAX_TOKENS = int(model.get("max_tokens", 4096))
         self.MODEL_TIMEOUT = int(model.get("timeout", 60))
+        timeout_by_purpose = model.get("timeout_by_purpose", {})
+        if not isinstance(timeout_by_purpose, dict):
+            timeout_by_purpose = {}
+        self.MODEL_TIMEOUT_ROUTING = int(
+            timeout_by_purpose.get("routing", min(20, self.MODEL_TIMEOUT))
+        )
         self.MODEL_MAX_RETRIES = int(model.get("max_retries", 3))
         purpose_tokens = model.get("max_tokens_by_purpose", {})
         if not isinstance(purpose_tokens, dict):
@@ -130,6 +136,9 @@ class Settings:
         self.MODEL_CATALOG = catalog_raw if isinstance(catalog_raw, list) else []
 
         performance = raw.get("performance", {})
+        if not isinstance(performance, dict):
+            performance = {}
+        self.THIN_QA_MAX_SECONDS = int(performance.get("thin_qa_max_seconds", 30))
         self.FAST_REASONING_ENABLED = _coerce_bool(
             performance.get("fast_reasoning_enabled", False)
         )

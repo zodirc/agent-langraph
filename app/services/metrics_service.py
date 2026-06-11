@@ -482,6 +482,23 @@ class MetricsService:
         if self._prometheus and "reasoning_parser_events" in self._prometheus:
             self._prometheus["reasoning_parser_events"].labels(kind=kind_key).inc()
 
+    def inc_reasoning_thin_qa_call(self, profile: str, attempt: int) -> None:
+        profile_key = (profile or "unknown").strip()[:24] or "unknown"
+        self._inc("reasoning_thin_qa_calls")
+        self._inc(f"reasoning_thin_qa_calls_{profile_key}_attempt_{attempt}")
+        if attempt >= 1:
+            self._inc("reasoning_thin_qa_retry_violations")
+        if self._prometheus and "reasoning_llm_calls_total" in self._prometheus:
+            self._prometheus["reasoning_llm_calls_total"].labels(profile=profile_key).inc()
+
+    def observe_thin_qa_latency(self, seconds: float) -> None:
+        self._inc("thin_qa_latency_samples")
+        with self._lock:
+            bucket = self._counters.setdefault("thin_qa_latency_total_seconds", 0.0)
+            self._counters["thin_qa_latency_total_seconds"] = bucket + max(0.0, seconds)
+        if self._prometheus and "thin_qa_latency_seconds" in self._prometheus:
+            self._prometheus["thin_qa_latency_seconds"].observe(max(0.0, seconds))
+
     def inc_contract_event(self, kind: str) -> None:
         kind_key = (kind or "unknown").strip().lower()[:40] or "unknown"
         self._inc("contract_events")

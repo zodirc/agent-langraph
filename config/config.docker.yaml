@@ -17,7 +17,9 @@ model:
     planning: 4096
     reasoning: 8192
     writing: 16384
-    routing: 1024
+    routing: 2048
+  timeout_by_purpose:
+    routing: 20
   timeout: 120
   max_retries: 2
 

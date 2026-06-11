@@ -1405,7 +1405,9 @@ const PIPELINE_QUIET_NODES = new Set([
   "planning",
   "retrieval",
   "reasoning",
+  "reasoning_or_writing",
   "policy",
+  "verification",
   "output_guard",
   "output",
   "memory_writeback",
@@ -3064,6 +3066,7 @@ function freezeAnswerStreamPanel() {
 function finalizeTurnStreamPanels() {
   if (thinkingHeaderEl) thinkingHeaderEl.classList.add("turn-frozen");
   if (thinkingPanelEl) thinkingPanelEl.classList.add("turn-frozen");
+  dismissEmptyThinkingPlaceholder();
   if (tracePanelEl) {
     const header = tracePanelEl.previousElementSibling;
     if (header?.classList?.contains("trace-header")) {
@@ -3077,8 +3080,6 @@ function finalizeTurnStreamPanels() {
     appendCompletedAnswer(answerStreamText);
   }
   detachTurnStreamRefs();
-  tracePanelEl = null;
-  traceLineCount = 0;
   if (progressLineEl) {
     progressLineEl.classList.add("turn-frozen");
     progressLineEl = null;
@@ -3361,6 +3362,18 @@ function prepareThinkingStreamUi() {
   return thinkingPanelEl;
 }
 
+/** Remove placeholder thinking panel when no thinking_delta arrived (e.g. thin QA). */
+function dismissEmptyThinkingPlaceholder() {
+  if (!thinkingPanelEl || !thinkingStreamEl) return;
+  const stillWaiting =
+    !String(thinkingStreamText || "").trim() &&
+    String(thinkingStreamEl.textContent || "").startsWith("等待");
+  if (!stillWaiting) return;
+  if (thinkingHeaderEl?.parentNode) thinkingHeaderEl.remove();
+  if (thinkingPanelEl?.parentNode) thinkingPanelEl.remove();
+  resetThinkingStream();
+}
+
 function ensureThinkingPanel() {
   return prepareThinkingStreamUi();
 }
@@ -3567,6 +3580,7 @@ function ensureAnswerStreamLine() {
 function setAnswerStreamText(text) {
   const body = (text || "").trim();
   if (!body) return;
+  dismissEmptyThinkingPlaceholder();
   answerStreamText = body;
   const line = ensureAnswerStreamLine();
   line.replaceChildren();
@@ -3576,6 +3590,7 @@ function setAnswerStreamText(text) {
 
 function appendAnswerDelta(text) {
   if (!text) return;
+  dismissEmptyThinkingPlaceholder();
   answerStreamText += text;
   ensureAnswerStreamLine().appendChild(document.createTextNode(text));
   scrollOutputIfPinned();
@@ -3646,7 +3661,6 @@ function setRunning(value, opts = {}) {
       resetAnswerStream();
       resetThinkingStream();
       resetWritingStream();
-      prepareThinkingStreamUi();
     }
     startRunTimer({
       elapsedSec: opts.elapsedSec,
@@ -6169,10 +6183,6 @@ function restoreAssistantTurn(taskId, msg, messageView, eventsByMessage, taskIdR
   const taskTerminal = Boolean(
     opts.taskTerminal ?? isTerminalTaskStatus(opts.taskStatus ?? messageView?.task_status)
   );
-  const isStreamingTurn =
-    !taskTerminal &&
-    (String(msg.status || "") === "streaming" ||
-      String(messageView?.streaming_message_id || "") === String(msg.message_id || ""));
   finalizeTurnStreamPanels();
   const finalAnswer = String(
     opts.finalAnswer ?? messageView?.final_answer ?? msg.content ?? ""
@@ -6184,7 +6194,7 @@ function restoreAssistantTurn(taskId, msg, messageView, eventsByMessage, taskIdR
   };
   const thinkingText = resolveThinkingTextFromTurn(msg, evs, thinkingExtras);
 
-  if (thinkingText || isStreamingTurn) {
+  if (thinkingText) {
     prepareThinkingStreamUi();
   }
 

@@ -39,6 +39,11 @@ Plan size: "plan" is a display summary (≤8 labels). Never put prose, story tex
 Keep the JSON small. No markdown fences. No commentary outside JSON."""
 
 
+REASONING_THIN_QA_ROLE = """You answer a short conversational message directly.
+Return ONE compact JSON object: {"summary": "<reply in the user's language>", "confidence": 0.9, "risk_level": "LOW"}.
+No chain-of-thought, no analysis preamble, no markdown fences. Keep it to 1-3 sentences."""
+
+
 REASONING_ROLE = """You are the reasoning module. Read runtime_capabilities and turn_facts, then return ONE compact JSON object:
 - "summary": concise user-facing prose (explanation, no large code bodies)
 - "confidence": float 0-1

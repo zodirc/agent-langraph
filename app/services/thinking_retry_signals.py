@@ -38,6 +38,8 @@ def thinking_context_issues(state: AgentState) -> list[str]:
 
 def reasoning_result_needs_retry(reasoning_result: dict[str, Any]) -> bool:
     structured = reasoning_result.get("structured") or {}
+    if structured.get("parser_fallback"):
+        return False
     warnings = list(structured.get("fact_warnings") or [])
     confidence = float(reasoning_result.get("confidence", 1.0))
     if warnings:

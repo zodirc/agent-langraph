@@ -8,8 +8,10 @@ Skill: reasoning_overlay in system prompt."""
 from __future__ import annotations
 
 import json
+import time
 
 from app.config.prompts import build_reasoning_system_prompt, resolve_reasoning_mode
+from app.config.settings import settings
 from app.services.resource_budget import (
     BudgetExceededError,
     budget_context_from_state,
@@ -17,13 +19,19 @@ from app.services.resource_budget import (
 )
 from app.runtime.state import AgentState, TaskStatus, append_audit, merge_state
 from app.services.fast_reasoning import try_fast_reasoning
-from app.services.thin_execution import reasoning_llm_purpose
+from app.services.thin_execution import (
+    reasoning_llm_purpose,
+    should_stream_thinking_for_state,
+    thin_execution_active,
+    thin_execution_profile,
+)
 from app.services.fact_layer import (
     apply_reasoning_guard,
     attach_turn_facts,
     build_turn_facts,
 )
 from app.services.llm_client import (
+    _reasoning_fallback_payload,
     extract_json_with_repair,
     invoke_structured,
     stream_structured,
@@ -80,8 +88,16 @@ def _run_reasoning_llm_loop(
     working = state
     raw = ""
     reasoning_result: dict[str, object] = {}
-    attempts = max_thinking_retries()
+    # thin/qa_direct: answer already streamed — no silent blocking retries
+    attempts = (
+        1
+        if (thin_execution_active(state) or llm_purpose == "routing")
+        else max_thinking_retries()
+    )
     stream_allowed = trace_enabled() or answer_stream_enabled()
+    thin_profile = thin_execution_profile(state.get("input_payload") or {})
+    loop_started = time.monotonic()
+    thin_qa_max_seconds = float(getattr(settings, "THIN_QA_MAX_SECONDS", 30))
 
     for attempt in range(attempts):
         ctx = build_reasoning_retry_context(context, working) if attempt else context
@@ -100,6 +116,7 @@ def _run_reasoning_llm_loop(
                         trace_state=working,
                         stream_node="reasoning",
                         stream_phase="reasoning_llm",
+                        emit_thinking_override=should_stream_thinking_for_state(state),
                     ),
                     phase="reasoning_stream_chunk",
                 ),
@@ -108,7 +125,7 @@ def _run_reasoning_llm_loop(
                 field="summary",
             )
             # Parse as reasoning so truncated/malformed output degrades via
-            # reasoning repair+fallback instead of re-raising. ``llm_purpose``
+            # reasoning fallback instead of re-raising. ``llm_purpose``
             # only selects the LLM token-budget tier (thin QA → "routing").
             result = extract_json_with_repair(
                 "reasoning",
@@ -116,6 +133,7 @@ def _run_reasoning_llm_loop(
                 prefer_keys=("summary",),
                 trace_state=working,
                 budget_ctx=budget_ctx,
+                allow_llm_repair=False,
             )
         else:
             result = invoke_structured(
@@ -129,8 +147,21 @@ def _run_reasoning_llm_loop(
             raw = json.dumps(result, ensure_ascii=False)
         reasoning_result = _build_reasoning_result(result, raw, mode)
         working = merge_state(working, reasoning_result=reasoning_result)
+        if thin_profile:
+            get_metrics_service().inc_reasoning_thin_qa_call(thin_profile, attempt)
+        if (
+            thin_execution_active(state)
+            and use_stream
+            and time.monotonic() - loop_started > thin_qa_max_seconds
+        ):
+            fallback = _reasoning_fallback_payload(raw)
+            reasoning_result = _build_reasoning_result(fallback, raw, mode)
+            working = merge_state(working, reasoning_result=reasoning_result)
+            break
         if not reasoning_result_needs_retry(reasoning_result):
             break
+    if thin_profile:
+        get_metrics_service().observe_thin_qa_latency(time.monotonic() - loop_started)
     return reasoning_result, raw, working
 
 
@@ -217,14 +248,19 @@ def reasoning_node(state: AgentState) -> AgentState:
             state = init_task_budget(state)
         budget_ctx = budget_context_from_state(state)
         mode = resolve_reasoning_mode(state)
+        payload = state.get("input_payload", {})
         reasoning_system = build_reasoning_system_prompt(mode, state=state)
+        if thin_execution_profile(payload) == "qa_direct":
+            from app.config.prompt_templates import REASONING_THIN_QA_ROLE
+            from app.config.prompts import agent_system_prompt
+
+            reasoning_system = agent_system_prompt(REASONING_THIN_QA_ROLE)
         from app.services.reasoning_grounding import build_grounding_instructions
 
         grounding_overlay = build_grounding_instructions(state)
         if grounding_overlay:
             reasoning_system = f"{reasoning_system}\n\n[Evidence policy]\n{grounding_overlay}"
         state = attach_turn_facts(state)
-        payload = state.get("input_payload", {})
         turn_facts = state.get("turn_facts") or build_turn_facts(state)
         force_llm = bool(payload.get("force_slow_reasoning"))
 

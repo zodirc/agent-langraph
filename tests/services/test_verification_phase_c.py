@@ -51,6 +51,12 @@ def test_stream_guard_blocks_pii_during_emit(monkeypatch):
 def test_reasoning_retry_detects_low_confidence():
     assert reasoning_result_needs_retry({"confidence": 0.4, "structured": {}}) is True
     assert reasoning_result_needs_retry({"confidence": 0.9, "structured": {}}) is False
+    assert (
+        reasoning_result_needs_retry(
+            {"confidence": 0.45, "structured": {"parser_fallback": True}}
+        )
+        is False
+    )
 
 
 def test_reasoning_llm_loop_streams_on_first_attempt(base_state, monkeypatch):

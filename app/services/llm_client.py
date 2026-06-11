@@ -449,6 +449,7 @@ def extract_json_with_repair(
     prefer_keys: tuple[str, ...] | None = None,
     trace_state: Any | None = None,
     budget_ctx: Any | None = None,
+    allow_llm_repair: bool = True,
 ) -> dict[str, Any]:
     """Parse JSON with purpose-aware repair/fallback strategy."""
     from app.services.metrics_service import get_metrics_service
@@ -480,18 +481,19 @@ def extract_json_with_repair(
             raise
         if purpose != "reasoning":
             raise
-        repaired = _attempt_reasoning_json_repair(
-            text,
-            trace_state=trace_state,
-            budget_ctx=budget_ctx,
-        )
-        if repaired is not None:
-            repaired["structured"] = {
-                **(repaired.get("structured") or {}),
-                "parser_repaired": True,
-            }
-            get_metrics_service().inc_reasoning_parser_event("repaired")
-            return repaired
+        if allow_llm_repair:
+            repaired = _attempt_reasoning_json_repair(
+                text,
+                trace_state=trace_state,
+                budget_ctx=budget_ctx,
+            )
+            if repaired is not None:
+                repaired["structured"] = {
+                    **(repaired.get("structured") or {}),
+                    "parser_repaired": True,
+                }
+                get_metrics_service().inc_reasoning_parser_event("repaired")
+                return repaired
         get_metrics_service().inc_reasoning_parser_event("fallback")
         return _reasoning_fallback_payload(text)
 
@@ -543,12 +545,19 @@ def _resolve_model_name(
     return settings.MODEL_NAME
 
 
+def _timeout_for_purpose(purpose: str) -> int:
+    if purpose == "routing":
+        return int(getattr(settings, "MODEL_TIMEOUT_ROUTING", settings.MODEL_TIMEOUT))
+    return settings.MODEL_TIMEOUT
+
+
 @lru_cache(maxsize=32)
 def _get_llm_cached(
     purpose: str,
     provider: str,
     model_name: str,
     max_tokens: int,
+    timeout: int,
 ) -> Any:
     if not settings.MODEL_ENABLED:
         return None
@@ -562,7 +571,7 @@ def _get_llm_cached(
         max_tokens=max_tokens,
         temperature=settings.MODEL_TEMPERATURE,
         max_retries=settings.MODEL_MAX_RETRIES,
-        timeout=settings.MODEL_TIMEOUT,
+        timeout=timeout,
     )
 
 
@@ -573,7 +582,13 @@ def get_llm(purpose: str = "default", *, budget_ctx: Any | None = None) -> Any:
     max_tokens = _max_tokens_for_purpose(purpose)
     if budget_ctx is not None and getattr(budget_ctx, "model_downgrade", False):
         max_tokens = min(max_tokens, int(getattr(settings, "BUDGET_DOWNGRADE_MAX_TOKENS", 2048)))
-    return _get_llm_cached(purpose, settings.MODEL_PROVIDER, model_name, max_tokens)
+    return _get_llm_cached(
+        purpose,
+        settings.MODEL_PROVIDER,
+        model_name,
+        max_tokens,
+        _timeout_for_purpose(purpose),
+    )
 
 
 # Backward compat for tests that clear LLM cache
@@ -906,6 +921,7 @@ def stream_structured(
     trace_state: Any | None = None,
     stream_node: str = "",
     stream_phase: str = "",
+    emit_thinking_override: bool | None = None,
 ) -> Iterator[str]:
     from app.services.resource_budget import BudgetExceededError
     from app.services.prompt_context_gateway import apply_governance_to_user_content
@@ -946,7 +962,10 @@ def stream_structured(
     chunks: list[str] = []
     from app.services.reasoning_trace import thinking_stream_enabled
 
-    emit_thinking = bool(thinking_stream_enabled() and stream_node)
+    base_emit = bool(thinking_stream_enabled() and stream_node)
+    emit_thinking = (
+        base_emit if emit_thinking_override is None else (base_emit and emit_thinking_override)
+    )
     last_usage_detail: dict[str, int] | None = None
     try:
         for chunk in llm.stream(

@@ -16,9 +16,11 @@ model:
     planning: 4096
     reasoning: 8192
     writing: 16384
-    routing: 1024
+    routing: 2048
   # 模型上下文窗口（单次请求 input+output 上限，用于 UI 占用条）
   context_window: 200000
+  timeout_by_purpose:
+    routing: 20
   # 可选：多模型目录（切换模型时共用同一会话上下文，窗口大小随模型变化）
   # catalog:
   #   - id: claude-sonnet
