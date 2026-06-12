@@ -22,6 +22,23 @@ from app.services.retrieval_policy import (
 from app.services.turn_contract import contract_requires_side_effects, contract_tool_names
 
 
+def _planned_actions_require_retrieval(state: AgentState) -> bool:
+    actions = state.get("planned_actions") or []
+    return any(
+        isinstance(item, dict) and str(item.get("type") or "") == "retrieve" for item in actions
+    )
+
+
+def _session_source_inquiry_turn(state: AgentState) -> bool:
+    payload = state.get("input_payload") or {}
+    if str(payload.get("thin_execution_profile") or "") == "session_source_qa":
+        return True
+    from app.services.interaction_goal import goal_is_session_source_inquiry
+
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    return bool(goal) and goal_is_session_source_inquiry(goal, state)
+
+
 def route_after_incremental_planning(state: AgentState) -> str:
     """Post-incremental_planning fork: retrieval / tools / engineering / generation prep."""
     from app.services.planning_retry_signals import (
@@ -29,6 +46,9 @@ def route_after_incremental_planning(state: AgentState) -> str:
         can_planning_replan_again,
         planning_replan_needed,
     )
+
+    if _session_source_inquiry_turn(state):
+        return "retrieval"
 
     if planning_replan_needed(state) and can_planning_replan_again(state):
         replanned = apply_planning_replan_signal(state)
@@ -86,7 +106,7 @@ def route_after_incremental_planning(state: AgentState) -> str:
     if needs_session_memory_retrieval(state) and not selected_tools and not intent.get("enabled"):
         return "retrieval"
 
-    needs_retrieval = any(
+    needs_retrieval = _planned_actions_require_retrieval(state) or any(
         "retrieve" in step.lower() or "search" in step.lower() for step in plan
     )
     if intent.get("enabled") and not state.get("skip_retrieval"):

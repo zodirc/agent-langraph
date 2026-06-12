@@ -9,7 +9,22 @@ from app.services.state_store import get_state_store
 
 
 def incremental_planning_node(state: AgentState) -> AgentState:
+    from app.runtime.state import TaskStatus, merge_state
+    from app.services.reasoning_trace import report_boundary
+    from app.services.stream_progress import report_progress
+
     prepared = prepare_incremental_planning_state(state)
+    prepared = merge_state(
+        prepared,
+        status=TaskStatus.RUNNING.value,
+        current_node="incremental_planning",
+    )
+    get_state_store().save(prepared)
+    report_progress("正在规划本回合步骤…")
+    report_boundary("incremental_planning", "enter")
+    from app.services.mode_freeze import record_planning_mode_entry
+
+    record_planning_mode_entry(prepared, phase="incremental_planning_enter")
     updated = planning_node(prepared)
     updated = dict(updated)
     updated["current_node"] = "incremental_planning"

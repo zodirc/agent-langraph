@@ -35,6 +35,23 @@ def test_classify_tool_turn_when_edit_plot_tools_ran():
     assert hits and "陆执" in hits[0]["content"]
 
 
+def test_classify_skip_for_writing_clarification_with_session_source_rag():
+    state = {
+        "input_payload": {
+            "writing_intent": {"enabled": True},
+            "target_mode": "manuscript_mode",
+        },
+        "retrieved_knowledge": [
+            {"doc_id": "builtin-writing-guidelines", "metadata": {"domain": "writing"}},
+            {"doc_id": "session-material", "metadata": {"domain": "source"}, "content": "岁月剧情"},
+        ],
+        "tool_results": [],
+        "retrieval_decision": {"answer_mode": "best_effort_grounded"},
+    }
+    assert classify_grounding_turn(state) == "skip"
+    assert should_run_grounding_check(state) is False
+
+
 def test_classify_skip_for_writing_style_only_rag():
     state = {
         "input_payload": {"writing_intent": {"enabled": True}},
@@ -65,7 +82,7 @@ def test_output_guard_passes_writing_status_ask_with_style_rag(base_state, monke
         reasoning_result={
             "summary": (
                 "已制定五步创作计划，但本轮未执行任何工具，也未检索到《岁月》电视剧剧情资料；"
-                "需先补充剧情信息或用户提供故事大纲，方可开始撰写小说正文。"
+                "需要您确认是否补充剧情信息或故事大纲，方可开始撰写小说正文。"
             ),
             "confidence": 0.8,
             "risk_level": "LOW",
@@ -76,6 +93,49 @@ def test_output_guard_passes_writing_status_ask_with_style_rag(base_state, monke
             "target_mode": "manuscript_mode",
             "goal": "根据电视剧岁月写小说",
         },
+        status=TaskStatus.REASONED.value,
+    )
+    result = output_guard_node(state)
+    guard = result.get("output_guard_result") or {}
+    assert guard.get("passed") is True
+    assert result.get("status") != TaskStatus.REJECTED.value
+
+
+def test_output_guard_passes_writing_clarification_with_mixed_source_rag(base_state, monkeypatch):
+    monkeypatch.setattr("app.nodes.output_guard_node.settings.OUTPUT_GUARD_ENABLED", True)
+    monkeypatch.setattr(
+        "app.nodes.output_guard_node.settings.RETRIEVAL_CITATION_CHECK_STRICTNESS", "basic"
+    )
+    state = merge_state(
+        base_state,
+        retrieved_knowledge=[
+            {
+                "doc_id": "builtin-writing-guidelines",
+                "content": "长文写作规范 场景锚点 伏笔",
+                "metadata": {"domain": "writing"},
+            },
+            {
+                "doc_id": "session-material",
+                "content": "岁月电视剧 主角成长线",
+                "metadata": {"domain": "source"},
+            },
+        ],
+        tool_results=[],
+        reasoning_result={
+            "summary": (
+                "已制定五步创作计划，但本轮未执行任何工具，也未检索到《岁月》电视剧剧情资料；"
+                "需要您确认是否补充剧情信息或故事大纲，方可开始撰写小说正文。"
+            ),
+            "confidence": 0.8,
+            "risk_level": "LOW",
+        },
+        input_payload={
+            **base_state["input_payload"],
+            "writing_intent": {"enabled": True},
+            "target_mode": "manuscript_mode",
+            "goal": "根据电视剧岁月写小说",
+        },
+        retrieval_decision={"answer_mode": "best_effort_grounded"},
         status=TaskStatus.REASONED.value,
     )
     result = output_guard_node(state)

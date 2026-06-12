@@ -16,6 +16,14 @@ TurnIntentClass = Literal[
     "mission_step_execute",
     "mechanical_continue",
 ]
+InteractionGoal = Literal[
+    "session_source_inquiry",
+    "capability_inquiry",
+    "mission_status",
+    "delivery",
+    "chat",
+    "none",
+]
 ObservationSource = Literal["llm", "explicit", "structural", "hybrid"]
 
 
@@ -27,6 +35,7 @@ class IntentObservationResult:
     target_mode: str = "qa_mode"
     session_relation: str = "stay"
     turn_kind_candidate: str | None = None
+    interaction_goal: str | None = None
     needs_planning: bool = True
     is_revision: bool = False
     revision_intent: dict[str, Any] | None = None
@@ -52,6 +61,8 @@ class IntentObservationResult:
         }
         if self.turn_kind_candidate:
             out["turn_kind_candidate"] = self.turn_kind_candidate
+        if self.interaction_goal:
+            out["interaction_goal"] = self.interaction_goal
         if self.model_name:
             out["model_name"] = self.model_name
         if self.latency_ms is not None:
@@ -80,6 +91,9 @@ class IntentObservationResult:
                 str(data["turn_kind_candidate"])
                 if data.get("turn_kind_candidate")
                 else None
+            ),
+            interaction_goal=(
+                str(data["interaction_goal"]) if data.get("interaction_goal") else None
             ),
             needs_planning=bool(data.get("needs_planning", True)),
             is_revision=bool(data.get("is_revision")),

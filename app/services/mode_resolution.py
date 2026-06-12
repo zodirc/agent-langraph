@@ -140,9 +140,44 @@ def apply_mode_isolation_if_needed(
 
 def run_mode_resolution_pipeline(state: AgentState) -> AgentState:
     from app.services.intent_observation import resolve_mode_with_observation
+    from app.services.metrics_service import get_metrics_service
+    from app.services.mode_freeze import should_freeze_mode_resolution
+    from app.services.mode_registry import get_mode_contract
+    from app.services.mode_router import _resolve_switch_action
+
+    payload = state.get("input_payload") or {}
+    prior_mode = str(payload.get("target_mode") or "")
 
     intent_obs = state.get("intent_observation") if resolve_mode_with_observation(state) else None
     resolution = resolve_target_mode(state, intent_observation=intent_obs)
+
+    if (
+        should_freeze_mode_resolution(state)
+        and prior_mode
+        and resolution.target_mode != prior_mode
+    ):
+        get_metrics_service().inc_mode_oscillation(
+            prior_mode, resolution.target_mode, phase="mode_resolution"
+        )
+        contract = get_mode_contract(prior_mode) or resolution.contract
+        action, action_reason = _resolve_switch_action(
+            current_mode=resolution.current_mode,
+            target_mode=prior_mode,
+            contract=contract,
+        )
+        resolution = ModeResolution(
+            intent_kind=resolution.intent_kind,
+            target_mode=prior_mode,
+            confidence=resolution.confidence,
+            current_mode=resolution.current_mode,
+            mode_switch_action=action,
+            mode_switch_reason=f"{action_reason};mode_freeze=preserved",
+            contract=contract,
+        )
+
+    from app.services.pre_planning import _apply_explicit_mode_override
+
+    resolution = _apply_explicit_mode_override(resolution, dict(state.get("input_payload") or {}))
     state = apply_mode_isolation_if_needed(state, resolution)
     state = apply_mode_contract_to_state(state, resolution)
     from app.services.reasoning_trace import report_mode_resolution_trace

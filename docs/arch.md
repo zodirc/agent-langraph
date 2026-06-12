@@ -448,6 +448,8 @@
 
 规划节点在调用规划 LLM 之前，先完成 **pre_planning**（意图观测、路由审计种子、`target_mode` 与模式契约），再按下列顺序短路（详见 `docs/agentic_artifact_editing_plan.md`）：
 
+**意图观测（intent_observation）与模式冻结。** L2 分类模型仅在 `auto`、低置信或歧义场景调用；UI 显式模式且结构化 `inferred_kind` 与模式对齐、置信达标时走结构化观测（不调模型），并补齐 `interaction_goal=delivery` 等字段。单轮 intent 快照冻结后，`mode_freeze` 阻止 route_audit 二次解析把手稿模式振荡到 `qa_mode`（高置信 + 审计对齐时保留 `target_mode`）；二次 mode resolution 仍尊重显式 UI 模式。L2 调用另有进程内 wall-clock 超时（`MODEL_TIMEOUT_INTENT_OBSERVATION`，默认 ≤20s），超时回退结构化观测。
+
 | 路径 | 触发条件 | 产出 | 说明 |
 |---|---|---|---|
 | **产物编辑薄路径** | `detect_artifact_edit_intent` 且单文件可解析 | `read_artifact` → `write_artifact`；`thin_execution_profile=artifact_edit` | 跳过高成本规划 LLM；`pin_mode=False` 避免 route_audit 后工具被钉回无工具态 |
@@ -455,9 +457,9 @@
 | **工程薄路径** | `engineering_mode` 且规则判定可跳过规划 LLM | `run_code` + 工程工具集 | 交付类任务 |
 | **完整 LLM 规划** | 以上皆不满足（含多产物润色） | 结构化 `actions` + `planned_actions` | 规划上下文含 `artifact_manifest`；多文件时由模型具名 `filename` |
 
-改写类动词（润色、修改、重写等）在 `interaction_goal` 层不再被「≤16 字」兜底误判为闲聊；是否真的走工具路径仍要求会话内**已有磁盘产物**。
+手稿**交付/编辑类短句**（如「开始写正文」「写第一章」「改大纲」）经 `goal_is_writing_manuscript_action` 识别，不再被「≤16 字」兜底误判为闲聊；`manuscript_mode` 下也不会因此被切到 `qa_mode`。纯寒暄、进度询问仍为 QA。显式 UI 模式（工程/写作）仅在 `explicit_mode_should_apply` 为真时覆盖 `target_mode`（例如工程 UI 下的「你好」仍走 `qa_mode`）。是否真的走产物编辑薄路径仍要求会话内**已有磁盘产物**。
 
-多产物时从 goal 关键词（如「故事」「散文」）匹配 `artifact_manifest` 文件名，仍可走 `read_artifact → write_artifact` 薄路径。LLM 规划若 plan 含「保存/写回」但 actions 仅有 read，规划节点自动补 `write_artifact`；连续 3 次只读且尚未写回时：产物编辑场景收敛闸触发 `artifact_edit_needs_write` 再规划写回；`manuscript_mode` 且 `writing_intent` 有效时则发 `NEXT_FORCE_WRITE` 强制写动作（不耗 replan 配额），避免 read-loop 提前 finalize 导致回合 `PAUSED`。
+多产物时从 goal 关键词（如「故事」「散文」）匹配 `artifact_manifest` 文件名，仍可走 `read_artifact → write_artifact` 薄路径。LLM 规划若 plan 含「保存/写回」但 actions 仅有 read，规划节点自动补 `write_artifact`；连续 3 次只读且尚未写回时：产物编辑场景收敛闸触发 `artifact_edit_needs_write` 再规划写回；`manuscript_mode` 且 `writing_intent` 有效时则发 `NEXT_FORCE_WRITE` 强制写动作（不耗 replan 配额），避免 read-loop 提前 finalize 导致回合 `PAUSED`。`writing_false_promise`（口头承诺即将写入同时索要确认）同样触发 `force_write`；用户 `confirm` 或纯确认话术在存在 `pending_writing_delivery` 时继承上一轮算子与 goal。路由审计对 `writing_intent.enabled` 且计划无写入动作的情形标 `aligned=false`，驱动 replan。
 
 ### 规划阶段的核心作用
 
@@ -694,6 +696,7 @@
 
 - `edit_artifact`：`replacements ≥ 1` 才记 `edit_applied`；否则收敛闸触发 replan（`contract_edit_not_applied`）。
 - `write_artifact`（覆盖写回）：若本回合先 `read` 后 `write` 且字节数未变，记 `write_verified=false`，契约校验报 `contract_write_unchanged`。
+- **output_guard 忠实度**：按 `answer_mode` 与回合契约判定是否跑 RAG 词面校验——写作交付轮无落盘、非事实问答类 `answer_mode` 时跳过或降级为 warning；硬 REJECT 保留给伪造引用与事实问答无证据。不再依赖「证据域仅 writing/common」或中文短语正则作为唯一闸门。
 
 推理上下文（`reasoning_context_from_state`）与规划上下文均注入 **`artifact_manifest`**（当前任务磁盘产物清单），以支持「这篇 / 刚才那个文件」类指代。
 
@@ -911,9 +914,19 @@ budget ≈ clamp(200000 × 0.6 − 8192, 12000, 160000) ≈ 111808
 
 - 独立 `mode_contracts.manuscript_mode`（产物读写工具）；执行路径为 `reasoning`（`max_steps` 不对写作回合硬限制，真正约束来自写预算与收敛契约）
 - **写预算**：`max_write_actions`（默认 4）限制每回合写副作用次数；读动作不计入
-- **写作算子化**：规划前 `writing_intent_classifier` 分类（`append` / `rewrite` / `polish` / `character` / `replot`），`writing_playbook` 绑定固定 playbook；`writing_intent.enabled` 在 unified-actions 路径保持开启
-- **回合契约**：写作回合须以至少一次写动作或显式提问收尾；读满 3 次仍无写计划 → `NEXT_FORCE_WRITE`（见 §4.4 收敛闸）
-- **RAG 注入**：写作回合默认开检索（域 `{writing, common}`）；`writing_context.writing_guidelines_excerpt` 注入写作 payload；写回结果可记录 `applied_guidelines` 归因
+- **写作算子化**：规划前 `writing_intent_classifier` 分类，`writing_playbook` 绑定固定 playbook（`writing_intent.enabled` 在 unified-actions 路径保持开启）
+
+  | 算子 | 典型意图 | Playbook |
+  |---|---|---|
+  | `kickoff_body` | 大纲完成后开写正文 / 写第一章 | `read_artifact(大纲)` → `write_artifact(正文)` |
+  | `replot` | 改大纲、调剧情 | `read_artifact(大纲)` → `write_artifact(大纲)` |
+  | `append` | 续写下一章 | `append_text_artifact(正文)` |
+  | `rewrite` / `polish` / `character` | 全文重写、润色、改人物 | `read` → `write_artifact(正文)` |
+
+- **pending 与确认**：模型因缺素材等做**真实追问**时记录 `pending_writing_delivery`；用户 `confirm` 或「确认/好的」继承算子与 goal 并 `force_write`，避免空转确认轮
+- **回合契约**：交付轮须落盘或真实追问收尾；读满 3 次仍无写计划 → `NEXT_FORCE_WRITE`（见 §4.4）；`replot` 仅约束大纲文件，不强制写正文
+- **写作生成（LLM gateway）**：Thinking 模式不支持 `tool_choice` 时自动改 `json_text`（`{"content":...}`）输出；占位符（含「推理模块」「根据大纲生成」等）不直接落盘，强制走 gateway 重新生成
+- **RAG 注入**：写作回合默认开检索（域 `{writing, common}`，会话素材可为 `source`）；`writing_context` 组装 guidelines / session excerpt；写回可记录 `applied_guidelines` / `applied_sources` 归因（详见 `docs/rag_skills.md` §3.1、§5.2）
 - 工程工具被契约过滤；与 `qa_mode` 共用 Action 词汇表（`read_artifact` / `write_artifact` / `edit_artifact`）
 
 ## 5.3 工程执行模式

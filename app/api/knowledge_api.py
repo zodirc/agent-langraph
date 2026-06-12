@@ -11,6 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_principal, require_role
+from app.api.tenant_access import assert_session_knowledge_access, assert_task_access
+from app.services.state_store import get_state_store
 from app.services.auth_service import AuthPrincipal
 from app.services.knowledge_store import get_knowledge_store
 
@@ -22,6 +24,7 @@ class UpsertDocumentRequest(BaseModel):
     content: str
     metadata: dict[str, Any] = Field(default_factory=dict)
     doc_id: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 class SearchResponse(BaseModel):
@@ -35,12 +38,22 @@ def upsert_document(
     request: UpsertDocumentRequest,
     principal: AuthPrincipal = Depends(require_role("user", "admin")),
 ) -> dict[str, Any]:
+    if request.session_id:
+        assert_session_knowledge_access(principal, request.session_id)
+    metadata = dict(request.metadata)
+    if request.session_id and not str(metadata.get("domain") or "").strip():
+        metadata.setdefault("domain", "source")
     doc_id = get_knowledge_store().upsert_document(
         title=request.title,
         content=request.content,
-        metadata={**request.metadata, "uploaded_by": principal.user_id},
+        metadata={**metadata, "uploaded_by": principal.user_id},
         doc_id=request.doc_id,
+        session_id=request.session_id,
     )
+    if request.session_id:
+        from app.services.retrieval_cache import invalidate_session
+
+        invalidate_session(request.session_id)
     return {"doc_id": doc_id, "status": "upserted"}
 
 
@@ -72,6 +85,25 @@ def delete_document(
     if not get_knowledge_store().delete_document(doc_id):
         raise HTTPException(status_code=404, detail=f"Document not found: {doc_id}")
     return {"doc_id": doc_id, "status": "deleted"}
+
+
+@router.delete("/sessions/{session_id}")
+def delete_session_knowledge(
+    session_id: str,
+    principal: AuthPrincipal = Depends(require_role("user", "admin")),
+) -> dict[str, Any]:
+    assert_session_knowledge_access(principal, session_id)
+    store = get_knowledge_store()
+    if get_state_store().load(session_id, read_only=True):
+        removed = store.delete_by_session(session_id)
+    elif principal.role == "admin":
+        removed = store.delete_by_session(session_id)
+    else:
+        removed = store.delete_by_session(session_id, uploaded_by=principal.user_id)
+    from app.services.retrieval_cache import invalidate_session
+
+    invalidate_session(session_id)
+    return {"session_id": session_id, "removed": removed, "status": "deleted"}
 
 
 @router.get("/search", response_model=SearchResponse)

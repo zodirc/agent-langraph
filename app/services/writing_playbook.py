@@ -111,6 +111,8 @@ def _edit_action(filename: str) -> Action:
 
 
 def playbook_plan_steps(operator: WritingOperator, filename: str) -> list[str]:
+    if operator == "kickoff_body":
+        return [f"读取大纲", f"撰写正文 {filename}"]
     if operator == "append":
         return [f"续写 {filename}"]
     if operator == "rewrite":
@@ -174,6 +176,12 @@ def apply_writing_playbook(
             # edit_text_artifact without old_text/new_text (always 0 replacements).
             actions = [_read_action(body, with_line_numbers=True), _write_action(body)]
             patched = True
+        elif operator == "kickoff_body" and outline and body:
+            actions = [_read_action(outline), _write_action(body)]
+            patched = True
+        elif operator == "kickoff_body" and body:
+            actions = [_write_action(body)]
+            patched = True
         elif operator == "replot" and outline:
             actions = [_read_action(outline), _write_action(outline)]
             patched = True
@@ -209,7 +217,7 @@ def classify_and_apply_playbook(
     operator = classify_writing_operator(goal, state)
     if not operator:
         existing = str(payload.get("writing_operator") or "").strip()
-        if existing in ("append", "rewrite", "polish", "character", "replot"):
+        if existing in ("append", "rewrite", "polish", "character", "replot", "kickoff_body"):
             operator = existing  # type: ignore[assignment]
     if not operator:
         return actions, [], None, False

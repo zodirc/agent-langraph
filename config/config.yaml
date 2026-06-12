@@ -17,10 +17,12 @@ model:
     reasoning: 8192
     writing: 16384
     routing: 2048
+    intent_observation: 512
   # 模型上下文窗口（单次请求 input+output 上限，用于 UI 占用条）
   context_window: 200000
   timeout_by_purpose:
     routing: 20
+    intent_observation: 20
   # 可选：多模型目录（切换模型时共用同一会话上下文，窗口大小随模型变化）
   # catalog:
   #   - id: claude-sonnet
@@ -115,6 +117,8 @@ session:
   max_history_chars: 48000
   compress_enabled: true      # 超出上限时自动裁剪较早消息
   memory_retrieval_enabled: true   # 多轮会话在 skip_retrieval 时仍检索 session memory
+  knowledge_enabled: true          # 会话级写作素材（domain=source + session_id 软隔离）
+  source_inquiry_regex_fallback: false  # 素材确认走 intent_observation LLM，不靠正则
   turn_policy:
     enabled: true
     default_suspend_when_mission_active: true
@@ -132,6 +136,7 @@ session:
 
 performance:
   fast_reasoning_enabled: false
+  session_source_fast_answer_enabled: true   # §7.3 E: 素材确认类 QA 不走 reasoning LLM
   artifact_edit_fast_path: true
   qa_mode_tools_resident: true
   skip_retrieval_when_no_tools: true
@@ -241,6 +246,7 @@ intent_observation:
   enabled: true
   shadow_mode: false
   low_confidence_threshold: 0.55
+  interaction_goal_threshold: 0.55   # LLM interaction_goal confidence gate
   primary_model: ""
   fallback_model: ""
 
@@ -608,6 +614,11 @@ rag:
 # Evidence operating system — retrieval governance (see docs/RETRIEVAL_OPTIMIZATION_EXECUTION_PLAN.md)
 retrieval:
   policy_version: v2
+  timing_enabled: true              # §7.5 P0: retrieval/reasoning 分段耗时 trace
+  fast_tier_enabled: true           # §7.3 A: 轻问答先走关键词快档，零命中再 hybrid
+  session_cache_enabled: true       # §7.3 B: 同会话同 query 复用检索结果
+  session_cache_ttl_sec: 90
+  embedding_compat_once: true       # §7.3 C: 每进程只校验一次嵌入兼容性
   enable_evidence_pipeline: true
   enable_admission_gate: true
   enable_snippet_first: true
@@ -663,6 +674,7 @@ embedding:
   distance_metric: cosine
   version: v1
   auto_reindex_on_incompatibility: false
+  warmup_enabled: true  # §7.3 C.1: 启动时预热本地嵌入，避免首检 25s 冷启
 
 skill:
   enabled: true

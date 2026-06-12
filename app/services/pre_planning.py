@@ -123,6 +123,8 @@ def run_pre_planning_pipeline(state: AgentState) -> AgentState:
         observe_intent,
         resolve_mode_with_observation,
     )
+    from app.services.reasoning_trace import report_status_trace
+    from app.services.retrieval_timing import record_timing, timed_stage
 
     payload = dict(state.get("input_payload") or {})
     explicit = parse_explicit_interaction_mode(payload)
@@ -131,12 +133,27 @@ def run_pre_planning_pipeline(state: AgentState) -> AgentState:
     payload["route_audit"] = {**dict(payload.get("route_audit") or {}), **audit_seed}
     state = merge_state(state, input_payload=payload)
 
-    observation = observe_intent(
-        state,
-        explicit_mode=explicit,
-        route_audit_seed=audit_seed,
+    report_status_trace("planning", "正在判定交互意图（intent_observation）…")
+    with timed_stage("planning", "intent_observation") as timings:
+        observation = observe_intent(
+            state,
+            explicit_mode=explicit,
+            route_audit_seed=audit_seed,
+        )
+    record_timing(
+        "planning",
+        "intent_observation_total",
+        timings.get("intent_observation", 0.0),
+        source=observation.source,
+        interaction_goal=observation.interaction_goal or "",
     )
     state = apply_intent_observation_to_state(state, observation)
+    goal_label = observation.interaction_goal or "none"
+    report_status_trace(
+        "planning",
+        f"意图已判定：{goal_label}（来源={observation.source}，"
+        f"{observation.latency_ms or 0}ms）",
+    )
 
     intent_obs = state.get("intent_observation")
     resolution = resolve_target_mode(
@@ -196,6 +213,54 @@ def planning_must_run_llm(state: AgentState) -> bool:
     return int(state.get("planning_revision_count") or 0) > 0
 
 
+def should_skip_session_source_inquiry_planning(state: AgentState) -> bool:
+    """Thin planning for 'have you read our session material?' style turns."""
+    payload = state.get("input_payload") or {}
+    if not payload.get("pre_planning_completed"):
+        return False
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    from app.services.interaction_goal import goal_is_session_source_inquiry
+
+    return goal_is_session_source_inquiry(goal, state)
+
+
+def apply_session_source_inquiry_payload_hints(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop stale writing contract; narrate-only QA about imported session source."""
+    from app.services.interaction_goal import goal_is_session_source_inquiry
+
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    if payload.get("interaction_goal") != "session_source_inquiry" and not goal_is_session_source_inquiry(
+        goal, {"input_payload": payload}
+    ):
+        return payload
+    out = dict(payload)
+    out["writing_intent"] = {
+        "enabled": False,
+        "blocked_by": "session_source_qa",
+        "source": "inbound_hint",
+    }
+    out["turn_kind"] = "narrate_only"
+    out.pop("require_planning_after_steer", None)
+    out["steer_planning_done"] = True
+    return out
+
+
+def session_source_inquiry_thin_actions(state: AgentState) -> list["Action"]:
+    """Retrieve session source domain, then answer from evidence."""
+    from app.domain.action import Action
+
+    payload = state.get("input_payload") or {}
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    return [
+        Action(
+            type="retrieve",
+            params={"query": goal or "session source material", "domains": ["source"]},
+            source="structural",
+        ),
+        Action(type="answer", completes_turn=True, source="structural"),
+    ]
+
+
 def should_skip_qa_planning_llm(state: AgentState) -> bool:
     """Thin planning for conversational QA (greetings, short chat) in qa_mode."""
     payload = state.get("input_payload") or {}
@@ -210,8 +275,10 @@ def should_skip_qa_planning_llm(state: AgentState) -> bool:
 
     if detect_artifact_edit_intent(state, goal):
         return False
-    from app.services.interaction_goal import goal_is_conversational_qa
+    from app.services.interaction_goal import goal_is_conversational_qa, goal_is_session_source_inquiry
 
+    if goal_is_session_source_inquiry(goal):
+        return False
     return goal_is_conversational_qa(goal)
 
 

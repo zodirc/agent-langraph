@@ -29,6 +29,9 @@ def reasoning_or_writing_node(state: AgentState) -> AgentState:
     status = str(updated.get("status") or "")
     if not status.endswith("FAILED") and status != TaskStatus.DEAD_LETTER.value:
         updated = apply_post_generation_guard(updated)
+    from app.services.writing_pending import record_pending_writing_delivery
+
+    updated = record_pending_writing_delivery(updated)
     updated = dict(updated)
     updated["current_node"] = "reasoning_or_writing"
     get_state_store().save(updated)

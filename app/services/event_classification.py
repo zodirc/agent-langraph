@@ -17,7 +17,11 @@ from app.services.foreground_execution import (
     INTERRUPT_P0,
     classify_steer_interrupt,
 )
-from app.services.interaction_goal import goal_is_mission_status_query, goal_is_pure_greeting
+from app.services.interaction_goal import (
+    goal_is_mission_status_query,
+    goal_is_pure_greeting,
+    goal_is_session_source_inquiry,
+)
 
 EventType = Literal[
     "new_task",
@@ -350,11 +354,18 @@ def _redirect_signals(state: dict[str, Any], payload: dict[str, Any], goal: str)
     return False
 
 
-def _confirm_signals(payload: dict[str, Any]) -> bool:
+def _confirm_signals(payload: dict[str, Any], state: dict[str, Any] | None = None) -> bool:
     if payload.get("confirm") is True:
         return True
     if payload.get("steer_intent_confirmed") or payload.get("steer_outcome_confirmed"):
         return True
+    goal = _goal_text(payload)
+    if goal and state:
+        from app.services.writing_pending import goal_looks_like_confirm_only, pending_from_payload
+
+        prior = state.get("input_payload") or {}
+        if goal_looks_like_confirm_only(goal) and pending_from_payload(prior):
+            return True
     return False
 
 
@@ -440,7 +451,7 @@ def classify_user_event(
                 reason="mission status / progress inquiry",
             )
 
-    if _confirm_signals(payload):
+    if _confirm_signals(payload, state):
         return EventClassification(
             event_type="confirm",
             event_id=event_id,
@@ -462,6 +473,15 @@ def classify_user_event(
             event_id=event_id,
             source="redirect_signal",
             reason="goal replacement or supersede replan",
+        )
+
+    if goal and goal_is_session_source_inquiry(goal):
+        return EventClassification(
+            event_type="clarification",
+            event_id=event_id,
+            source="session_source_inquiry",
+            reason="ask whether session source material is loaded",
+            confidence=0.9,
         )
 
     if _is_constraint_supplement(state, payload, goal):

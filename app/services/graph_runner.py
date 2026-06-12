@@ -1211,7 +1211,7 @@ class GraphRunner:
                 if node_name == "tool_execution":
                     yield from _emit_tool_preview(latest, msg_ctx=msg_ctx)
                 if (
-                    node_name == "reasoning"
+                    node_name in ("reasoning", "reasoning_or_writing")
                     and latest.get("reasoning_result")
                     and not answer_stream_enabled()
                 ):

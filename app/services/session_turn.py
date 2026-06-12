@@ -62,7 +62,10 @@ def _stamp_turn_policy_and_classification(
         session_turn=prospective_turn,
     )
     classification = classify_user_event(classify_state, payload=merged)
-    return stamp_inbound_classification(merged, classification)
+    merged = stamp_inbound_classification(merged, classification)
+    from app.services.pre_planning import apply_session_source_inquiry_payload_hints
+
+    return apply_session_source_inquiry_payload_hints(merged)
 
 
 def build_inbound_merged_payload(
@@ -86,6 +89,12 @@ def build_inbound_merged_payload(
         **payload,
         "conversation_history": history,
     }
+    from app.services.writing_pending import apply_confirm_pending_delivery
+
+    merged = apply_confirm_pending_delivery(existing, merged)
+    goal = str(
+        merged.get("goal") or merged.get("query") or merged.get("question") or ""
+    ).strip()
     if goal:
         merged = _stamp_turn_policy_and_classification(
             existing,
@@ -104,6 +113,21 @@ def graph_thread_id(state: AgentState) -> str:
     return f"{state['task_id']}:t{turn}"
 
 
+def _fresh_interrupt_context_for_turn(state: AgentState) -> dict[str, Any]:
+    """Drop stale pause/abort from a prior turn without resetting foreground epoch."""
+    from app.services.execution_control import CONTROL_IDLE, ensure_interrupt_context
+    from app.services.interrupt_control import RUNTIME_RUNNING
+
+    ctx = ensure_interrupt_context(state)
+    ctx["pause_requested"] = False
+    ctx["cancel_requested"] = False
+    ctx.pop("abort_requested", None)
+    ctx["control_state"] = CONTROL_IDLE
+    ctx["runtime_state"] = RUNTIME_RUNNING
+    ctx["active_step"] = None
+    return ctx
+
+
 def _reset_execution_fields(state: AgentState, payload: dict[str, Any]) -> AgentState:
     turn = int(state.get("session_turn") or 0) + 1
     history = conversation_history_from_state(
@@ -116,6 +140,7 @@ def _reset_execution_fields(state: AgentState, payload: dict[str, Any]) -> Agent
         state,
         input_payload=payload,
         conversation_history=history,
+        interrupt_context=_fresh_interrupt_context_for_turn(state),
         node_history=[],
         status=TaskStatus.NEW.value,
         current_node="api",

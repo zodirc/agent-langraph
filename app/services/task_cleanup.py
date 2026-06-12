@@ -93,6 +93,7 @@ def purge_task_remains(task_id: str, *, session_turn_hint: int = 1) -> dict[str,
     """
     from app.services.audit_store import get_audit_store
     from app.services.chat_message_store import get_chat_message_store
+    from app.services.knowledge_store import get_knowledge_store
     from app.services.llm_interaction_store import get_llm_interaction_store
     from app.services.memory_store import get_memory_store
 
@@ -102,6 +103,7 @@ def purge_task_remains(task_id: str, *, session_turn_hint: int = 1) -> dict[str,
         "llm_interactions_removed": get_llm_interaction_store().delete_for_task(task_id),
         "memories_removed": get_memory_store().delete_for_session(task_id),
         "chat_messages_removed": get_chat_message_store().delete_for_task(task_id),
+        "session_knowledge_removed": get_knowledge_store().delete_by_session(task_id),
         "checkpoint_threads_removed": delete_checkpoints_for_task(
             task_id, max_turn_hint=session_turn_hint
         ),

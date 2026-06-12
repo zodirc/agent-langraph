@@ -349,14 +349,29 @@ def _resolve_writing_mode(
     return "body"
 
 
-def _writing_system_prompt(*, segment_index: int = 0, writing_mode: str = "body") -> str:
+def _writing_system_prompt(
+    *,
+    segment_index: int = 0,
+    writing_mode: str = "body",
+    output_mode: str = "tool",
+) -> str:
+    if output_mode == "tool":
+        emit_instr = (
+            f"You MUST call the tool `{ARTIFACT_TOOL_NAME}` with the full plain text to save. "
+            "Tool arguments must be a single JSON object with only the required `content` key—"
+        )
+    else:
+        emit_instr = (
+            'Output exactly ONE JSON object: {"content": "<full plain text to save>"}. '
+            "The object must contain only the `content` key—"
+        )
     base = (
         "You are a creative writing assistant for long-form Chinese fiction. "
-        f"You MUST call the tool `{ARTIFACT_TOOL_NAME}` with the full plain text to save. "
-        "Tool arguments must be a single JSON object with only the required `content` key—"
+        f"{emit_instr}"
         "no reasoning, thinking, or analysis fields. "
         "Do not output thinking-only blocks. "
-        "Obey writing_context.continuation_rules and writing_guidelines_excerpt when present. "
+        "Obey writing_context.continuation_rules, writing_guidelines_excerpt, "
+        "and session_source_excerpt when present. "
         "The content field must be Chinese text for the artifact, not meta commentary."
     )
     if writing_mode == "outline":
@@ -434,6 +449,22 @@ def is_thinking_only_error(exc: BaseException) -> bool:
     return "thinking blocks" in msg or "thinking-only" in msg
 
 
+def is_thinking_tool_choice_error(exc: BaseException) -> bool:
+    """Provider thinking/reasoning mode rejects forced tool_choice."""
+    msg = str(exc).lower()
+    return "thinking mode" in msg and "tool_choice" in msg
+
+
+def _effective_structured_preferred(caps: dict[str, Any]) -> str:
+    """Pick tool vs json_text; thinking-capable models cannot use forced tool_choice."""
+    structured = caps.get("structured_output") or {}
+    preferred = str(structured.get("preferred") or "tool")
+    fallback = str(structured.get("fallback") or "json_text")
+    if preferred == "tool" and caps.get("thinking_in_response"):
+        return fallback
+    return preferred
+
+
 def _invoke_artifact_sync(
     llm: Any,
     *,
@@ -449,7 +480,14 @@ def _invoke_artifact_sync(
             message = str(exc).lower()
             if "timeout" in message or "rate" in message or "529" in message or "503" in message:
                 raise RetryableError(str(exc)) from exc
-            report_status_trace("writing", f"gateway: tool invoke failed ({exc}), fallback json")
+            if is_thinking_tool_choice_error(exc):
+                report_status_trace(
+                    "writing",
+                    "gateway: thinking 模式不支持 tool_choice，改用 JSON 正文输出…",
+                )
+                get_metrics_service().inc_contract_event("gateway_thinking_no_tool_choice")
+            else:
+                report_status_trace("writing", f"gateway: tool invoke failed ({exc}), fallback json")
             return _invoke_text(llm, system, user)
     return _invoke_text(llm, system, user)
 
@@ -506,8 +544,20 @@ def _invoke_with_tool(llm: Any, system: str, user: str) -> Any:
     }
     try:
         bound = llm.bind_tools([tool_def], tool_choice=ARTIFACT_TOOL_NAME)
-    except TypeError:
-        bound = llm.bind_tools([tool_def])
+    except Exception as exc:
+        if is_thinking_tool_choice_error(exc):
+            return _invoke_text(llm, system, user)
+        try:
+            bound = llm.bind_tools([tool_def])
+        except TypeError:
+            bound = llm.bind_tools([tool_def])
+    else:
+        try:
+            return bound.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+        except Exception as exc:
+            if is_thinking_tool_choice_error(exc):
+                return _invoke_text(llm, system, user)
+            raise
 
     return bound.invoke([SystemMessage(content=system), HumanMessage(content=user)])
 
@@ -575,8 +625,19 @@ def _stream_artifact_live(
         }
         try:
             stream_llm = llm.bind_tools([tool_def], tool_choice=ARTIFACT_TOOL_NAME)
-        except TypeError:
-            stream_llm = llm.bind_tools([tool_def])
+        except Exception as exc:
+            if is_thinking_tool_choice_error(exc):
+                report_status_trace(
+                    "writing",
+                    "gateway: thinking 模式不支持 tool_choice，流式改用 JSON 正文…",
+                )
+                get_metrics_service().inc_contract_event("gateway_thinking_no_tool_choice")
+                stream_llm = llm
+            else:
+                try:
+                    stream_llm = llm.bind_tools([tool_def])
+                except TypeError:
+                    stream_llm = llm.bind_tools([tool_def])
 
     parser = ArtifactArgsParser()
     seen_content = 0
@@ -809,13 +870,14 @@ def invoke_artifact_draft(
     Generate artifact content via capability-driven adapter (tool preferred).
     """
     caps = build_model_capabilities()
-    preferred = (caps.get("structured_output") or {}).get("preferred", "tool")
+    preferred = _effective_structured_preferred(caps)
     segment_index = int(user_payload.get("chunk_index") or 0)
     fname = filename or str(user_payload.get("filename") or "artifact.txt")
     writing_mode = _resolve_writing_mode(user_payload=user_payload, filename=fname)
     system = _writing_system_prompt(
         segment_index=segment_index,
         writing_mode=writing_mode,
+        output_mode=preferred,
     )
     user = json.dumps(
         {"task": task_desc, **user_payload},

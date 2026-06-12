@@ -519,6 +519,9 @@ def _max_tokens_for_purpose(purpose: str) -> int:
         "reasoning": settings.MODEL_MAX_TOKENS_REASONING,
         "routing": settings.MODEL_MAX_TOKENS_ROUTING,
         "session_turn": settings.MODEL_MAX_TOKENS_ROUTING,
+        "intent_observation": int(
+            getattr(settings, "MODEL_MAX_TOKENS_INTENT_OBSERVATION", settings.MODEL_MAX_TOKENS_ROUTING)
+        ),
         "writing": settings.MODEL_MAX_TOKENS_WRITING,
     }
     return mapping.get(purpose, settings.MODEL_MAX_TOKENS)
@@ -542,11 +545,17 @@ def _resolve_model_name(
                 entry = resolve_catalog_entry(model_id=model_id)
                 if entry:
                     return entry.model_name
-    return settings.MODEL_NAME
+    from app.services.runtime_model_config import get_effective_model_config
+
+    return get_effective_model_config().model_name
 
 
 def _timeout_for_purpose(purpose: str) -> int:
-    if purpose == "routing":
+    if purpose in ("routing", "session_turn", "intent_observation"):
+        if purpose == "intent_observation":
+            return int(
+                getattr(settings, "MODEL_TIMEOUT_INTENT_OBSERVATION", settings.MODEL_TIMEOUT_ROUTING)
+            )
         return int(getattr(settings, "MODEL_TIMEOUT_ROUTING", settings.MODEL_TIMEOUT))
     return settings.MODEL_TIMEOUT
 
@@ -556,18 +565,22 @@ def _get_llm_cached(
     purpose: str,
     provider: str,
     model_name: str,
+    api_key: str,
+    base_url: str,
     max_tokens: int,
     timeout: int,
 ) -> Any:
-    if not settings.MODEL_ENABLED:
+    from app.services.runtime_model_config import get_effective_model_config
+
+    if not get_effective_model_config().enabled:
         return None
     from app.llm.factory import create_chat_model
 
     return create_chat_model(
         provider=provider,
         model_name=model_name,
-        api_key=settings.MODEL_API_KEY,
-        base_url=settings.MODEL_BASE_URL,
+        api_key=api_key,
+        base_url=base_url,
         max_tokens=max_tokens,
         temperature=settings.MODEL_TEMPERATURE,
         max_retries=settings.MODEL_MAX_RETRIES,
@@ -576,7 +589,10 @@ def _get_llm_cached(
 
 
 def get_llm(purpose: str = "default", *, budget_ctx: Any | None = None) -> Any:
-    if not settings.MODEL_ENABLED:
+    from app.services.runtime_model_config import get_effective_model_config
+
+    eff = get_effective_model_config()
+    if not eff.enabled:
         return None
     model_name = _resolve_model_name(budget_ctx)
     max_tokens = _max_tokens_for_purpose(purpose)
@@ -584,15 +600,24 @@ def get_llm(purpose: str = "default", *, budget_ctx: Any | None = None) -> Any:
         max_tokens = min(max_tokens, int(getattr(settings, "BUDGET_DOWNGRADE_MAX_TOKENS", 2048)))
     return _get_llm_cached(
         purpose,
-        settings.MODEL_PROVIDER,
+        eff.provider,
         model_name,
+        eff.api_key,
+        eff.base_url,
         max_tokens,
         _timeout_for_purpose(purpose),
     )
 
 
+def invalidate_llm_cache() -> None:
+    """Clear cached LLM clients after runtime model config changes."""
+    _get_llm_cached.cache_clear()
+    _STRUCTURED_CACHE.clear()
+    _STREAM_CACHE.clear()
+
+
 # Backward compat for tests that clear LLM cache
-get_llm.cache_clear = _get_llm_cached.cache_clear  # type: ignore[attr-defined]
+get_llm.cache_clear = invalidate_llm_cache  # type: ignore[attr-defined]
 
 
 def _normalize_content(content: Any) -> str:
@@ -606,14 +631,19 @@ def _normalize_content(content: Any) -> str:
 
 
 def _cache_key(purpose: str, system_prompt: str, user_content: str) -> str:
+    from app.services.runtime_model_config import get_effective_model_config
+
+    eff = get_effective_model_config()
     raw = json.dumps(
         {
             "purpose": purpose,
             "system_prompt": system_prompt,
             "user_content": user_content,
-            "model": settings.MODEL_NAME,
-            "provider": settings.MODEL_PROVIDER,
-            "enabled": settings.MODEL_ENABLED,
+            "model": eff.model_name,
+            "provider": eff.provider,
+            "base_url": eff.base_url,
+            "api_key": eff.api_key,
+            "enabled": eff.enabled,
         },
         ensure_ascii=False,
         sort_keys=True,

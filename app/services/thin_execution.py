@@ -11,6 +11,7 @@ from typing import Any
 # Profiles map to llm_client purpose keys (see config max_tokens_by_purpose).
 _PROFILE_TO_LLM_PURPOSE: dict[str, str] = {
     "qa_direct": "routing",
+    "session_source_qa": "routing",
     "engineering_direct": "routing",
 }
 

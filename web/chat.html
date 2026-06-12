@@ -7,7 +7,7 @@
   <link rel="apple-touch-icon" href="/static/favicon.svg" />
   <title>对话 — Agent Runtime</title>
   <link rel="stylesheet" href="/static/themes.css?v=1" />
-  <link rel="stylesheet" href="/static/terminal.css?v=ui-31" />
+  <link rel="stylesheet" href="/static/terminal.css?v=ui-36" />
   <link rel="stylesheet" href="/static/platform.css?v=ui-23" />
 </head>
 <body class="platform-shell chat-page-shell" data-active-page="chat">
@@ -39,6 +39,47 @@
             <option value="dark">深色</option>
             <option value="light">淡色</option>
           </select>
+          <div id="model-config-panel" class="model-config-anchor ctx-gov-anchor is-collapsed" aria-label="模型配置">
+            <button type="button" id="model-config-toggle" class="ctx-gov-trigger flow-btn" aria-expanded="false" aria-controls="model-config-dropdown" title="在线切换模型厂商、名称与 API Key（无需重启）">
+              模型
+              <span id="model-config-badge" class="ctx-gov-badge-inline">—</span>
+            </button>
+            <div id="model-config-dropdown" class="ctx-gov-dropdown model-config-dropdown">
+              <div class="model-config-toolbar ctx-gov-dropdown-toolbar">
+                <span id="model-config-source" class="ctx-gov-label">来源 · —</span>
+                <button type="button" id="model-config-probe-btn" class="flow-btn" title="发送 ping 测试连通性">测试</button>
+                <button type="button" id="model-config-reset-btn" class="flow-btn" title="恢复 .env 启动配置">重置</button>
+              </div>
+              <form id="model-config-form" class="model-config-body ctx-gov-body" autocomplete="off">
+                <p class="ctx-gov-hint">修改后立即生效，无需 <code>make down/up</code>。留空 API Key 则保留当前已配置值。</p>
+                <label class="model-config-field">
+                  <span class="model-config-label">厂商</span>
+                  <select id="model-config-provider" class="ctx-gov-select" required></select>
+                </label>
+                <label class="model-config-field">
+                  <span class="model-config-label">模型名称</span>
+                  <input type="text" id="model-config-name" class="model-config-input" placeholder="如 claude-sonnet-4-5" required />
+                </label>
+                <label class="model-config-field">
+                  <span class="model-config-label">Base URL</span>
+                  <input type="text" id="model-config-base-url" class="model-config-input" placeholder="留空使用厂商默认" />
+                </label>
+                <label class="model-config-field">
+                  <span class="model-config-label">API Key</span>
+                  <input type="password" id="model-config-api-key" class="model-config-input" placeholder="输入新 Key 覆盖；留空不变" autocomplete="off" />
+                  <span id="model-config-key-hint" class="model-config-hint"></span>
+                </label>
+                <label class="model-config-field model-config-field-inline">
+                  <input type="checkbox" id="model-config-enabled" checked />
+                  <span>启用模型</span>
+                </label>
+                <div class="model-config-actions">
+                  <button type="submit" id="model-config-apply-btn" class="flow-btn flow-btn-primary">应用</button>
+                  <span id="model-config-status" class="model-config-status" role="status"></span>
+                </div>
+              </form>
+            </div>
+          </div>
           <div id="context-governance-panel" class="ctx-gov-anchor is-collapsed" aria-label="会话用量">
             <button type="button" id="ctx-gov-toggle" class="ctx-gov-trigger flow-btn" aria-expanded="false" aria-controls="ctx-gov-dropdown" title="展开/收起会话 token 用量（厂商实际回报）">
               用量
@@ -76,6 +117,7 @@
             <span id="terminal-run-status" class="terminal-run-status" hidden></span>
             <button type="button" id="session-badge" class="badge badge-session badge-session-btn" title="点击查看完整会话 ID">session …</button>
             <a id="monitor-link-btn" href="/dashboard" class="flow-btn flow-btn-link" title="打开任务监控面板">监控</a>
+            <button id="import-source-btn" type="button" class="flow-btn" title="编辑并保存本会话写作素材（范例 + 导入合一）">素材库</button>
             <button id="state-debug-btn" type="button" class="flow-btn" title="查看当前会话 AgentState">State</button>
             <button id="flow-open-btn" type="button" class="flow-btn">Flow</button>
           </div>
@@ -153,6 +195,76 @@
       </div>
     </aside>
   </div>
+  <dialog id="import-source-modal" class="import-source-modal">
+    <div class="import-source-shell">
+      <header class="import-source-head">
+        <div>
+          <h3 class="import-source-title">会话写作素材</h3>
+          <p class="import-source-meta" id="import-source-meta">仅当前会话可见 · 保存后供写作 RAG 检索</p>
+        </div>
+        <button type="button" id="import-source-close-btn" class="flow-btn">关闭</button>
+      </header>
+      <nav class="import-source-tabs" role="tablist">
+        <button type="button" class="import-source-tab is-active" data-tab="example" role="tab" aria-selected="true">范例参考</button>
+        <button type="button" class="import-source-tab" data-tab="session" role="tab" aria-selected="false">本会话素材</button>
+      </nav>
+      <div class="import-source-status-slot">
+        <p id="import-source-status" class="import-source-status" role="status" aria-live="polite" hidden></p>
+      </div>
+      <div class="import-source-body">
+        <section class="import-source-panel is-active" data-panel="example" role="tabpanel">
+          <p class="import-source-hint">选择范例预览，点击「填入编辑区」后到「本会话素材」修改并保存。</p>
+          <div class="import-source-example-picks">
+            <button type="button" class="flow-btn import-source-example-btn is-active" data-example="blank">空白模板</button>
+            <button type="button" class="flow-btn import-source-example-btn" data-example="suiyue">《岁月》范例</button>
+          </div>
+          <pre class="import-source-example-preview" id="import-source-example-preview" aria-readonly="true"></pre>
+          <button type="button" id="import-source-use-example-btn" class="flow-btn flow-btn-primary">填入本会话编辑区</button>
+        </section>
+        <section class="import-source-panel" data-panel="session" role="tabpanel" hidden>
+          <aside id="import-source-stored-overview" class="import-source-stored-overview" hidden>
+            <div class="import-source-stored-head">
+              <span class="import-source-stored-badge">已入库</span>
+              <strong id="import-source-stored-title" class="import-source-stored-title"></strong>
+            </div>
+            <dl class="import-source-stored-meta">
+              <div>
+                <dt>字数</dt>
+                <dd id="import-source-stored-chars">—</dd>
+              </div>
+              <div>
+                <dt>RAG 分块</dt>
+                <dd id="import-source-stored-chunks">—</dd>
+              </div>
+              <div>
+                <dt>入库时间</dt>
+                <dd id="import-source-stored-time">—</dd>
+              </div>
+            </dl>
+            <p class="import-source-stored-preview-label">内容预览（检索将按块召回，非整篇灌入）</p>
+            <pre id="import-source-stored-preview" class="import-source-stored-preview" aria-readonly="true"></pre>
+          </aside>
+          <label class="import-source-field">
+            <span class="import-source-label">标题</span>
+            <input type="text" id="import-source-title" class="import-source-title-input" placeholder="如：岁月剧情素材" />
+          </label>
+          <label class="import-source-field import-source-field-grow">
+            <span class="import-source-label">内容（建议用 ## 分块写人物、剧情、时间线）</span>
+            <textarea id="import-source-editor" class="import-source-editor" rows="16" placeholder="在此填写或粘贴会话素材…"></textarea>
+          </label>
+          <div class="import-source-session-actions">
+            <button type="button" id="import-source-load-file-btn" class="flow-btn">从文件加载</button>
+          </div>
+        </section>
+      </div>
+      <footer class="import-source-foot">
+        <button type="button" id="import-source-copy-btn" class="flow-btn" title="复制当前页：范例参考或本会话编辑区">复制</button>
+        <button type="button" id="import-source-save-btn" class="flow-btn flow-btn-primary">保存并应用</button>
+        <button type="button" id="import-source-clear-btn" class="flow-btn">清空本会话素材</button>
+        <button type="button" id="import-source-cancel-btn" class="flow-btn">取消</button>
+      </footer>
+    </div>
+  </dialog>
   <dialog id="state-debug-modal" class="state-debug-modal">
     <div class="state-debug-shell">
       <header class="state-debug-head">
@@ -185,7 +297,9 @@
   <script src="/static/platform-nav.js?v=8"></script>
   <script src="/static/platform-auth.js?v=8"></script>
   <script src="/static/skill_form.js?v=1"></script>
-  <script src="/static/app.js?v=ui-31"></script>
+  <input type="file" id="import-source-file-input" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden />
+  <script src="/static/app.js?v=ui-39"></script>
+  <script src="/static/model_config_panel.js?v=1"></script>
   <script src="/static/context_governance_panel.js?v=9"></script>
 </body>
 </html>

@@ -17,6 +17,8 @@ _WRITING_EXPLICIT_ASK_RE = re.compile(
 _WRITING_ACTION_TYPES = frozenset({"write_artifact", "edit_artifact"})
 _WRITING_GUIDELINES_TOP_K = 5
 _WRITING_GUIDELINES_MAX_CHARS = 6000
+_SESSION_SOURCE_TOP_K = 5
+_SESSION_SOURCE_MAX_CHARS = 8000
 
 
 def _hit_domain(hit: Mapping[str, Any]) -> str:
@@ -59,6 +61,60 @@ def build_writing_guidelines_excerpt(
         parts.append(chunk)
         total += len(chunk)
     return "\n\n---\n\n".join(parts)
+
+
+def build_session_source_excerpt(
+    state: Mapping[str, Any] | dict[str, Any],
+    *,
+    top_k: int = _SESSION_SOURCE_TOP_K,
+    max_chars: int = _SESSION_SOURCE_MAX_CHARS,
+) -> str:
+    """Assemble session source-domain RAG hits into a prompt excerpt."""
+    hits = [
+        h for h in (state.get("retrieved_knowledge") or []) if isinstance(h, dict)
+    ]
+    source_hits = [h for h in hits if _hit_domain(h) == "source"]
+    if not source_hits:
+        return ""
+
+    parts: list[str] = []
+    total = 0
+    for hit in source_hits[:top_k]:
+        doc_id = str(hit.get("doc_id") or "").strip()
+        content = str(hit.get("content") or hit.get("text") or "").strip()
+        if not content:
+            continue
+        header = f"[{doc_id}]" if doc_id else ""
+        chunk = f"{header}\n{content}".strip() if header else content
+        if total + len(chunk) > max_chars:
+            remaining = max_chars - total
+            if remaining > 200:
+                parts.append(chunk[:remaining] + "\n...(truncated)")
+            break
+        parts.append(chunk)
+        total += len(chunk)
+    return "\n\n---\n\n".join(parts)
+
+
+def applied_session_source_ids(
+    state: Mapping[str, Any] | dict[str, Any],
+    *,
+    top_k: int = _SESSION_SOURCE_TOP_K,
+) -> list[str]:
+    """Doc ids of session source material injected for attribution."""
+    hits = [
+        h for h in (state.get("retrieved_knowledge") or []) if isinstance(h, dict)
+    ]
+    ids: list[str] = []
+    for hit in hits:
+        if _hit_domain(hit) != "source":
+            continue
+        doc_id = str(hit.get("doc_id") or "").strip()
+        if doc_id and doc_id not in ids:
+            ids.append(doc_id)
+        if len(ids) >= top_k:
+            break
+    return ids
 
 
 def applied_writing_guideline_ids(
@@ -156,6 +212,10 @@ def writing_explicit_ask(answer_text: str) -> bool:
     """True when the model is explicitly asking the user for input (allowed terminal)."""
     text = (answer_text or "").strip()
     if not text:
+        return False
+    from app.services.writing_pending import writing_false_promise_without_write
+
+    if writing_false_promise_without_write(text):
         return False
     return bool(_WRITING_EXPLICIT_ASK_RE.search(text))
 

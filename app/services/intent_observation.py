@@ -28,13 +28,17 @@ Output ONE JSON object with these fields:
 - target_mode: "qa_mode" | "engineering_mode" | "manuscript_mode"
 - session_relation: "stay" | "switch" | "isolate"
 - turn_kind_candidate: "narrate_only" | "execute" | null
+- interaction_goal: "session_source_inquiry" | "capability_inquiry" | "mission_status" | "delivery" | "chat" | "none"
 - confidence: number 0.0-1.0
 - reasons: array of short strings
 
 Rules:
 - Do NOT produce execution plans or prose answers.
+- interaction_goal=session_source_inquiry when the user only asks whether imported/reference material was read, loaded, or understood (e.g. "你了解我们提供的素材吗", "你阅读理解过我们的素材了么", "你看过资料了吗") — NOT a request to write or edit.
+- interaction_goal=delivery when the user wants artifacts produced or modified.
 - execute when the message requires file/tool side effects; narrate_only for pure conversation.
 - isolate when user switches to unrelated QA while a long-running task is active.
+- UI interaction_mode is a hint only; meta questions about session material stay session_source_inquiry even in writing mode.
 - Mixed "explain X then fix Y" → engineering or writing based on deliverable."""
 
 _STRUCTURAL_KIND_MAP: dict[str, str] = {
@@ -56,6 +60,36 @@ def _clip(text: str, limit: int) -> str:
     return text[:limit]
 
 
+def _derive_structural_interaction_goal(
+    *,
+    explicit_mode: str | None,
+    goal: str,
+    intent_kind: str,
+) -> str | None:
+    from app.services.interaction_goal import (
+        goal_is_capability_inquiry,
+        goal_is_pure_greeting,
+        goal_is_session_source_inquiry,
+    )
+
+    if goal and goal_is_pure_greeting(goal):
+        return "chat"
+    if goal and goal_is_capability_inquiry(goal):
+        return "capability_inquiry"
+    if goal and goal_is_session_source_inquiry(goal, {"input_payload": {"goal": goal}}):
+        return "session_source_inquiry"
+    if explicit_mode in ("writing", "manuscript", "engineering", "code", "deliver"):
+        return "delivery"
+    if intent_kind == "writing":
+        return "delivery"
+    if intent_kind == "engineering":
+        from app.services.interaction_goal import goal_is_conversational_qa
+
+        if goal and not goal_is_conversational_qa(goal):
+            return "delivery"
+    return None
+
+
 def build_structural_observation(
     state: AgentState,
     *,
@@ -64,6 +98,7 @@ def build_structural_observation(
 ) -> IntentObservationResult:
     """L1 structural observation without model call."""
     payload = state.get("input_payload") or {}
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
     inferred = str(route_audit_seed.get("inferred_kind") or "general")
     confidence = float(route_audit_seed.get("kind_confidence") or 0.0)
     intent_kind = _STRUCTURAL_KIND_MAP.get(inferred.lower(), "qa")
@@ -74,6 +109,20 @@ def build_structural_observation(
     elif intent_kind == "qa":
         target_mode = "qa_mode"
 
+    if explicit_mode:
+        from app.services.interaction_goal import explicit_mode_should_apply
+        from app.services.pre_planning import _EXPLICIT_MODE_MAP
+
+        if explicit_mode in _EXPLICIT_MODE_MAP and explicit_mode_should_apply(explicit_mode, goal):
+            kind_override, mode_override = _EXPLICIT_MODE_MAP[explicit_mode]
+            if kind_override:
+                intent_kind = (
+                    "writing"
+                    if kind_override == "manuscript"
+                    else normalize_intent_kind(kind_override)
+                )
+            target_mode = mode_override
+
     current_mode = str(payload.get("current_mode") or payload.get("target_mode") or "").strip()
     session_relation = "stay"
     if current_mode and current_mode != target_mode:
@@ -83,12 +132,19 @@ def build_structural_observation(
     if explicit_mode:
         reasons.append(f"explicit_mode={explicit_mode}")
 
+    interaction_goal = _derive_structural_interaction_goal(
+        explicit_mode=explicit_mode,
+        goal=goal,
+        intent_kind=intent_kind,
+    )
+
     result = IntentObservationResult(
         source="structural",
         intent_kind=intent_kind,
         target_mode=target_mode,
         session_relation=session_relation,
         turn_kind_candidate=None,
+        interaction_goal=interaction_goal,
         needs_planning=True,
         confidence=confidence,
         reasons=reasons,
@@ -133,13 +189,33 @@ def _invoke_observation_model(
     )
 
     model_purpose = "intent_observation"
-    try:
-        raw = invoke_structured(
+    timeout_s = int(
+        getattr(settings, "MODEL_TIMEOUT_INTENT_OBSERVATION", 20)
+    )
+
+    def _call_model() -> dict[str, Any]:
+        return invoke_structured(
             model_purpose,
             _SYSTEM,
             json.dumps(user_payload, ensure_ascii=False),
             trace_state=state,
         )
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_call_model)
+            raw = future.result(timeout=timeout_s)
+    except FuturesTimeoutError:
+        structural = build_structural_observation(
+            state, route_audit_seed=route_audit_seed, explicit_mode=explicit_mode
+        )
+        structural.fallback_used = True
+        structural.source = "hybrid"
+        structural.reasons = [*structural.reasons, f"llm_timeout={timeout_s}s"]
+        get_metrics_service().inc_intent_observation_fallback("timeout")
+        return structural
     except Exception as exc:
         structural = build_structural_observation(
             state, route_audit_seed=route_audit_seed, explicit_mode=explicit_mode
@@ -161,6 +237,12 @@ def _invoke_observation_model(
 
     turn_kind = raw.get("turn_kind_candidate")
     turn_kind_str = str(turn_kind) if turn_kind else None
+    interaction_goal = raw.get("interaction_goal")
+    interaction_goal_str = (
+        str(interaction_goal).strip().lower()
+        if interaction_goal and str(interaction_goal).strip().lower() != "none"
+        else None
+    )
     is_revision = bool(raw.get("is_revision"))
     revision_intent = raw.get("revision_intent")
     if not isinstance(revision_intent, dict):
@@ -172,6 +254,7 @@ def _invoke_observation_model(
         target_mode=target_mode,
         session_relation=session_relation,
         turn_kind_candidate=turn_kind_str,
+        interaction_goal=interaction_goal_str,
         needs_planning=True,
         is_revision=is_revision,
         revision_intent=revision_intent,
@@ -300,6 +383,7 @@ def _respect_explicit_mode(
         target_mode=mode_override,
         session_relation=result.session_relation,
         turn_kind_candidate=result.turn_kind_candidate,
+        interaction_goal=result.interaction_goal,
         needs_planning=result.needs_planning,
         is_revision=result.is_revision,
         revision_intent=result.revision_intent,
@@ -357,9 +441,11 @@ def apply_intent_observation_to_state(
         "intent_kind": result.intent_kind,
         "target_mode": result.target_mode,
         "session_relation": result.session_relation,
+        "interaction_goal": result.interaction_goal,
         "needs_planning": result.needs_planning,
         "is_revision": result.is_revision,
         "confidence": result.confidence,
+        "latency_ms": result.latency_ms,
         "trace_id": result.trace_id,
         "shadow_only": shadow,
     }
@@ -367,6 +453,13 @@ def apply_intent_observation_to_state(
         audit["revision_scope"] = result.revision_intent.get("revision_scope")
         audit["target_sections"] = result.revision_intent.get("target_sections")
     payload["route_audit"] = audit
+    if result.interaction_goal:
+        payload["interaction_goal"] = result.interaction_goal
+        payload["interaction_goal_confidence"] = result.confidence
+        if result.interaction_goal == "session_source_inquiry":
+            from app.services.pre_planning import apply_session_source_inquiry_payload_hints
+
+            payload = apply_session_source_inquiry_payload_hints(payload)
 
     from app.services.turn_event_log import record_turn_event
 

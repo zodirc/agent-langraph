@@ -19,7 +19,18 @@ from app.services.llm_gateway import invoke_artifact_draft, stream_artifact_draf
 from app.services.reasoning_trace import report_block, report_status_trace, trace_enabled
 from app.services.artifact_stream import artifact_stream_enabled
 
-_PLACEHOLDER_MARKERS = ("占位", "请在本任务完成后", "由助手生成", "示例）", "章节规划（示例）")
+_PLACEHOLDER_MARKERS = (
+    "占位",
+    "请在本任务完成后",
+    "由助手生成",
+    "示例）",
+    "章节规划（示例）",
+    "推理模块",
+    "根据大纲生成",
+    "内容由推理",
+    "待生成",
+    "此处为正文",
+)
 _SHORT_GOAL_RE = re.compile(r"^(续写|追加|继续|下一章|append)$", re.IGNORECASE)
 _CHARS_RE = re.compile(r"(\d+)\s*字")
 _WAN_RE = re.compile(r"([一二两三四五六七八九十\d]+)\s*万\s*字?")
@@ -170,12 +181,23 @@ def generate_artifact_content(
             profile = "text"
 
     if profile == "outline":
-        task_desc = (
-            f"Write a complete document OUTLINE in the user's language (markdown), "
-            f"about {chars} characters, into {filename}. "
-            "Structure it with clear sections the user can expand later. "
-            "Do NOT write full prose in the outline file."
-        )
+        from app.services.artifact_edit_intent import is_artifact_edit_goal
+
+        if is_artifact_edit_goal(goal) and existing_excerpt:
+            task_desc = (
+                f"Revise the existing OUTLINE in {filename} per the user's goal. "
+                f"Output the COMPLETE revised outline (similar length to the original, "
+                f"about {chars} characters unless the user asked to shorten/expand). "
+                "Use previous_artifact_excerpt as the source material. "
+                "Keep outline structure (beats/bullets), not full chapter prose."
+            )
+        else:
+            task_desc = (
+                f"Write a complete document OUTLINE in the user's language (markdown), "
+                f"about {chars} characters, into {filename}. "
+                "Structure it with clear sections the user can expand later. "
+                "Do NOT write full prose in the outline file."
+            )
     elif profile == "source_code":
         task_desc = (
             f"Write complete source code for the user's goal in file {filename}. "
@@ -216,16 +238,23 @@ def generate_artifact_content(
         "previous_artifact_excerpt": existing_excerpt or None,
     }
     from app.services.writing_context import (
+        applied_session_source_ids,
         applied_writing_guideline_ids,
+        build_session_source_excerpt,
         build_writing_guidelines_excerpt,
     )
 
     guidelines_excerpt = build_writing_guidelines_excerpt(state)
-    if guidelines_excerpt:
+    source_excerpt = build_session_source_excerpt(state)
+    if guidelines_excerpt or source_excerpt:
         writing_ctx = dict(user_payload.get("writing_context") or {})
-        writing_ctx["writing_guidelines_excerpt"] = guidelines_excerpt
+        if guidelines_excerpt:
+            writing_ctx["writing_guidelines_excerpt"] = guidelines_excerpt
+        if source_excerpt:
+            writing_ctx["session_source_excerpt"] = source_excerpt
         user_payload["writing_context"] = writing_ctx
     applied_guidelines = applied_writing_guideline_ids(state)
+    applied_sources = applied_session_source_ids(state)
     from app.services.prompt_context_gateway import (
         context_governance_enabled,
         mutate_state_context_trace,
@@ -236,7 +265,10 @@ def generate_artifact_content(
         user_payload, envelope = prepare_governed_payload(state, "writing", user_payload)
         if isinstance(state, dict):
             mutate_state_context_trace(state, envelope)
-    report_status_trace("writing", f"gateway: 生成 {filename}（约 {chars} 字）…")
+    from app.services.artifact_edit_intent import is_artifact_edit_goal
+
+    action_label = "修订" if is_artifact_edit_goal(goal) and existing_excerpt else "生成"
+    report_status_trace("writing", f"gateway: {action_label} {filename}（约 {chars} 字）…")
     if trace_enabled() or artifact_stream_enabled():
         draft = stream_artifact_draft(
             purpose="writing",
@@ -266,6 +298,8 @@ def generate_artifact_content(
         guideline_note = ""
         if applied_guidelines:
             guideline_note = f"\n  风格规范: {', '.join(applied_guidelines)}"
+        if applied_sources:
+            guideline_note += f"\n  会话素材: {', '.join(applied_sources)}"
         report_block(
             "writing",
             "done",

@@ -6,9 +6,17 @@ import json
 from typing import Any, Literal
 
 from app.config.settings import settings
+from app.runtime.evidence_models import AnswerMode
 from app.services.retrieval_policy import has_injected_evidence
 
 GroundingMode = Literal["tool_observation", "rag", "skip"]
+
+_FACTUAL_ANSWER_MODES = frozenset(
+    {
+        AnswerMode.STRICT_GROUNDED.value,
+        AnswerMode.REFUSE_IF_INSUFFICIENT.value,
+    }
+)
 
 _TRIVIAL_TOOL_NAMES = frozenset({"get_runtime_info", "echo"})
 _TOOL_OBSERVATION_KEYS = (
@@ -118,6 +126,27 @@ def side_effects_verified(state: dict[str, Any]) -> bool:
     return True
 
 
+def is_factual_answer_mode(answer_mode: str) -> bool:
+    """True when the turn contract expects evidence-backed factual claims."""
+    return str(answer_mode or "") in _FACTUAL_ANSWER_MODES
+
+
+def writing_turn_skips_rag_grounding(state: dict[str, Any], *, answer_mode: str) -> bool:
+    """
+    Writing turns without persisted writes and non-factual answer_mode do not
+    need lexical faithfulness against retrieved style/source material.
+    """
+    from app.services.writing_context import turn_has_persisted_write, writing_intent_active
+
+    if not writing_intent_active(state):
+        payload = state.get("input_payload") or {}
+        if str(payload.get("target_mode") or "") != "manuscript_mode":
+            return False
+    if turn_has_persisted_write(state.get("tool_results") or []):
+        return False
+    return not is_factual_answer_mode(answer_mode)
+
+
 def classify_grounding_turn(state: dict[str, Any]) -> GroundingMode:
     """
     tool_observation — summary should align with tool_results / side effects.
@@ -136,13 +165,27 @@ def classify_grounding_turn(state: dict[str, Any]) -> GroundingMode:
     if state.get("skip_retrieval") and not has_injected_evidence(state):
         return "skip"
     if has_injected_evidence(state):
+        from app.services.thin_execution import thin_execution_profile
         from app.services.writing_context import (
             writing_intent_active,
             writing_style_only_evidence,
         )
 
-        # Writing turns: style-guideline RAG is not a factual corpus for
-        # faithfulness on execution-status or creative-fiction answers.
+        reasoning = state.get("reasoning_result") or {}
+        structured = reasoning.get("structured") if isinstance(reasoning.get("structured"), dict) else {}
+        if (
+            thin_execution_profile(payload) == "session_source_qa"
+            and isinstance(structured, dict)
+            and structured.get("source") == "session_source_fast"
+        ):
+            return "skip"
+
+        from app.services.evidence_pipeline import get_answer_mode
+
+        answer_mode = get_answer_mode(state)
+        if writing_turn_skips_rag_grounding(state, answer_mode=answer_mode):
+            return "skip"
+        # Legacy weak signal: style-only RAG corpus (kept as secondary escape).
         if writing_intent_active(state) and writing_style_only_evidence(state):
             return "skip"
         return "rag"

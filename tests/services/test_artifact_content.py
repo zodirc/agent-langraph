@@ -10,6 +10,9 @@ def test_needs_generated_empty():
 
 def test_needs_generated_placeholder():
     assert needs_generated_content("（占位：请续写）", "续写") is True
+    assert needs_generated_content(
+        "第一章\n\n（正文内容由推理模块根据大纲生成）", "写第一章"
+    ) is True
 
 
 def test_needs_generated_short_goal_as_content():

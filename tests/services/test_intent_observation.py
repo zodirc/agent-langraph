@@ -39,7 +39,7 @@ def test_policy_skips_pure_greeting():
     assert decision.reason == "pure_greeting"
 
 
-def test_policy_skips_explicit_engineering():
+def test_policy_disambiguates_explicit_engineering_when_low_confidence():
     state = create_initial_state(
         task_id="io-2",
         input_payload={
@@ -51,8 +51,41 @@ def test_policy_skips_explicit_engineering():
     decision = decide_intent_observation_policy(
         state, explicit_mode="engineering", route_audit_seed=seed
     )
+    assert decision.invoke_model is True
+    assert decision.reason == "explicit_mode_disambiguation"
+
+
+def test_policy_skips_model_for_explicit_writing_high_confidence():
+    state = create_initial_state(
+        task_id="io-writing",
+        input_payload={
+            "goal": "基于已有素材写一本小说",
+            "interaction_mode": "writing",
+        },
+    )
+    seed = seed_pre_planning_route_audit(state)
+    decision = decide_intent_observation_policy(
+        state, explicit_mode="writing", route_audit_seed=seed
+    )
     assert decision.invoke_model is False
-    assert decision.skip_reason
+    assert decision.reason == "explicit_mode_structural"
+
+
+@patch("app.services.intent_observation._invoke_observation_model")
+def test_observe_intent_skips_llm_for_explicit_writing(mock_llm):
+    state = create_initial_state(
+        task_id="io-writing-observe",
+        input_payload={
+            "goal": "基于已有素材写一本小说",
+            "interaction_mode": "writing",
+        },
+    )
+    seed = seed_pre_planning_route_audit(state)
+    result = observe_intent(state, explicit_mode="writing", route_audit_seed=seed)
+    mock_llm.assert_not_called()
+    assert result.source == "structural"
+    assert result.target_mode == "manuscript_mode"
+    assert result.interaction_goal == "delivery"
 
 
 def test_policy_requires_auto_mode():
@@ -84,7 +117,14 @@ def test_mechanical_resume_blocked_by_steer_replan_observation():
 
 
 @patch("app.services.intent_observation._invoke_observation_model")
-def test_observe_intent_structural_when_policy_skips(mock_llm):
+def test_observe_intent_invokes_llm_for_explicit_engineering(mock_llm):
+    mock_llm.return_value = IntentObservationResult(
+        source="llm",
+        intent_kind="engineering",
+        target_mode="engineering_mode",
+        interaction_goal="delivery",
+        confidence=0.9,
+    )
     state = create_initial_state(
         task_id="io-5",
         input_payload={
@@ -94,8 +134,8 @@ def test_observe_intent_structural_when_policy_skips(mock_llm):
     )
     seed = seed_pre_planning_route_audit(state)
     result = observe_intent(state, explicit_mode="engineering", route_audit_seed=seed)
-    mock_llm.assert_not_called()
-    assert result.source == "structural"
+    mock_llm.assert_called_once()
+    assert result.source in ("llm", "hybrid")
 
 
 def test_pre_planning_writes_intent_observation():

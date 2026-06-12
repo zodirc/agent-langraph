@@ -63,6 +63,10 @@ def client_final_answer(state: AgentState) -> Optional[str]:
     if is_gate_reasoning_result(state.get("reasoning_result")):
         return None
     answer = str(state.get("final_answer") or "").strip()
+    if not answer:
+        reasoning = state.get("reasoning_result") or {}
+        if isinstance(reasoning, dict):
+            answer = str(reasoning.get("summary") or "").strip()
     return answer or None
 
 

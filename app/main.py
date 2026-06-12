@@ -32,6 +32,7 @@ from app.api.feedback_api import router as feedback_router
 from app.api.supervisor_api import router as supervisor_router
 from app.api.knowledge_api import router as knowledge_router
 from app.api.metrics_api import router as metrics_router
+from app.api.model_config_api import router as model_config_router
 from app.api.review_api import router as review_router
 from app.api.schedule_api import router as schedule_router
 from app.api.tenant_api import router as tenant_router
@@ -78,6 +79,9 @@ async def lifespan(_app: FastAPI):
     init_storage()  # state/audit/checkpoint 等后端
     seeded = seed_default_knowledge()
     ensure_builtin_knowledge()
+    from app.services.embedding_service import warmup_embedding
+
+    warmup_embedding()
     tool_counts = bootstrap_tools()  # 内置 + HTTP + MCP → tool_registry
     get_scheduler_service().start()
     get_review_timeout_service().start()
@@ -130,6 +134,7 @@ app.include_router(skills_manage_router)
 app.include_router(domains_router)
 app.include_router(supervisor_router)
 app.include_router(metrics_router)
+app.include_router(model_config_router)
 app.include_router(tenant_router)
 app.include_router(dead_letter_router)
 app.include_router(feedback_router)

@@ -156,7 +156,11 @@ class MemoryStore:
         session_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         tokens = [t.lower() for t in query.split() if t.strip()]
-        query_embedding = embed_text(query) if query.strip() else []
+        query_embedding: list[float] = []
+        if query.strip():
+            from app.services.query_embedding_context import get_scoped_embedding
+
+            query_embedding = get_scoped_embedding(query) or embed_text(query)
         if uses_postgres():
             with postgres_connection() as conn:
                 rows = conn.execute(

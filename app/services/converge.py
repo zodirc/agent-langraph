@@ -232,6 +232,14 @@ def evaluate_convergence(state: Mapping[str, Any]) -> ConvergeResult:
         )
 
         if writing_intent_active(state) and not turn_has_persisted_write(tool_results):
+            from app.services.writing_pending import writing_false_promise_without_write
+
+            if writing_false_promise_without_write(answer_text):
+                return ConvergeResult(
+                    False,
+                    NEXT_FORCE_WRITE,
+                    "writing_false_promise",
+                )
             if not writing_explicit_ask(answer_text):
                 return ConvergeResult(
                     False,

@@ -127,6 +127,7 @@ def audit_planned_route(
             corrections.extend(["disable_writing_intent", "strip_writing_tools"])
             writing_blocked = True
 
+    issues.extend(_writing_delivery_route_issues(state, planned_route=planned_route))
     aligned = not issues
     artifact_profile = _resolve_artifact_profile(
         primary_kind=primary,
@@ -148,6 +149,38 @@ def audit_planned_route(
         "artifact_profile": artifact_profile,
         "structural": inference.get("structural"),
     }
+
+
+def _writing_delivery_route_issues(
+    state: AgentState | dict[str, Any],
+    *,
+    planned_route: str,
+) -> list[str]:
+    """Flag answer-only plans when writing delivery or operator requires artifact writes."""
+    payload = state.get("input_payload") or {}
+    intent = _coerce_dict(payload.get("writing_intent"))
+    if not intent.get("enabled"):
+        return []
+    tools = list(state.get("selected_tools") or [])
+    if tools:
+        return []
+    actions = [a for a in (state.get("planned_actions") or []) if isinstance(a, dict)]
+    if any(str(a.get("type") or "") in ("write_artifact", "edit_artifact", "run_tool") for a in actions):
+        return []
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    from app.services.writing_intent_classifier import classify_writing_operator, goal_is_writing_manuscript_action
+
+    operator = str(payload.get("writing_operator") or "") or (
+        classify_writing_operator(goal, state) or ""
+    )
+    if payload.get("interaction_goal") == "delivery" or operator or goal_is_writing_manuscript_action(
+        goal, state
+    ):
+        return [
+            "writing_delivery_requires_tools: planned_route=reasoning_only "
+            f"but writing_intent enabled (operator={operator or 'delivery'})"
+        ]
+    return []
 
 
 def _should_allow_mixed_qa_writing(

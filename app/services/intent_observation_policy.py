@@ -43,6 +43,30 @@ def low_confidence_threshold() -> float:
     return float(cfg.get("low_confidence_threshold", 0.55))
 
 
+def structural_aligns_with_explicit_mode(
+    explicit_key: str,
+    route_audit_seed: dict[str, Any],
+) -> bool:
+    """True when structural inferred_kind maps to the UI-selected interaction mode."""
+    from app.services.pre_planning import _EXPLICIT_MODE_MAP
+
+    if explicit_key not in _EXPLICIT_MODE_MAP:
+        return False
+    _, mode_override = _EXPLICIT_MODE_MAP[explicit_key]
+    inferred = str(route_audit_seed.get("inferred_kind") or "").lower()
+    if inferred in ("manuscript", "writing", "revision"):
+        expected = "manuscript_mode"
+    elif inferred in ("code", "interactive_app", "small_project"):
+        expected = "engineering_mode"
+    elif inferred in ("qa", "general"):
+        expected = "qa_mode"
+    else:
+        from app.services.mode_router import map_intent_to_mode
+
+        expected = map_intent_to_mode(inferred)
+    return expected == mode_override
+
+
 def should_apply_observation_to_routing(state: AgentState) -> bool:
     """True when observation result may drive mode resolution (not shadow-only)."""
     if not intent_observation_enabled():
@@ -109,15 +133,47 @@ def decide_intent_observation_policy(
 
     mission_active = bool(mission_from_state(state)) and not payload.get("mission_suspended")
     session_turn = int(state.get("session_turn") or 0)
+
+    explicit_key = explicit_mode or parse_explicit_interaction_mode(payload)
+    if explicit_key and explicit_key not in ("auto",):
+        from app.services.interaction_goal import explicit_mode_should_apply
+
+        if confidence >= low_confidence_threshold() and structural_aligns_with_explicit_mode(
+            explicit_key, route_audit_seed
+        ):
+            return IntentObservationPolicyDecision(
+                invoke_model=False,
+                reason="explicit_mode_structural",
+                skip_reason="explicit_mode_high_confidence",
+            )
+        if explicit_mode_should_apply(explicit_key, goal):
+            return IntentObservationPolicyDecision(
+                invoke_model=True,
+                reason="explicit_mode_disambiguation",
+            )
+
+    # Structural route audit cannot set interaction_goal; L2 model required on early turns.
     if (
         not mission_active
         and session_turn <= 1
-        and confidence >= low_confidence_threshold()
+        and goal
+        and not goal_is_pure_greeting(goal)
+        and not goal_is_capability_inquiry(goal)
     ):
+        if (
+            explicit_key
+            and explicit_key not in ("auto",)
+            and confidence >= low_confidence_threshold()
+            and structural_aligns_with_explicit_mode(explicit_key, route_audit_seed)
+        ):
+            return IntentObservationPolicyDecision(
+                invoke_model=False,
+                reason="explicit_mode_structural",
+                skip_reason="turn1_explicit_mode",
+            )
         return IntentObservationPolicyDecision(
-            invoke_model=False,
-            reason="turn1_structural",
-            skip_reason="new_session_high_confidence",
+            invoke_model=True,
+            reason="turn1_interaction_goal",
         )
 
     if payload.get("execution_grant"):
@@ -135,17 +191,6 @@ def decide_intent_observation_policy(
             invoke_model=True,
             reason="foreground_preempt_replan",
         )
-
-    explicit_key = explicit_mode or parse_explicit_interaction_mode(payload)
-    if explicit_key and explicit_key not in ("auto",):
-        from app.services.interaction_goal import explicit_mode_should_apply
-
-        if explicit_mode_should_apply(explicit_key, goal):
-            return IntentObservationPolicyDecision(
-                invoke_model=False,
-                reason="explicit_mode",
-                skip_reason=f"explicit={explicit_key}",
-            )
 
     if explicit_key == "auto" or payload.get("interaction_mode") == "auto":
         return IntentObservationPolicyDecision(

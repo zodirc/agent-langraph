@@ -49,13 +49,18 @@ def check_redis() -> dict[str, Any]:
 
 
 def check_llm() -> dict[str, Any]:
-    if not settings.MODEL_ENABLED:
+    from app.services.runtime_model_config import get_effective_model_config
+
+    if not get_effective_model_config().enabled:
         return {"status": "skipped", "detail": "model disabled"}
     try:
         llm = get_llm()
         if llm is None:
             return {"status": "degraded", "detail": "llm not configured"}
-        return {"status": "ok", "model": settings.MODEL_NAME}
+        from app.services.runtime_model_config import get_effective_model_config
+
+        eff = get_effective_model_config()
+        return {"status": "ok", "model": eff.model_name, "provider": eff.provider}
     except Exception as exc:
         return {"status": "error", "detail": str(exc)}
 

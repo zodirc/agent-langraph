@@ -129,7 +129,7 @@ RAG 流程并不是每次输入都强制执行，而是由前面的规划阶段�
 
 当系统判断需要知识支撑时，才会进入检索链路。
 
-**文稿写作例外**：`manuscript_mode` 且 `writing_intent.enabled` 时，规划阶段默认 `skip_retrieval=False`，检索域限定 `{writing, common}`（风格规范为横切约束，不依赖模型每回合自行 emit `retrieve`）。其余模式仍由规划 actions 与 `skip_retrieval` 决定。
+**文稿写作例外**：`manuscript_mode` 且 `writing_intent.enabled` 时，规划阶段默认 `skip_retrieval=False`，检索域含 `{writing, common}`，已上传会话素材走 `source` 域（与风格规范一并注入写作 payload，不依赖模型每回合自行 emit `retrieve`）。其余模式仍由规划 actions 与 `skip_retrieval` 决定。
 
 ---
 
@@ -388,7 +388,11 @@ RAG 的最终目标不是“找到内容”，而是“把合适的内容送进�
 
 推理阶段需要证据材料来支撑结果组织与内容生成。
 
-**文稿写作消费**：`domain=writing` 的召回片段经 `writing_context` 组装为 `writing_guidelines_excerpt`，随写作 purpose 的 governed payload 注入生成阶段（与 `continuation_rules` 并列）；写回工具结果可附带 `applied_guidelines`（doc_id 列表）供回合摘要与归因。离线可用 `tests/eval/run_writing_rag_ab_eval.py` 对开/关 RAG 做规范遵循度 A/B，阈值门见 `eval_thresholds.check_writing_compliance_thresholds`。
+**文稿写作消费**：`domain=writing` 的召回片段经 `writing_context` 组装为 `writing_guidelines_excerpt`，`domain=source` 的会话素材组装为 `session_source_excerpt`，随写作 purpose 的 governed payload 注入生成阶段（与 `continuation_rules` 并列）；写回工具结果可附带 `applied_guidelines` / `applied_sources`（doc_id 列表）供回合摘要与归因。
+
+**output_guard 与写作轮**：忠实度闸门按回合契约与 `answer_mode` 判定，而非仅凭召回域或回复措辞。写作澄清/追问/状态回合（无落盘、非严格事实问答）不跑词面重合硬 REJECT；混合 `writing+source` 召回不再误杀「请补充素材」类回复。事实问答与伪造引用仍硬拦。流程侧见 `docs/arch.md` §4.4、§5.2。
+
+离线可用 `tests/eval/run_writing_rag_ab_eval.py` 对开/关 RAG 做规范遵循度 A/B，阈值门见 `eval_thresholds.check_writing_compliance_thresholds`。
 
 ### 5.3 服务工程判断与结果生成
 

@@ -93,7 +93,7 @@ def test_should_route_when_skip_retrieval_but_session_memory_needed():
 
 def test_retrieval_domains_for_writing_mission():
     state = {"mission": {"kind": "writing"}, "input_payload": {}}
-    assert retrieval_domains_for_state(state) == {"writing", "common"}
+    assert retrieval_domains_for_state(state) == {"writing", "common", "source"}
 
 
 def test_retrieval_domains_for_code_task():

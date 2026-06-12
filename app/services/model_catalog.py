@@ -72,14 +72,17 @@ def get_model_catalog() -> list[ModelCatalogEntry]:
     """Return configured catalog; always includes the active deployment model."""
     configured = _parse_catalog_raw(getattr(settings, "MODEL_CATALOG", None))
     by_name = {e.model_name: e for e in configured}
-    active_name = str(settings.MODEL_NAME or "").strip()
+    from app.services.runtime_model_config import get_effective_model_config
+
+    eff = get_effective_model_config()
+    active_name = str(eff.model_name or "").strip()
     if active_name and active_name not in by_name:
         configured.insert(
             0,
             ModelCatalogEntry(
                 id=active_name,
                 label=active_name,
-                provider=str(settings.MODEL_PROVIDER),
+                provider=str(eff.provider),
                 model_name=active_name,
                 context_window_tokens=int(
                     getattr(settings, "MODEL_CONTEXT_WINDOW", 0)
@@ -92,7 +95,7 @@ def get_model_catalog() -> list[ModelCatalogEntry]:
             ModelCatalogEntry(
                 id=active_name,
                 label=active_name,
-                provider=str(settings.MODEL_PROVIDER),
+                provider=str(eff.provider),
                 model_name=active_name,
                 context_window_tokens=int(
                     getattr(settings, "MODEL_CONTEXT_WINDOW", 0)

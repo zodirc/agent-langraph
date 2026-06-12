@@ -49,6 +49,18 @@ def refine_mode_for_session_switch(
         if qa_hit or _QA_FOLLOWUP_RE.search(text):
             return intent_kind, "qa_mode", "engineering_to_qa_followup"
 
+    if current_mode == "manuscript_mode":
+        from app.services.interaction_goal import (
+            goal_is_conversational_qa,
+            goal_is_session_source_inquiry,
+        )
+        from app.services.writing_intent_classifier import goal_is_writing_manuscript_action
+
+        if goal_is_writing_manuscript_action(text):
+            return intent_kind, target_mode, reason
+        if goal_is_session_source_inquiry(text) or goal_is_conversational_qa(text):
+            return "qa", "qa_mode", "manuscript_to_conversational_qa"
+
     if current_mode in (None, "qa_mode") and intent_kind in _ENGINEERING_INTENTS:
         if _EXPLICIT_DELIVERY_RE.search(text) or confidence >= min_kind_score:
             return intent_kind, "engineering_mode", "qa_to_engineering_explicit_delivery"

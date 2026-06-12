@@ -23,14 +23,14 @@ def test_neng_zuo_shenme_classified_new_task_not_status_query(base_state):
     assert result.event_type == "new_task"
 
 
-def test_turn1_skips_intent_observation_llm(base_state):
+def test_turn1_invokes_intent_observation_for_interaction_goal(base_state):
     decision = decide_intent_observation_policy(
         base_state,
         explicit_mode="auto",
         route_audit_seed={"inferred_kind": "qa", "kind_confidence": 0.8},
     )
-    assert not decision.invoke_model
-    assert decision.skip_reason == "new_session_high_confidence"
+    assert decision.invoke_model
+    assert decision.reason in ("turn1_interaction_goal", "interaction_mode_auto")
 
 
 def test_thin_profile_uses_routing_purpose(base_state):

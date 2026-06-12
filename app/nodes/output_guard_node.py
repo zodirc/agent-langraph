@@ -130,51 +130,40 @@ def output_guard_node(state: AgentState) -> AgentState:
         grounding_result["failure_attribution"] = attribution
         grounding_result["attribution_rows"] = dashboard_rows(attribution)
         if not faithfulness.get("faithful"):
-            from app.services.grounding_policy import side_effects_verified
-
+            from app.services.grounding_policy import (
+                is_factual_answer_mode,
+                side_effects_verified,
+                writing_turn_skips_rag_grounding,
+            )
             issue = "faithfulness:" + "; ".join(
                 (faithfulness.get("unsupported_claims") or [])[:3]
             )
-            # Tool-observation turns with executor-verified side effects and no
-            # fabricated citations: low token overlap is a noise signal (CJK
-            # narrative vs key=value evidence), not a hallucination — warn only.
-            if (
-                grounding_mode == "tool_observation"
-                and not (faithfulness.get("fake_citations") or [])
-                and side_effects_verified(state)
+            fake_citations = faithfulness.get("fake_citations") or []
+            demote_to_warning = False
+
+            # Hard REJECT only for fabricated citations or factual-QA without support.
+            if not fake_citations and (
+                (
+                    grounding_mode == "tool_observation"
+                    and side_effects_verified(state)
+                )
+                or writing_turn_skips_rag_grounding(state, answer_mode=answer_mode)
             ):
+                demote_to_warning = True
+            elif fake_citations or is_factual_answer_mode(answer_mode):
+                demote_to_warning = False
+
+            if demote_to_warning:
                 faithfulness["demoted_to_warning"] = True
                 grounding_result["demoted_to_warning"] = True
                 guard_warnings.append(issue)
             else:
-                from app.services.writing_context import (
-                    turn_has_persisted_write,
-                    writing_explicit_ask,
-                    writing_intent_active,
-                    writing_style_only_evidence,
+                result = GuardResult(
+                    passed=False,
+                    issues=list(result.issues) + [issue],
+                    sanitized_summary=result.sanitized_summary,
+                    source=result.source,
                 )
-
-                summary = str(reasoning.get("summary") or state.get("final_answer") or "")
-                if (
-                    writing_intent_active(state)
-                    and writing_style_only_evidence(state)
-                    and not turn_has_persisted_write(state.get("tool_results") or [])
-                    and (
-                        writing_explicit_ask(summary)
-                        or "未执行" in summary
-                        or "未检索到" in summary
-                    )
-                ):
-                    faithfulness["demoted_to_warning"] = True
-                    grounding_result["demoted_to_warning"] = True
-                    guard_warnings.append(issue)
-                else:
-                    result = GuardResult(
-                        passed=False,
-                        issues=list(result.issues) + [issue],
-                        sanitized_summary=result.sanitized_summary,
-                        source=result.source,
-                    )
     guard_payload = {**result.to_dict(), "faithfulness": faithfulness}
     if grounding_result is not None:
         guard_payload["grounding_check"] = grounding_result

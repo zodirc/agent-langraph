@@ -43,6 +43,9 @@ def build_foreground_ack(state: dict[str, Any]) -> dict[str, Any]:
     goal = str(payload.get("goal") or payload.get("message") or "").strip()
     intent_label = _ACK_INTENT_LABELS.get(event_type, event_type)
     next_step = _NEXT_STEP.get(event_type, "继续处理")
+    if str(classification.get("source") or "") == "session_source_inquiry":
+        intent_label = "素材确认"
+        next_step = "检索本会话素材并回答"
 
     detected_interrupt = event_type == "interrupt"
     detected_replan = event_type in {"interrupt", "redirect", "clarification", "reject"}

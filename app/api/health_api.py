@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.config.settings import settings
+from app.services.runtime_model_config import get_effective_model_config
 from app.services.health_checks import run_all_checks
 from app.services.knowledge_store import get_knowledge_store
 from app.services.tool_registry import get_tool_registry
@@ -30,14 +31,17 @@ def health_full() -> dict[str, object]:
     store = get_knowledge_store()
     vector_ok = bool(getattr(store._vector, "available", False))  # noqa: SLF001
     checks = run_all_checks()
+    model = get_effective_model_config()
     return {
         "status": "ok" if checks["ready"] else "degraded",
         "env": settings.APP_ENV,
         "version": "0.20.0",
-        "model_enabled": settings.MODEL_ENABLED,
-        "model_name": settings.MODEL_NAME,
-        "model_base_url": settings.MODEL_BASE_URL,
-        "model_api_key_configured": bool(str(settings.MODEL_API_KEY or "").strip()),
+        "model_enabled": model.enabled,
+        "model_provider": model.provider,
+        "model_name": model.model_name,
+        "model_base_url": model.base_url,
+        "model_config_source": model.source,
+        "model_api_key_configured": bool(str(model.api_key or "").strip()),
         "auth_enabled": settings.AUTH_ENABLED,
         "metrics_enabled": settings.METRICS_ENABLED,
         "knowledge_docs": store.count(),

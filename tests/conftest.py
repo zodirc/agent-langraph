@@ -77,6 +77,14 @@ def tmp_data_dir(tmp_path: Path) -> Path:
     return db_dir
 
 
+@pytest.fixture(autouse=True)
+def _reset_runtime_model_config() -> None:
+    """Isolate tests from in-memory runtime model overrides."""
+    from app.services.runtime_model_config import get_runtime_model_config
+
+    get_runtime_model_config().reset()
+
+
 @pytest.fixture
 def test_settings(tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     db_path = str(tmp_data_dir / "agent.db")

@@ -18,8 +18,10 @@ model:
     reasoning: 8192
     writing: 16384
     routing: 2048
+    intent_observation: 512
   timeout_by_purpose:
     routing: 20
+    intent_observation: 20
   timeout: 120
   max_retries: 2
 
@@ -82,6 +84,11 @@ rag:
 
 retrieval:
   policy_version: v2
+  timing_enabled: true
+  fast_tier_enabled: true
+  session_cache_enabled: true
+  session_cache_ttl_sec: 90
+  embedding_compat_once: true
   enable_evidence_pipeline: true
   enable_admission_gate: true
   enable_snippet_first: true
@@ -155,6 +162,7 @@ session:
   max_history_chars: 48000
   compress_enabled: true
   memory_retrieval_enabled: true
+  knowledge_enabled: true          # 会话级写作素材（domain=source + session_id 软隔离）
   turn_policy:
     enabled: true
     default_suspend_when_mission_active: true
@@ -181,6 +189,7 @@ context_governance:
 
 performance:
   fast_reasoning_enabled: false
+  session_source_fast_answer_enabled: true
   artifact_edit_fast_path: true
   qa_mode_tools_resident: true
   skip_retrieval_when_no_tools: true

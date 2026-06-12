@@ -107,6 +107,28 @@ def assert_task_access(principal: AuthPrincipal, task_id: str) -> None:
         )
 
 
+def assert_session_knowledge_access(principal: AuthPrincipal, session_id: str) -> None:
+    """
+    Session source KB may be saved before the first task message (Web pre-stages material).
+
+    When the task row exists, enforce the same ownership rules as assert_task_access.
+    Otherwise require an authenticated principal (require_role on the route).
+    """
+    state = get_state_store().load(session_id, read_only=True)
+    if not state:
+        return
+    if principal.role == "admin":
+        return
+    if not settings_module.settings.AUTH_ENABLED:
+        return
+    owner = str(state.get("user_id") or "")
+    if owner and owner != principal.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Task does not belong to the current user",
+        )
+
+
 def bind_tenant_for_principal(
     request: Request,
     principal: AuthPrincipal,

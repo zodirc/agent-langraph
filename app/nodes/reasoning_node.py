@@ -99,14 +99,19 @@ def _run_reasoning_llm_loop(
     loop_started = time.monotonic()
     thin_qa_max_seconds = float(getattr(settings, "THIN_QA_MAX_SECONDS", 30))
 
+    llm_started = time.monotonic()
+    first_token_at: float | None = None
     for attempt in range(attempts):
         ctx = build_reasoning_retry_context(context, working) if attempt else context
         user_json = json.dumps(ctx, ensure_ascii=False)
         # First attempt streams thinking/answer to the user; silent retries only after.
         use_stream = stream_allowed and attempt == 0
         if use_stream:
-            raw = stream_llm_trace(
-                controlled_iter(
+            chunk_started = time.monotonic()
+
+            def _traced_stream():
+                nonlocal first_token_at
+                for chunk in controlled_iter(
                     str(state["task_id"]),
                     stream_structured(
                         llm_purpose,
@@ -119,11 +124,26 @@ def _run_reasoning_llm_loop(
                         emit_thinking_override=should_stream_thinking_for_state(state),
                     ),
                     phase="reasoning_stream_chunk",
-                ),
+                ):
+                    if first_token_at is None and chunk:
+                        first_token_at = time.monotonic()
+                    yield chunk
+
+            raw = stream_llm_trace(
+                _traced_stream(),
                 node="reasoning",
                 phase="reasoning_llm",
                 field="summary",
             )
+            if first_token_at is not None:
+                from app.services.retrieval_timing import record_timing
+
+                record_timing(
+                    "reasoning_node",
+                    "llm_ttft",
+                    (first_token_at - chunk_started) * 1000.0,
+                    purpose=llm_purpose,
+                )
             # Parse as reasoning so truncated/malformed output degrades via
             # reasoning fallback instead of re-raising. ``llm_purpose``
             # only selects the LLM token-budget tier (thin QA → "routing").
@@ -162,6 +182,15 @@ def _run_reasoning_llm_loop(
             break
     if thin_profile:
         get_metrics_service().observe_thin_qa_latency(time.monotonic() - loop_started)
+    from app.services.retrieval_timing import record_timing
+
+    record_timing(
+        "reasoning_node",
+        "llm_total",
+        (time.monotonic() - llm_started) * 1000.0,
+        purpose=llm_purpose,
+        attempts=attempts,
+    )
     return reasoning_result, raw, working
 
 
@@ -250,11 +279,20 @@ def reasoning_node(state: AgentState) -> AgentState:
         mode = resolve_reasoning_mode(state)
         payload = state.get("input_payload", {})
         reasoning_system = build_reasoning_system_prompt(mode, state=state)
-        if thin_execution_profile(payload) == "qa_direct":
+        thin_profile = thin_execution_profile(payload)
+        if thin_profile in ("qa_direct", "session_source_qa"):
             from app.config.prompt_templates import REASONING_THIN_QA_ROLE
             from app.config.prompts import agent_system_prompt
 
             reasoning_system = agent_system_prompt(REASONING_THIN_QA_ROLE)
+            if thin_profile == "session_source_qa":
+                from app.services.writing_context import build_session_source_excerpt
+
+                excerpt = build_session_source_excerpt(state)
+                if excerpt:
+                    reasoning_system = (
+                        f"{reasoning_system}\n\n[Session source material on file]\n{excerpt}"
+                    )
         from app.services.reasoning_grounding import build_grounding_instructions
 
         grounding_overlay = build_grounding_instructions(state)
@@ -336,6 +374,10 @@ def reasoning_node(state: AgentState) -> AgentState:
             return updated
 
         fast = None if force_llm else try_fast_reasoning(state)
+        if fast is None and not force_llm:
+            from app.services.session_source_fast_answer import try_session_source_fast_answer
+
+            fast = try_session_source_fast_answer(state)
         reasoning_source = "fast"
         llm_purpose = reasoning_llm_purpose(state)
         report_boundary("reasoning", "enter")
@@ -347,11 +389,18 @@ def reasoning_node(state: AgentState) -> AgentState:
                 "risk_level": str(fast.get("risk_level", "LOW")).upper(),
                 "structured": fast.get("structured", {}),
             }
+            from app.services.reasoning_trace import emit_static_reasoning_answer
+
+            emit_static_reasoning_answer(reasoning_result)
         else:
             from app.services.fact_layer import reasoning_context_from_state
 
             context = reasoning_context_from_state(state)
             report_reasoning_context(state)
+            if thin_profile == "session_source_qa":
+                report_status_trace("reasoning", "正在核对本会话导入的素材…")
+            else:
+                report_status_trace("reasoning", "正在综合素材与上下文…")
             report_status_trace("reasoning", "基于 turn_facts 综合回答（只读已执行事实）…")
             reasoning_result, _raw, _working = _run_reasoning_llm_loop(
                 state,

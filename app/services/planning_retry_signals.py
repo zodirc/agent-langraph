@@ -88,6 +88,13 @@ def apply_force_write_signal(state: AgentState) -> AgentState:
     payload = dict(state.get("input_payload") or {})
     goal = str(payload.get("goal") or payload.get("query") or "")
     operator = str(payload.get("writing_operator") or "")
+    if not operator:
+        from app.services.writing_intent_classifier import classify_writing_operator
+
+        inferred = classify_writing_operator(goal, state)
+        if inferred:
+            operator = inferred
+            payload["writing_operator"] = inferred
     use_edit = (
         operator == "character" or is_character_correction_goal(goal)
     ) and bool(extract_name_replacements(goal))
@@ -95,6 +102,14 @@ def apply_force_write_signal(state: AgentState) -> AgentState:
         payload["force_edit_after_reads"] = True
         payload.pop("force_write_after_reads", None)
         payload["route_audit_replan_feedback"] = _FORCE_EDIT_FEEDBACK
+    elif operator == "replot":
+        payload.pop("force_write_after_reads", None)
+        payload.pop("force_edit_after_reads", None)
+        payload["writing_operator"] = "replot"
+        payload["route_audit_replan_feedback"] = (
+            "Outline replot turn: read outline then write_artifact back to the outline file. "
+            "Do NOT answer-only or write body prose."
+        )
     else:
         payload["force_write_after_reads"] = True
         payload.pop("force_edit_after_reads", None)

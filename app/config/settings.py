@@ -115,6 +115,12 @@ class Settings:
         self.MODEL_TIMEOUT_ROUTING = int(
             timeout_by_purpose.get("routing", min(20, self.MODEL_TIMEOUT))
         )
+        self.MODEL_TIMEOUT_INTENT_OBSERVATION = int(
+            timeout_by_purpose.get(
+                "intent_observation",
+                timeout_by_purpose.get("routing", min(20, self.MODEL_TIMEOUT)),
+            )
+        )
         self.MODEL_MAX_RETRIES = int(model.get("max_retries", 3))
         purpose_tokens = model.get("max_tokens_by_purpose", {})
         if not isinstance(purpose_tokens, dict):
@@ -127,6 +133,12 @@ class Settings:
         )
         self.MODEL_MAX_TOKENS_ROUTING = int(
             purpose_tokens.get("routing", min(1024, self.MODEL_MAX_TOKENS))
+        )
+        self.MODEL_MAX_TOKENS_INTENT_OBSERVATION = int(
+            purpose_tokens.get(
+                "intent_observation",
+                purpose_tokens.get("routing", min(512, self.MODEL_MAX_TOKENS)),
+            )
         )
         self.MODEL_MAX_TOKENS_WRITING = int(
             purpose_tokens.get("writing", min(16384, self.MODEL_MAX_TOKENS))
@@ -162,6 +174,9 @@ class Settings:
         )
         self.STREAM_DRAFT_SAVE_MIN_CHARS = int(
             performance.get("stream_draft_save_min_chars", 80)
+        )
+        self.SESSION_SOURCE_FAST_ANSWER_ENABLED = _coerce_bool(
+            performance.get("session_source_fast_answer_enabled", True)
         )
         self.CHAT_MESSAGE_PERSIST_ENABLED = _coerce_bool(
             performance.get("chat_message_persist_enabled", True)
@@ -242,6 +257,12 @@ class Settings:
         self.SESSION_COMPRESS_ENABLED = _coerce_bool(session_cfg.get("compress_enabled", True))
         self.SESSION_MEMORY_RETRIEVAL_ENABLED = _coerce_bool(
             session_cfg.get("memory_retrieval_enabled", True)
+        )
+        self.SESSION_KNOWLEDGE_ENABLED = _coerce_bool(
+            session_cfg.get("knowledge_enabled", True)
+        )
+        self.SESSION_SOURCE_REGEX_FALLBACK = _coerce_bool(
+            session_cfg.get("source_inquiry_regex_fallback", False)
         )
         self.SESSION_CONFIG = session_cfg if isinstance(session_cfg, dict) else {}
         turn_policy_cfg = session_cfg.get("turn_policy") if isinstance(session_cfg, dict) else {}
@@ -455,6 +476,17 @@ class Settings:
         self.RETRIEVAL_SOURCE_AUTHORITY_PRIOR = (
             source_authority if isinstance(source_authority, dict) else {}
         )
+        self.RETRIEVAL_TIMING_ENABLED = _coerce_bool(retrieval.get("timing_enabled", True))
+        self.RETRIEVAL_FAST_TIER_ENABLED = _coerce_bool(retrieval.get("fast_tier_enabled", True))
+        self.RETRIEVAL_SESSION_CACHE_ENABLED = _coerce_bool(
+            retrieval.get("session_cache_enabled", True)
+        )
+        self.RETRIEVAL_SESSION_CACHE_TTL_SEC = float(
+            retrieval.get("session_cache_ttl_sec", 90.0)
+        )
+        self.RETRIEVAL_EMBEDDING_COMPAT_ONCE = _coerce_bool(
+            retrieval.get("embedding_compat_once", True)
+        )
 
         embedding = raw.get("embedding", {})
         if not isinstance(embedding, dict):
@@ -465,6 +497,7 @@ class Settings:
         self.EMBEDDING_AUTO_REINDEX = _coerce_bool(
             embedding.get("auto_reindex_on_incompatibility", False)
         )
+        self.EMBEDDING_WARMUP_ENABLED = _coerce_bool(embedding.get("warmup_enabled", True))
 
         skill_cfg = raw.get("skill", {})
         if not isinstance(skill_cfg, dict):

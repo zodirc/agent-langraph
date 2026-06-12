@@ -129,3 +129,7 @@ def default_model_name(provider: str, configured: str) -> str:
     if name:
         return name
     return get_provider_spec(provider).default_model
+
+
+def list_provider_specs() -> list[ProviderSpec]:
+    return [get_provider_spec(pid) for pid in sorted(_PROVIDERS)]

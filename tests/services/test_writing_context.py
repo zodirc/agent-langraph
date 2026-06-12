@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.domain.action import Action
 from app.services.writing_context import (
     applied_writing_guideline_ids,
+    build_session_source_excerpt,
     build_writing_guidelines_excerpt,
     read_loop_should_force_write,
     resolve_writing_intent_for_plan,
@@ -92,6 +93,36 @@ def test_writing_style_only_evidence():
         ]
     }
     assert writing_style_only_evidence(state) is True
+
+
+def test_writing_style_only_false_with_source_domain():
+    state = {
+        "retrieved_knowledge": [
+            {"doc_id": "w1", "metadata": {"domain": "writing"}},
+            {"doc_id": "s1", "metadata": {"domain": "source"}},
+        ]
+    }
+    assert writing_style_only_evidence(state) is False
+
+
+def test_build_session_source_excerpt_filters_by_domain():
+    state = {
+        "retrieved_knowledge": [
+            {
+                "doc_id": "src-plot",
+                "content": "电视剧《岁月》主线剧情。",
+                "metadata": {"domain": "source"},
+            },
+            {
+                "doc_id": "style",
+                "content": "避免 AI 腔。",
+                "metadata": {"domain": "writing"},
+            },
+        ]
+    }
+    excerpt = build_session_source_excerpt(state)
+    assert "岁月" in excerpt
+    assert "AI 腔" not in excerpt
 
 
 def test_writing_explicit_ask_detected():

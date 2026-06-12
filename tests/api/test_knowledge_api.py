@@ -26,6 +26,26 @@ def test_knowledge_upsert_and_search(isolated_stores):
     assert listed.json()["total"] >= 1
 
 
+def test_session_source_upsert_before_task_exists(isolated_stores):
+    """Web may save session source before first message creates task_states row."""
+    client = TestClient(app)
+    session_id = "pre-task-session-001"
+    created = client.post(
+        "/knowledge/documents",
+        json={
+            "title": "预存素材",
+            "content": "梁致远是《岁月》主人公。",
+            "session_id": session_id,
+            "metadata": {"domain": "source"},
+        },
+    )
+    assert created.status_code == 200, created.text
+    doc_id = created.json()["doc_id"]
+    loaded = client.get(f"/knowledge/documents/{doc_id}")
+    assert loaded.status_code == 200
+    assert "梁致远" in loaded.json()["content"]
+
+
 def test_knowledge_rejects_injection_in_task(isolated_stores):
     client = TestClient(app)
     resp = client.post(

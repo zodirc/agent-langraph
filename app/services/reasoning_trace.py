@@ -138,6 +138,30 @@ def report_status_trace(node: str, message: str) -> None:
     report_block(node, "status", message, field="status", level="status")
 
 
+def emit_static_reasoning_answer(
+    reasoning_result: dict[str, Any],
+    *,
+    node: str = "reasoning",
+    phase: str = "fast_reasoning",
+) -> None:
+    """Push full summary when reasoning skipped the LLM stream (fast / session-source path)."""
+    if not answer_stream_enabled():
+        return
+    from app.services.answer_compose import compose_user_answer_preview
+
+    structured = (
+        reasoning_result.get("structured")
+        if isinstance(reasoning_result.get("structured"), dict)
+        else {}
+    )
+    summary = compose_user_answer_preview(
+        str(reasoning_result.get("summary") or ""), structured
+    )
+    if not summary.strip():
+        return
+    report_answer_delta(node=node, phase=phase, text=summary, field="summary")
+
+
 def report_boundary(node: str, event: str, detail: str = "") -> None:
     label = "▶ 进入" if event == "enter" else "■ 完成"
     line = f"{label} [{node}]"

@@ -92,6 +92,11 @@ from app.services.event_classification import VALID_EVENT_TYPES, classify_user_e
             },
             "status_query",
         ),
+        (
+            {"goal": "你看过我们的素材了么"},
+            {},
+            "clarification",
+        ),
     ],
 )
 def test_classify_user_event_matrix(payload, state_patch, expected):

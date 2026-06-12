@@ -4,7 +4,9 @@ from app.services.llm_gateway import (
     adapt_raw_response,
     extract_chunk_stream_parts,
     is_stream_transport_error,
+    is_thinking_tool_choice_error,
     normalize_message_content,
+    _effective_structured_preferred,
     _extract_from_text,
     _draft_from_partial_stream,
 )
@@ -91,6 +93,25 @@ def test_adapt_tool_calls():
     draft = adapt_raw_response(raw)
     assert draft.content == "章节内容"
     assert draft.source == "tool"
+
+
+def test_thinking_tool_choice_error_detection():
+    err = Exception(
+        "Error code: 400 - {'error': {'message': "
+        "'Thinking mode does not support this tool_choice'}}"
+    )
+    assert is_thinking_tool_choice_error(err) is True
+    assert is_thinking_tool_choice_error(ValueError("bad json")) is False
+
+
+def test_effective_structured_preferred_uses_json_when_thinking():
+    caps = {
+        "structured_output": {"preferred": "tool", "fallback": "json_text"},
+        "thinking_in_response": True,
+    }
+    assert _effective_structured_preferred(caps) == "json_text"
+    caps["thinking_in_response"] = False
+    assert _effective_structured_preferred(caps) == "tool"
 
 
 def test_adapt_or_retry_thinking_only(monkeypatch):

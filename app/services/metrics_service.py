@@ -330,6 +330,12 @@ class MetricsService:
                     ["reason"],
                     **prom_kwargs,
                 )
+                self._prometheus["mode_oscillation_total"] = Counter(
+                    "agent_mode_oscillation_total",
+                    "Within-turn mode switches (manuscript↔qa oscillation)",
+                    ["from_mode", "to_mode", "phase"],
+                    **prom_kwargs,
+                )
                 self._prometheus["mission_mechanical_resume_false_positive_total"] = Counter(
                     "agent_mission_mechanical_resume_false_positive_total",
                     "Blocked mechanical resume by intent observation",
@@ -498,6 +504,33 @@ class MetricsService:
             self._counters["thin_qa_latency_total_seconds"] = bucket + max(0.0, seconds)
         if self._prometheus and "thin_qa_latency_seconds" in self._prometheus:
             self._prometheus["thin_qa_latency_seconds"].observe(max(0.0, seconds))
+
+    def observe_retrieval_stage_ms(self, scope: str, stage: str, elapsed_ms: float) -> None:
+        scope_key = (scope or "unknown")[:24]
+        stage_key = (stage or "unknown")[:32]
+        self._inc(f"retrieval_stage_{scope_key}_{stage_key}")
+        with self._lock:
+            total_key = f"retrieval_stage_ms_{scope_key}_{stage_key}"
+            self._counters[total_key] = self._counters.get(total_key, 0.0) + max(0.0, elapsed_ms)
+        if not self._prometheus:
+            return
+        metric_name = "retrieval_stage_latency_ms"
+        if metric_name not in self._prometheus:
+            try:
+                from prometheus_client import Histogram
+
+                self._prometheus[metric_name] = Histogram(
+                    metric_name,
+                    "Retrieval / reasoning stage latency in milliseconds",
+                    ["scope", "stage"],
+                    buckets=(5, 10, 25, 50, 100, 250, 500, 1000, 2500, 10000, 60000),
+                    **({"registry": self._registry} if self._registry is not None else {}),
+                )
+            except ImportError:
+                return
+        self._prometheus[metric_name].labels(scope=scope_key, stage=stage_key).observe(
+            max(0.0, elapsed_ms)
+        )
 
     def inc_contract_event(self, kind: str) -> None:
         kind_key = (kind or "unknown").strip().lower()[:40] or "unknown"
@@ -1099,6 +1132,16 @@ class MetricsService:
         if self._prometheus and "mode_resolution_misroute_total" in self._prometheus:
             self._prometheus["mode_resolution_misroute_total"].labels(
                 reason=reason[:40]
+            ).inc()
+
+    def inc_mode_oscillation(self, from_mode: str, to_mode: str, *, phase: str = "") -> None:
+        key = f"mode_osc:{from_mode[:20]}:{to_mode[:20]}:{phase[:20]}"
+        self._counters[key] = self._counters.get(key, 0) + 1
+        if self._prometheus and "mode_oscillation_total" in self._prometheus:
+            self._prometheus["mode_oscillation_total"].labels(
+                from_mode=from_mode[:30],
+                to_mode=to_mode[:30],
+                phase=phase[:30],
             ).inc()
 
     def inc_mechanical_resume_blocked(self) -> None:

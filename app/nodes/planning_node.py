@@ -110,6 +110,7 @@ def _finish_thin(
     audit_action: str,
     audit_detail: dict[str, Any],
     pin_mode: bool = True,
+    skip_retrieval: bool = True,
 ) -> AgentState:
     """Common tail for thin (LLM-free) planning paths."""
     updated = merge_state(
@@ -118,7 +119,7 @@ def _finish_thin(
         plan=plan,
         planned_actions=[a.to_dict() for a in planned_actions] or None,
         selected_tools=tools,
-        skip_retrieval=True,
+        skip_retrieval=skip_retrieval,
         review_required=False,
         status=TaskStatus.PLANNED.value,
         current_node="planning",
@@ -172,7 +173,11 @@ def planning_node(state: AgentState) -> AgentState:
         report_progress("正在理解任务并制定计划…")
         report_boundary("planning", "enter")
         report_planning_input(state)
-        report_status_trace("planning", "正在分析目标并生成结构化计划…")
+        report_status_trace("planning", "预规划：路由审计与意图判定…")
+
+        from app.services.mode_freeze import record_planning_mode_entry
+
+        record_planning_mode_entry(state, phase="planning_enter")
 
         payload = dict(state.get("input_payload") or {})
         payload.pop("turn_contract", None)
@@ -183,12 +188,52 @@ def planning_node(state: AgentState) -> AgentState:
             engineering_thin_tools,
             qa_thin_plan,
             run_pre_planning_pipeline,
+            session_source_inquiry_thin_actions,
             should_skip_planning_llm,
             should_skip_qa_planning_llm,
+            should_skip_session_source_inquiry_planning,
         )
 
         state = run_pre_planning_pipeline(state)
         payload = dict(state.get("input_payload") or {})
+
+        # --- Session source inquiry: retrieve source domain, then answer (no planning LLM) ---
+        if should_skip_session_source_inquiry_planning(state):
+            report_status_trace("planning", "素材确认问答：跳过完整规划 LLM，走薄路径")
+            goal = str(payload.get("goal") or payload.get("query") or "").strip()
+            actions = session_source_inquiry_thin_actions(state)
+            payload["writing_intent"] = {
+                "enabled": False,
+                "blocked_by": "session_source_qa",
+                "source": "thin_planning",
+            }
+            payload["thin_execution_profile"] = "session_source_qa"
+            payload["turn_kind"] = "narrate_only"
+            payload.pop("require_planning_after_steer", None)
+            plan = ["retrieve session source", "answer about loaded material"]
+            report_plan_trace(
+                plan,
+                [],
+                meta={
+                    "planning": "session_source_inquiry_thin",
+                    "target_mode": payload.get("target_mode"),
+                    "skip_retrieval": False,
+                },
+            )
+            return _finish_thin(
+                state,
+                payload=payload,
+                plan=plan,
+                tools=[],
+                planned_actions=actions,
+                audit_action="session_source_inquiry_thin",
+                audit_detail={
+                    "target_mode": payload.get("target_mode"),
+                    "goal_preview": goal[:80],
+                },
+                pin_mode=False,
+                skip_retrieval=False,
+            )
 
         # --- Artifact edit thin path: polish/revise existing file (before QA thin) ---
         from app.services.artifact_edit_intent import detect_artifact_edit_intent
@@ -317,6 +362,7 @@ def planning_node(state: AgentState) -> AgentState:
             )
 
         # --- Full LLM planning: goal → actions ---
+        report_status_trace("planning", "正在调用规划模型生成结构化计划…")
         goal_for_planning = str(
             payload.get("latest_steer_message")
             or payload.get("goal")

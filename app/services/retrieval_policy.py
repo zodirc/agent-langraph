@@ -74,21 +74,41 @@ def should_skip_session_memory_retrieval(state: AgentState | dict) -> bool:
     return len(user_msgs) <= 1
 
 
+def _writing_retrieval_domains() -> set[str]:
+    domains = {"writing", "common"}
+    if getattr(settings, "SESSION_KNOWLEDGE_ENABLED", True):
+        domains.add("source")
+    return domains
+
+
 def retrieval_domains_for_state(state: AgentState | dict) -> set[str]:
     """
     Domain-aware retrieval policy.
 
-    - Writing tasks: writing + common
+    - Writing tasks: writing + common (+ source when session knowledge enabled)
     - Code tasks: code + common
     - Other tasks: common
     """
     payload = state.get("input_payload") or {}
+    if str(payload.get("thin_execution_profile") or "") == "session_source_qa":
+        domains = {"source", "common"}
+        if getattr(settings, "SESSION_KNOWLEDGE_ENABLED", True):
+            return domains
+        return {"common"}
+    from app.services.interaction_goal import goal_is_session_source_inquiry
+
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    if goal_is_session_source_inquiry(goal, state):
+        domains = {"source", "common"}
+        if getattr(settings, "SESSION_KNOWLEDGE_ENABLED", True):
+            return domains
+        return {"common"}
     intent = payload.get("writing_intent") or {}
     if intent.get("enabled") or str(payload.get("target_mode") or "") == "manuscript_mode":
-        return {"writing", "common"}
+        return _writing_retrieval_domains()
     mission = state.get("mission") or payload.get("mission") or {}
     if str(mission.get("kind") or "").lower() == "writing":
-        return {"writing", "common"}
+        return _writing_retrieval_domains()
 
     task_type = str(state.get("task_type") or payload.get("task_type") or "").lower()
     audit = payload.get("route_audit") or {}

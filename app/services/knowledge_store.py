@@ -50,10 +50,40 @@ def _stamp_tenant_metadata(metadata: Optional[dict[str, Any]]) -> dict[str, Any]
     return meta
 
 
+def _current_session_id() -> Optional[str]:
+    if not getattr(settings, "SESSION_KNOWLEDGE_ENABLED", True):
+        return None
+    from app.services.session_scope import get_retrieval_session_id
+
+    return get_retrieval_session_id()
+
+
+def _session_matches(metadata: dict[str, Any]) -> bool:
+    sid = _current_session_id()
+    doc_sid = metadata.get("session_id")
+    if doc_sid is None:
+        return True
+    if not sid:
+        return False
+    return str(doc_sid) == sid
+
+
+def _stamp_session_metadata(
+    metadata: Optional[dict[str, Any]],
+    session_id: Optional[str] = None,
+) -> dict[str, Any]:
+    meta = dict(metadata or {})
+    if session_id:
+        meta.setdefault("session_id", session_id)
+    return meta
+
+
 def _doc_domain(metadata: dict[str, Any]) -> str:
     domain = str(metadata.get("domain") or "").strip().lower()
-    if domain in {"common", "code", "writing"}:
+    if domain in {"common", "code", "writing", "source"}:
         return domain
+    if metadata.get("session_id"):
+        return "source"
     topic = str(metadata.get("topic") or "").strip().lower()
     if topic == "writing":
         return "writing"
@@ -270,6 +300,7 @@ class KnowledgeStore:
     def __init__(self, db_path: Optional[str] = None, vector_path: Optional[str] = None) -> None:
         self.db_path = db_path or settings.SQLITE_PATH
         self.vector_path = vector_path or settings.VECTORSTORE_PATH
+        self._embedding_compat_checked = False
         if not uses_postgres():
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         else:
@@ -453,6 +484,7 @@ class KnowledgeStore:
         content: str,
         metadata: Optional[dict[str, Any]] = None,
         doc_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> str:
         from datetime import datetime, timezone
 
@@ -460,7 +492,9 @@ class KnowledgeStore:
 
         did = doc_id or str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
-        meta = _stamp_tenant_metadata(metadata)
+        meta = _stamp_session_metadata(_stamp_tenant_metadata(metadata), session_id)
+        if meta.get("session_id") and not str(meta.get("domain") or "").strip():
+            meta.setdefault("domain", "source")
         domain = _doc_domain(meta)
         meta.setdefault("domain", domain)
 
@@ -517,6 +551,30 @@ class KnowledgeStore:
     def delete_document(self, doc_id: str) -> bool:
         self._delete_chunks_for_parent(doc_id)
         return self._delete_row(doc_id)
+
+    def delete_by_session(self, session_id: str, *, uploaded_by: Optional[str] = None) -> int:
+        safe_sid = str(session_id or "").strip()
+        if not safe_sid:
+            return 0
+        uploader = str(uploaded_by).strip() if uploaded_by else None
+        parent_ids: set[str] = set()
+        for row in self._iter_all_rows():
+            meta = json.loads(row["metadata"])
+            if str(meta.get("session_id") or "") != safe_sid:
+                continue
+            if uploader and str(meta.get("uploaded_by") or "") != uploader:
+                continue
+            if meta.get("is_chunk"):
+                parent = str(meta.get("parent_doc_id") or "")
+                if parent:
+                    parent_ids.add(parent)
+            else:
+                parent_ids.add(str(row["doc_id"]))
+        removed = 0
+        for doc_id in parent_ids:
+            if self.delete_document(doc_id):
+                removed += 1
+        return removed
 
     def get_document(self, doc_id: str) -> Optional[dict[str, Any]]:
         row = self._fetchone("SELECT * FROM knowledge_docs WHERE doc_id = ?", (doc_id,))
@@ -676,6 +734,8 @@ class KnowledgeStore:
                 continue
             if not _tenant_matches(meta):
                 continue
+            if not _session_matches(meta):
+                continue
             if not _domain_matches(meta, domains):
                 continue
             filtered_rows.append(row)
@@ -738,7 +798,12 @@ class KnowledgeStore:
         if not self._vector or not self._vector.available:
             return []
         hits = self._vector.search(query, limit)
-        filtered = [h for h in hits if _tenant_matches(h.get("metadata") or {})]
+        filtered = [
+            h
+            for h in hits
+            if _tenant_matches(h.get("metadata") or {})
+            and _session_matches(h.get("metadata") or {})
+        ]
         if not domains:
             return filtered
         return [h for h in filtered if _domain_matches(h.get("metadata") or {}, domains)]
@@ -820,6 +885,8 @@ class KnowledgeStore:
             logger.warning("embedding_meta save failed (%s)", exc)
 
     def _check_embedding_compatibility(self) -> None:
+        if getattr(settings, "RETRIEVAL_EMBEDDING_COMPAT_ONCE", True) and self._embedding_compat_checked:
+            return
         try:
             from app.services.embedding_meta import (
                 get_current_embedding_meta,
@@ -832,6 +899,7 @@ class KnowledgeStore:
             stored_raw = self.load_embedding_meta()
             if stored_raw is None:
                 self.save_embedding_meta(current)
+                self._embedding_compat_checked = True
                 return
             stored = meta_from_dict(stored_raw)
             if not validate_index_compatibility(stored, current):
@@ -840,6 +908,7 @@ class KnowledgeStore:
                     from app.services.embedding_reindex import reindex_collection
 
                     reindex_collection(self)
+            self._embedding_compat_checked = True
         except Exception as exc:
             logger.warning(
                 "embedding compatibility check failed, continuing retrieval: %s",
@@ -860,6 +929,31 @@ class KnowledgeStore:
             )
         return normalized
 
+    def fast_keyword_search(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        *,
+        domains: Optional[set[str]] = None,
+        query_object: Any = None,
+        retrieval_decision: Any = None,
+    ) -> list[dict[str, Any]]:
+        """Keyword-only retrieval tier — no vector embed (§7.3 scheme A fast path)."""
+        from app.services.retrieval_timing import timed_stage
+
+        limit = top_k or settings.RETRIEVAL_TOP_K
+        with timed_stage("hybrid_search", "keyword_only", extra={"tier": "fast"}):
+            keyword_hits = self.keyword_search(query, top_k=limit, domains=domains)
+        return self._finalize_hits(
+            keyword_hits,
+            query=query,
+            limit=limit,
+            stage="keyword",
+            query_object=query_object,
+            retrieval_decision=retrieval_decision,
+            rerank=False,
+        )
+
     def hybrid_search(
         self,
         query: str,
@@ -873,14 +967,22 @@ class KnowledgeStore:
 
         Main retrieval entry: vector and keyword merge with optional rerank.
         """
+        import time
+
+        from app.services.retrieval_timing import record_timing, timed_stage
+
         limit = top_k or settings.RETRIEVAL_TOP_K
         multiplier = max(1, int(getattr(settings, "RAG_FETCH_K_MULTIPLIER", 4)))
         fetch_k = limit * multiplier
         if settings.RAG_RERANK_ENABLED:
             fetch_k = max(fetch_k, settings.RAG_RERANK_CANDIDATE_K)
-        self._check_embedding_compatibility()
-        vector_hits = self.vector_search(query, top_k=fetch_k, domains=domains)
-        keyword_hits = self.keyword_search(query, top_k=fetch_k, domains=domains)
+        t0 = time.perf_counter()
+        with timed_stage("hybrid_search", "compat_check"):
+            self._check_embedding_compatibility()
+        with timed_stage("hybrid_search", "vector"):
+            vector_hits = self.vector_search(query, top_k=fetch_k, domains=domains)
+        with timed_stage("hybrid_search", "keyword"):
+            keyword_hits = self.keyword_search(query, top_k=fetch_k, domains=domains)
         if not vector_hits:
             merged = keyword_hits
             stage = "keyword"
@@ -891,8 +993,38 @@ class KnowledgeStore:
             from app.services.retrieval_search_policy import lexical_rrf_weight
 
             lex_w = lexical_rrf_weight(query_object, retrieval_decision)
-            merged = _rrf_merge(vector_hits, keyword_hits, fetch_k, lexical_weight=lex_w)
+            with timed_stage("hybrid_search", "rrf_merge"):
+                merged = _rrf_merge(vector_hits, keyword_hits, fetch_k, lexical_weight=lex_w)
             stage = "rrf"
+        record_timing(
+            "hybrid_search",
+            "recall",
+            (time.perf_counter() - t0) * 1000.0,
+            merge_stage=stage,
+        )
+        return self._finalize_hits(
+            merged,
+            query=query,
+            limit=limit,
+            stage=stage,
+            query_object=query_object,
+            retrieval_decision=retrieval_decision,
+            rerank=bool(settings.RAG_RERANK_ENABLED),
+        )
+
+    def _finalize_hits(
+        self,
+        merged: list[dict[str, Any]],
+        *,
+        query: str,
+        limit: int,
+        stage: str,
+        query_object: Any = None,
+        retrieval_decision: Any = None,
+        rerank: bool,
+    ) -> list[dict[str, Any]]:
+        from app.services.retrieval_timing import timed_stage
+
         merged = self._normalize_hits(merged)
         from app.services.retrieval_search_policy import filter_stale_at_recall
 
@@ -905,18 +1037,23 @@ class KnowledgeStore:
         from app.services.relevance_gate import annotate_hit
 
         merged = [annotate_hit(h, stage=stage, query=query) for h in merged]
-        if settings.RAG_RERANK_ENABLED:
+        if rerank:
             from app.services.reranker import rerank
 
-            merged = rerank(query, merged, top_k=limit)
+            with timed_stage("hybrid_search", "rerank"):
+                merged = rerank(query, merged, top_k=limit)
         else:
             from app.services.relevance_gate import apply_relevance_gate
 
-            if getattr(settings, "RAG_RELEVANCE_GATE_ENABLED", True):
-                merged = apply_relevance_gate(merged, query, stage=stage)
-            merged = merged[:limit]
-        merged = _limit_per_doc(merged, max_per_doc=int(getattr(settings, "RAG_MAX_CHUNKS_PER_DOC", 2)))
-        merged = self._expand_adjacent_chunks(merged, query=query)
+            with timed_stage("hybrid_search", "relevance_gate"):
+                if getattr(settings, "RAG_RELEVANCE_GATE_ENABLED", True):
+                    merged = apply_relevance_gate(merged, query, stage=stage)
+                merged = merged[:limit]
+        with timed_stage("hybrid_search", "adjacency"):
+            merged = _limit_per_doc(
+                merged, max_per_doc=int(getattr(settings, "RAG_MAX_CHUNKS_PER_DOC", 2))
+            )
+            merged = self._expand_adjacent_chunks(merged, query=query)
         return merged[:limit]
 
     def _expand_adjacent_chunks(

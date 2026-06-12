@@ -38,6 +38,12 @@ def resolve_interrupt_route(state: AgentState) -> InterruptRoute:
     event_type = str(state.get("event_type") or "")
     ctx = ensure_interrupt_context(state)
     runtime = _runtime_state(ctx)
+    payload = state.get("input_payload") or {}
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    from app.services.interaction_goal import goal_is_session_source_inquiry
+
+    if event_type == "clarification" and goal_is_session_source_inquiry(goal):
+        return "continue"
 
     if event_type == "interrupt" or ctx.get("cancel_requested"):
         if ctx.get("abort_requested"):

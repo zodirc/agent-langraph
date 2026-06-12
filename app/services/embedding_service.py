@@ -44,7 +44,25 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 def embed_text(text: str) -> list[float]:
-    return embed_texts([text])[0]
+    from app.services.query_embedding_context import get_scoped_embedding, remember_scoped_embedding
+
+    cached = get_scoped_embedding(text)
+    if cached is not None:
+        return cached
+    result = embed_texts([text])[0]
+    remember_scoped_embedding(text, result)
+    return result
+
+
+def warmup_embedding() -> None:
+    """Load local embedding backend at process start (§7.3 scheme C.1)."""
+    if not getattr(settings, "EMBEDDING_WARMUP_ENABLED", True):
+        return
+    try:
+        embed_text("warmup")
+        logger.info("embedding warmup complete (model=%s)", settings.EMBEDDING_MODEL)
+    except Exception as exc:
+        logger.warning("embedding warmup failed: %s", exc)
 
 
 def _embeddings_endpoint_url(base_url: str) -> str:

@@ -23,6 +23,36 @@ const flowTimelineEl = document.getElementById("flow-timeline");
 const flowRefreshBtnEl = document.getElementById("flow-refresh-btn");
 const flowOpenBtnEl = document.getElementById("flow-open-btn");
 const stateDebugBtnEl = document.getElementById("state-debug-btn");
+const importSourceBtnEl = document.getElementById("import-source-btn");
+const importSourceModalEl = document.getElementById("import-source-modal");
+const importSourceMetaEl = document.getElementById("import-source-meta");
+const importSourceCloseBtnEl = document.getElementById("import-source-close-btn");
+const importSourceSaveBtnEl = document.getElementById("import-source-save-btn");
+const importSourceClearBtnEl = document.getElementById("import-source-clear-btn");
+const importSourceCancelBtnEl = document.getElementById("import-source-cancel-btn");
+const importSourceUseExampleBtnEl = document.getElementById("import-source-use-example-btn");
+const importSourceLoadFileBtnEl = document.getElementById("import-source-load-file-btn");
+const importSourceCopyBtnEl = document.getElementById("import-source-copy-btn");
+const importSourceFileInputEl = document.getElementById("import-source-file-input");
+const importSourceTitleEl = document.getElementById("import-source-title");
+const importSourceEditorEl = document.getElementById("import-source-editor");
+const importSourceExamplePreviewEl = document.getElementById("import-source-example-preview");
+const importSourceStatusEl = document.getElementById("import-source-status");
+const importSourceStoredOverviewEl = document.getElementById("import-source-stored-overview");
+const importSourceStoredTitleEl = document.getElementById("import-source-stored-title");
+const importSourceStoredCharsEl = document.getElementById("import-source-stored-chars");
+const importSourceStoredChunksEl = document.getElementById("import-source-stored-chunks");
+const importSourceStoredTimeEl = document.getElementById("import-source-stored-time");
+const importSourceStoredPreviewEl = document.getElementById("import-source-stored-preview");
+const SESSION_SOURCE_TEMPLATE_URL = "/static/templates/session_source_template.md";
+const SESSION_SOURCE_EXAMPLE_SUIYUE_URL = "/static/templates/session_source_example_suiyue.md";
+
+let importSourceActiveTab = "example";
+let importSourceActiveExample = "blank";
+/** True while native file picker is open — suppress dialog Escape/cancel. */
+let importSourceFilePicking = false;
+/** @type {Record<string, string>} */
+const importSourceExampleCache = {};
 const historyListEl = document.getElementById("history-list");
 const historyRefreshBtnEl = document.getElementById("history-refresh-btn");
 const historyNewSessionBtnEl = document.getElementById("history-new-session-btn");
@@ -134,6 +164,8 @@ const COMMAND_SUGGESTIONS = [
   { cmd: "/stop-all", hint: "停止所有 in-flight 任务" },
   { cmd: "/append ", hint: "向运行中任务追加消息（不抢占）" },
   { cmd: "/session", hint: "打印当前 session_id" },
+  { cmd: "/import", hint: "打开会话素材编辑窗口（范例+保存）" },
+  { cmd: "/import-clear", hint: "清空本会话素材" },
   { cmd: "/mode", hint: "查看或切换交互模式 auto|chat|engineering|writing" },
   { cmd: "/history", hint: "在终端列出最近任务" },
   { cmd: "/status ", hint: "查看任务状态（后跟 task_id）" },
@@ -1182,6 +1214,12 @@ async function flushPendingStreamInputQueue() {
     await handleMissionStatusInquiry(merged, { suppressUserEcho: true });
     return;
   }
+  if (isSessionSourceInquiry(merged)) {
+    const ok = await sendMessage(taskId, merged, { suppressUserEcho: true });
+    if (ok) sessionHasInFlightMission = true;
+    updateStopButtonState();
+    return;
+  }
   appendLine("（正在发送排队纠偏，将开启可见重规划流…）", "system");
   const ok = await sendMessage(taskId, merged, { suppressUserEcho: true });
   if (ok) sessionHasInFlightMission = true;
@@ -1546,6 +1584,44 @@ function syncInteractionModeUi(mode) {
     const ph = INTERACTION_MODE_META[normalized]?.placeholder;
     if (ph) inputEl.placeholder = ph;
   }
+  syncImportSourceUi(normalized);
+}
+
+function isWritingInteractionMode(mode) {
+  return normalizeInteractionMode(mode || getInteractionMode()) === "writing";
+}
+
+function syncImportSourceUi(mode) {
+  const show = isWritingInteractionMode(mode);
+  if (importSourceBtnEl) {
+    importSourceBtnEl.hidden = !show;
+    importSourceBtnEl.setAttribute("aria-hidden", show ? "false" : "true");
+  }
+  if (!show && importSourceModalEl?.open) {
+    closeImportSourceModal();
+  }
+}
+
+function setImportSourceStatus(message, kind = "info") {
+  if (!importSourceStatusEl) return;
+  const text = String(message || "").trim();
+  if (!text) {
+    importSourceStatusEl.hidden = true;
+    importSourceStatusEl.textContent = "";
+    importSourceStatusEl.className = "import-source-status";
+    return;
+  }
+  importSourceStatusEl.hidden = false;
+  importSourceStatusEl.textContent = text;
+  importSourceStatusEl.className = `import-source-status is-${kind === "ok" || kind === "error" ? kind : "info"}`;
+}
+
+function setImportSourceSaving(saving) {
+  if (importSourceSaveBtnEl) {
+    importSourceSaveBtnEl.disabled = Boolean(saving);
+    importSourceSaveBtnEl.textContent = saving ? "保存中…" : "保存并应用";
+  }
+  if (importSourceClearBtnEl) importSourceClearBtnEl.disabled = Boolean(saving);
 }
 
 function applyInteractionModeToPayload(payload) {
@@ -1628,10 +1704,148 @@ function applyTheme(theme) {
   }
 }
 
-function requestNewSession(sourceLabel) {
-  if (running || activeResumeAbortController || sessionHasInFlightMission || backendExecutorActive) {
-    appendLine("当前有任务运行中，无法新建会话。请先 Stop 或 /stop。", "error");
-    return null;
+function clearLocalTaskLiveState(taskId) {
+  const tid = String(taskId || "");
+  setRunning(false);
+  if (!tid || tid === getSessionId() || tid === activeTaskId || userStopPendingTaskId === tid) {
+    sessionHasInFlightMission = false;
+    backendExecutorActive = false;
+    sessionMissionExecutorActive = false;
+    clearUserStopPending(tid);
+    stopDetachedBackendWatch();
+  }
+  updateStopButtonState();
+}
+
+async function forceTerminateTask(taskId, { hadClientStream = false, announce = true } = {}) {
+  const tid = String(taskId || activeTaskId || getSessionId() || "").trim();
+  if (!tid) return true;
+
+  userStopPendingTaskId = tid;
+  dismissPendingQueueUi();
+
+  const isCurrent = tid === activeTaskId || tid === getSessionId();
+  const hadStream =
+    hadClientStream ||
+    (isCurrent &&
+      (Boolean(activeSseAbortController) || Boolean(activeResumeAbortController) || running));
+
+  if (isCurrent && activeResumeAbortController) {
+    try {
+      activeResumeAbortController.abort();
+    } catch {
+      /* ignore */
+    }
+    activeResumeAbortController = null;
+  }
+  if (isCurrent && hadStream) {
+    try {
+      await apiFetch(`/tasks/${tid}/interrupt-stream`, {
+        method: "POST",
+        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "user_requested", requested_by: "web" }),
+      });
+    } catch {
+      /* best-effort */
+    }
+    abortActiveSseStream("user_stop");
+    markActiveWritingStreamStopped();
+  }
+  if (isCurrent) setRunning(false);
+
+  const useCancelFirst = isWritingInteractionMode();
+  const endpoints = useCancelFirst ? ["cancel", "stop"] : ["stop", "cancel"];
+  let lastRes = null;
+  for (const ep of endpoints) {
+    try {
+      const res = await apiFetch(`/tasks/${tid}/${ep}`, {
+        method: "POST",
+        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "user_requested", requested_by: "web" }),
+      });
+      lastRes = res;
+      if (res.ok || res.status === 404) break;
+    } catch {
+      /* try next endpoint */
+    }
+  }
+
+  if (lastRes?.status === 404) {
+    clearLocalTaskLiveState(tid);
+    if (announce) appendLine("任务不存在或已结束。", "system");
+    if (isCurrent) await afterClientStreamEnded(tid, { detached: hadStream, reason: "user_stop" });
+    return true;
+  }
+
+  if (!lastRes?.ok) {
+    if (announce && lastRes?.status !== 401) {
+      const detail = lastRes ? await lastRes.text() : "";
+      appendLine(`停止失败: ${lastRes?.status || "?"} ${detail}`, "error");
+    }
+    if (isCurrent) await afterClientStreamEnded(tid, { detached: hadStream, reason: "user_stop" });
+    updateStopButtonState();
+    return false;
+  }
+
+  if (announce) {
+    let data = {};
+    try {
+      data = await lastRes.json();
+    } catch {
+      data = {};
+    }
+    const display = data.client_display || {};
+    if (display.system_lines?.length) {
+      appendSystemLines(display.system_lines);
+    } else if (useCancelFirst) {
+      appendLine("已请求取消任务；后台将在当前步骤结束后停止。", "system");
+    } else {
+      appendLine("已请求暂停任务；后台将在当前步骤结束后停止。", "system");
+    }
+  }
+
+  let refreshed = null;
+  for (let i = 0; i < 40; i += 1) {
+    refreshed = await fetchTaskStatus(tid);
+    if (!refreshed || !isTaskLiveOnServer(refreshed, null)) break;
+    refreshStopPendingStatus();
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (refreshed) lastHydratedStatus = refreshed;
+
+  const stillLive = refreshed && isTaskLiveOnServer(refreshed, null);
+  if (!stillLive) {
+    clearLocalTaskLiveState(tid);
+  } else {
+    refreshStopPendingStatus();
+  }
+  if (isCurrent) await afterClientStreamEnded(tid, { detached: hadStream, reason: "user_stop" });
+  await refreshFlowPanel(tid);
+  updateStopButtonState();
+  return !stillLive;
+}
+
+async function requestNewSession(sourceLabel) {
+  const busy =
+    running || activeResumeAbortController || sessionHasInFlightMission || backendExecutorActive;
+  if (busy) {
+    const taskId = activeTaskId || getSessionId();
+    const status = await fetchTaskStatus(taskId);
+    if (
+      running ||
+      backendExecutorActive ||
+      sessionHasInFlightMission ||
+      isTaskLiveOnServer(status, null)
+    ) {
+      appendLine("正在停止当前任务…", "system");
+      const ok = await forceTerminateTask(taskId, { announce: false });
+      if (!ok) {
+        appendLine("当前任务仍在运行，无法新建会话。请点 Stop 或稍后重试。", "error");
+        return null;
+      }
+    } else {
+      clearLocalTaskLiveState(taskId);
+    }
   }
   return startNewSession(sourceLabel);
 }
@@ -1822,7 +2036,7 @@ function resetActiveSessionRuntime() {
 async function selectHistorySession(taskId) {
   if (!taskId) return;
   if (getSessionId() === taskId) {
-    requestNewSession("再次点击当前会话");
+    await requestNewSession("再次点击当前会话");
     return;
   }
   if (running || activeResumeAbortController || sessionHasInFlightMission || backendExecutorActive) {
@@ -1845,9 +2059,18 @@ async function selectHistorySession(taskId) {
 
 async function deleteHistoryTask(taskId) {
   if (!taskId) return;
-  if (running && activeTaskId === taskId) {
-    appendLine("当前会话正在运行，无法删除。请先停止任务。", "error");
-    return;
+  const status = await fetchTaskStatus(taskId);
+  const isCurrent = taskId === getSessionId() || taskId === activeTaskId;
+  const live =
+    isTaskLiveOnServer(status, null) ||
+    (isCurrent && (running || backendExecutorActive || sessionHasInFlightMission));
+  if (live) {
+    appendLine("正在停止任务以便删除…", "system");
+    const stopped = await forceTerminateTask(taskId, { announce: false });
+    if (!stopped) {
+      appendLine("任务仍在后台执行，暂时无法删除。请先点 Stop 后再试。", "error");
+      return;
+    }
   }
   const confirmed = window.confirm(`确认删除会话 ${taskId.slice(0, 8)}… ?`);
   if (!confirmed) return;
@@ -3808,6 +4031,17 @@ function isMissionStatusQuery(text) {
   );
 }
 
+function isSessionSourceInquiry(text) {
+  const t = String(text || "").trim();
+  if (!t) return false;
+  return (
+    /(看过|读过|加载|导入|使用|拿到|获取|看到).{0,12}(素材|资料|材料|设定|参考|原文|剧情|人物)/i.test(t) ||
+    /(素材|资料|材料|设定|参考).{0,12}(看过|读过|导入|加载|了么|了吗|没有|没)/i.test(t) ||
+    /有没有.{0,8}(素材|资料|材料)/i.test(t) ||
+    /(素材|资料).{0,6}(了么|了吗)/i.test(t)
+  );
+}
+
 /** Status/meta question during mission: backend classifies via unified ingress. */
 async function handleMissionStatusInquiry(message, opts = {}) {
   const taskId = activeTaskId || getSessionId();
@@ -3920,88 +4154,8 @@ async function sendMessage(taskId, text, opts = {}) {
 }
 
 async function stopActiveMission() {
-  const hadClientStream =
-    Boolean(activeSseAbortController) || Boolean(activeResumeAbortController) || running;
   const taskId = activeTaskId || getSessionId();
-  userStopPendingTaskId = taskId;
-  dismissPendingQueueUi();
-  if (activeResumeAbortController) {
-    try {
-      activeResumeAbortController.abort();
-    } catch {
-      /* ignore */
-    }
-    activeResumeAbortController = null;
-  }
-  if (hadClientStream) {
-    try {
-      await apiFetch(`/tasks/${taskId}/interrupt-stream`, {
-        method: "POST",
-        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: "user_requested", requested_by: "web" }),
-      });
-    } catch {
-      /* best-effort */
-    }
-    abortActiveSseStream("user_stop");
-    markActiveWritingStreamStopped();
-  }
-  setRunning(false);
-  refreshStopPendingStatus();
-  updateStopButtonState();
-
-  let res = await apiFetch(`/tasks/${taskId}/stop`, {
-    method: "POST",
-    headers: getAuthHeaders(),
-  });
-  if (!res.ok && res.status === 404) {
-    appendLine("任务不存在或已结束。", "system");
-    clearUserStopPending(taskId);
-    await afterClientStreamEnded(taskId, { detached: hadClientStream, reason: "user_stop" });
-    return true;
-  }
-  if (!res.ok) {
-    try {
-      res = await apiFetch(`/tasks/${taskId}/cancel`, {
-        method: "POST",
-        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: "user_requested", requested_by: "web" }),
-      });
-    } catch {
-      /* best-effort */
-    }
-  }
-  if (!res.ok) {
-    if (res.status !== 401) {
-      appendLine(`stop failed: ${res.status} ${await res.text()}`, "error");
-    }
-    await afterClientStreamEnded(taskId, { detached: hadClientStream, reason: "user_stop" });
-    refreshStopPendingStatus();
-    updateStopButtonState();
-    return false;
-  }
-  const data = await res.json();
-  const display = data.client_display || {};
-  appendSystemLines(display.system_lines);
-  if (!display.system_lines?.length) {
-    appendLine(
-      hadClientStream
-        ? "已请求暂停；流式输出已断开，任务将在当前工程步骤完成后暂停。"
-        : "已请求暂停任务。",
-      "system"
-    );
-  }
-  await afterClientStreamEnded(taskId, { detached: hadClientStream, reason: "user_stop" });
-  const refreshed = await fetchTaskStatus(taskId);
-  if (refreshed) lastHydratedStatus = refreshed;
-  if (!refreshed?.executor_active) {
-    clearUserStopPending(taskId);
-  } else {
-    refreshStopPendingStatus();
-  }
-  await refreshFlowPanel(taskId);
-  updateStopButtonState();
-  return true;
+  return forceTerminateTask(taskId, { hadClientStream: true, announce: true });
 }
 
 async function stopTaskById(taskId) {
@@ -5217,6 +5371,390 @@ async function runSupervisorStream(goal, domains = null) {
   await runTaskStream(goal, "LOW", "/supervisor/tasks/stream", body);
 }
 
+function sessionSourceDocId(sessionId) {
+  return `session-source-${String(sessionId || "").trim()}`;
+}
+
+function formatKnowledgeDocTime(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    return d.toLocaleString("zh-CN", { hour12: false });
+  } catch {
+    return String(iso);
+  }
+}
+
+function importSourceContentPreview(text, limit = 200) {
+  const t = String(text || "")
+    .replace(/^#+\s*/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return "（无正文）";
+  if (t.length <= limit) return t;
+  return `${t.slice(0, limit)}…`;
+}
+
+function importSourceChunkLabel(meta) {
+  const m = meta && typeof meta === "object" ? meta : {};
+  const count = Number(m.chunk_count);
+  if (Number.isFinite(count) && count > 0) {
+    return count === 1 ? "1 块" : `${count} 块`;
+  }
+  if (m.assembled_from_chunks) return "多块";
+  return "整篇";
+}
+
+function renderImportSourceStoredOverview(doc) {
+  if (!importSourceStoredOverviewEl) return;
+  const content = String(doc?.content || "").trim();
+  if (!doc || !content) {
+    importSourceStoredOverviewEl.hidden = true;
+    if (importSourceStoredTitleEl) importSourceStoredTitleEl.textContent = "";
+    if (importSourceStoredCharsEl) importSourceStoredCharsEl.textContent = "—";
+    if (importSourceStoredChunksEl) importSourceStoredChunksEl.textContent = "—";
+    if (importSourceStoredTimeEl) importSourceStoredTimeEl.textContent = "—";
+    if (importSourceStoredPreviewEl) importSourceStoredPreviewEl.textContent = "";
+    return;
+  }
+  const title = String(doc.title || "会话素材").trim() || "会话素材";
+  const meta = doc.metadata || {};
+  importSourceStoredOverviewEl.hidden = false;
+  if (importSourceStoredTitleEl) importSourceStoredTitleEl.textContent = title;
+  if (importSourceStoredCharsEl) importSourceStoredCharsEl.textContent = String(content.length);
+  if (importSourceStoredChunksEl) importSourceStoredChunksEl.textContent = importSourceChunkLabel(meta);
+  if (importSourceStoredTimeEl) {
+    importSourceStoredTimeEl.textContent = formatKnowledgeDocTime(doc.created_at);
+  }
+  if (importSourceStoredPreviewEl) {
+    importSourceStoredPreviewEl.textContent = importSourceContentPreview(content);
+  }
+}
+
+async function fetchSessionSourceDocument(sessionId) {
+  const docId = sessionSourceDocId(sessionId);
+  try {
+    const res = await apiFetch(`/knowledge/documents/${encodeURIComponent(docId)}`);
+    if (!res.ok) return null;
+    const doc = await res.json();
+    const content = String(doc?.content || "").trim();
+    if (!content) return null;
+    return doc;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchImportSourceExample(kind) {
+  if (importSourceExampleCache[kind]) return importSourceExampleCache[kind];
+  const url = kind === "suiyue" ? SESSION_SOURCE_EXAMPLE_SUIYUE_URL : SESSION_SOURCE_TEMPLATE_URL;
+  const res = await fetch(url, { cache: "no-cache" });
+  if (!res.ok) throw new Error(`failed to load example (${res.status})`);
+  const text = await res.text();
+  importSourceExampleCache[kind] = text;
+  return text;
+}
+
+function setImportSourceTab(tab) {
+  importSourceActiveTab = tab === "session" ? "session" : "example";
+  document.querySelectorAll(".import-source-tab").forEach((btn) => {
+    const active = btn.getAttribute("data-tab") === importSourceActiveTab;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll(".import-source-panel").forEach((panel) => {
+    const active = panel.getAttribute("data-panel") === importSourceActiveTab;
+    panel.classList.toggle("is-active", active);
+    panel.hidden = !active;
+  });
+}
+
+async function setImportSourceExample(kind) {
+  importSourceActiveExample = kind === "suiyue" ? "suiyue" : "blank";
+  document.querySelectorAll(".import-source-example-btn").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.getAttribute("data-example") === importSourceActiveExample);
+  });
+  if (!importSourceExamplePreviewEl) return;
+  importSourceExamplePreviewEl.textContent = "加载范例中…";
+  try {
+    importSourceExamplePreviewEl.textContent = await fetchImportSourceExample(importSourceActiveExample);
+  } catch (err) {
+    importSourceExamplePreviewEl.textContent = `范例加载失败: ${err}`;
+  }
+}
+
+async function loadExistingSessionSourceIntoEditor(sessionId) {
+  if (!importSourceTitleEl || !importSourceEditorEl) return null;
+  const doc = await fetchSessionSourceDocument(sessionId);
+  if (!doc) {
+    importSourceTitleEl.value = "";
+    importSourceEditorEl.value = "";
+    renderImportSourceStoredOverview(null);
+    return null;
+  }
+  importSourceTitleEl.value = String(doc.title || "会话素材");
+  importSourceEditorEl.value = String(doc.content || "");
+  renderImportSourceStoredOverview(doc);
+  return doc;
+}
+
+function applyImportSourceExampleToEditor() {
+  const text = importSourceExamplePreviewEl?.textContent || "";
+  if (!text.trim()) {
+    setImportSourceStatus("范例尚未加载完成，请稍候再试。", "error");
+    return;
+  }
+  if (importSourceEditorEl) importSourceEditorEl.value = text;
+  if (importSourceTitleEl && !importSourceTitleEl.value.trim()) {
+    importSourceTitleEl.value =
+      importSourceActiveExample === "suiyue" ? "《岁月》剧情素材" : "会话写作素材";
+  }
+  setImportSourceTab("session");
+  setImportSourceStatus("已填入编辑区，可在「本会话素材」修改后保存。", "info");
+}
+
+async function openImportSourceModal({ tab = "session" } = {}) {
+  if (!importSourceModalEl) {
+    appendLine("import modal unavailable", "error");
+    return;
+  }
+  if (!isWritingInteractionMode()) {
+    appendLine("导入素材仅在「写作 · 长篇」模式下可用，请先在顶栏切换交互模式。", "system");
+    return;
+  }
+  const sessionId = getSessionId();
+  if (!sessionId) {
+    appendLine("no active session — start a session first", "error");
+    return;
+  }
+  if (importSourceMetaEl) {
+    importSourceMetaEl.textContent = `session ${sessionId.slice(0, 8)}… · 仅当前会话可见 · 保存后供写作 RAG 检索`;
+  }
+  setImportSourceStatus("");
+  setImportSourceSaving(false);
+  await Promise.all([setImportSourceExample(importSourceActiveExample), loadExistingSessionSourceIntoEditor(sessionId)]);
+  setImportSourceTab(tab === "example" ? "example" : "session");
+  if (typeof importSourceModalEl.showModal === "function") {
+    importSourceModalEl.showModal();
+  } else {
+    importSourceModalEl.setAttribute("open", "open");
+  }
+}
+
+function closeImportSourceModal() {
+  if (!importSourceModalEl) return;
+  if (typeof importSourceModalEl.close === "function") {
+    importSourceModalEl.close();
+  } else {
+    importSourceModalEl.removeAttribute("open");
+  }
+}
+
+async function saveSessionSourceFromModal() {
+  const sessionId = getSessionId();
+  if (!sessionId) {
+    setImportSourceStatus("无有效会话，请先开启会话。", "error");
+    return false;
+  }
+  const title = String(importSourceTitleEl?.value || "会话素材").trim() || "会话素材";
+  const content = String(importSourceEditorEl?.value || "").trim();
+  if (!content) {
+    setImportSourceStatus("内容为空：请切到「本会话素材」，或从范例填入后再保存。", "error");
+    setImportSourceTab("session");
+    importSourceEditorEl?.focus();
+    return false;
+  }
+  const docId = sessionSourceDocId(sessionId);
+  setImportSourceSaving(true);
+  setImportSourceStatus("正在保存并写入本会话知识库…", "info");
+  try {
+    const res = await apiFetch("/knowledge/documents", {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        content,
+        doc_id: docId,
+        session_id: sessionId,
+        metadata: { domain: "source" },
+      }),
+    });
+    if (!res.ok) {
+      const detail = await res.text();
+      const msg = `保存失败 (${res.status})：${detail}`;
+      setImportSourceStatus(msg, "error");
+      appendLine(msg, "error");
+      return false;
+    }
+    await res.json();
+    const savedDoc = await fetchSessionSourceDocument(sessionId);
+    if (savedDoc) {
+      if (importSourceTitleEl) importSourceTitleEl.value = String(savedDoc.title || title);
+      if (importSourceEditorEl) importSourceEditorEl.value = String(savedDoc.content || content);
+      renderImportSourceStoredOverview(savedDoc);
+    } else {
+      renderImportSourceStoredOverview({
+        title,
+        content,
+        created_at: new Date().toISOString(),
+        metadata: { domain: "source" },
+      });
+    }
+    setImportSourceTab("session");
+    importSourceStoredOverviewEl?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const okMsg = `已保存并应用：${title}（${content.length} 字，仅本会话）— 见上方「已入库」概览`;
+    setImportSourceStatus(okMsg, "ok");
+    appendLine(`已保存并应用：${title}（${content.length} 字，仅本会话）`, "system");
+    scrollOutputOnUserSubmit();
+    return true;
+  } catch (err) {
+    const msg = `保存失败：${err}`;
+    setImportSourceStatus(msg, "error");
+    appendLine(msg, "error");
+    return false;
+  } finally {
+    setImportSourceSaving(false);
+  }
+}
+
+function importSourceEditorPlaintext() {
+  const title = String(importSourceTitleEl?.value || "").trim();
+  const body = String(importSourceEditorEl?.value || "");
+  if (!body.trim()) return "";
+  if (!title) return body;
+  const firstLine = body.split("\n", 1)[0] || "";
+  if (firstLine.trim() === `# ${title}` || firstLine.trim() === title) {
+    return body;
+  }
+  return `# ${title}\n\n${body}`;
+}
+
+function importSourceExamplePlaintext() {
+  return String(importSourceExamplePreviewEl?.textContent || "").trim();
+}
+
+/** Copy target: example tab → preview; session tab → editor, or example if editor empty. */
+function resolveImportSourceCopyText() {
+  const example = importSourceExamplePlaintext();
+  const session = importSourceEditorPlaintext();
+  if (importSourceActiveTab === "example") {
+    return { text: example, source: "example" };
+  }
+  if (session.trim()) {
+    return { text: session, source: "session" };
+  }
+  if (example) {
+    return { text: example, source: "example-fallback" };
+  }
+  return { text: "", source: "empty" };
+}
+
+function armImportSourceFilePickerGuard() {
+  importSourceFilePicking = true;
+  const release = () => {
+    window.setTimeout(() => {
+      importSourceFilePicking = false;
+    }, 200);
+  };
+  window.addEventListener("focus", release, { once: true });
+  window.setTimeout(() => {
+    if (importSourceFilePicking) importSourceFilePicking = false;
+  }, 120000);
+}
+
+async function copyImportSourceContent() {
+  const { text, source } = resolveImportSourceCopyText();
+  if (!text.trim()) {
+    if (importSourceCopyBtnEl) flashActionButton(importSourceCopyBtnEl, "无内容");
+    return false;
+  }
+  try {
+    const ok = await copyTextToClipboard(text);
+    if (ok) {
+      const label =
+        source === "session"
+          ? "已复制本会话"
+          : source === "example-fallback"
+            ? "已复制范例"
+            : "已复制范例";
+      if (importSourceCopyBtnEl) flashActionButton(importSourceCopyBtnEl, label);
+      setImportSourceStatus(`已复制到剪贴板（${text.length} 字）`, "ok");
+      window.setTimeout(() => setImportSourceStatus(""), 2200);
+    } else if (importSourceCopyBtnEl) {
+      flashActionButton(importSourceCopyBtnEl, "失败");
+    }
+    return ok;
+  } catch {
+    if (importSourceCopyBtnEl) flashActionButton(importSourceCopyBtnEl, "失败");
+    return false;
+  }
+}
+
+async function loadImportSourceFileIntoEditor(file) {
+  if (!file || !importSourceEditorEl) return;
+  try {
+    const text = await file.text();
+    importSourceEditorEl.value = text;
+    if (importSourceTitleEl && !importSourceTitleEl.value.trim()) {
+      const base = String(file.name || "").replace(/\.[^.]+$/, "");
+      importSourceTitleEl.value = base || "会话素材";
+    }
+    setImportSourceTab("session");
+  } catch (err) {
+    appendLine(`读取文件失败: ${err}`, "error");
+  }
+}
+
+function showImportSourceGuide() {
+  appendLine("会话素材：切换至「写作 · 长篇」后，顶栏「导入素材」或 /import 打开编辑窗口。", "system");
+  appendLine("  · 范例参考：空白模板 / 《岁月》范例 → 填入编辑区", "system");
+  appendLine("  · 本会话素材：编辑后保存，可在「已入库」概览确认字数与预览", "system");
+  appendLine("  · 写事实（人物/剧情/时间线），文风规范由系统自动注入", "system");
+}
+
+async function clearSessionSourceKnowledge({ fromModal = false } = {}) {
+  const sessionId = getSessionId();
+  if (!sessionId) {
+    const msg = "无有效会话。";
+    if (fromModal) setImportSourceStatus(msg, "error");
+    else appendLine(msg, "error");
+    return false;
+  }
+  if (fromModal) {
+    setImportSourceSaving(true);
+    setImportSourceStatus("正在清空本会话素材…", "info");
+  }
+  try {
+    const res = await apiFetch(`/knowledge/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const detail = await res.text();
+      const msg = `清空失败 (${res.status})：${detail}`;
+      if (fromModal) setImportSourceStatus(msg, "error");
+      appendLine(msg, "error");
+      return false;
+    }
+    const data = await res.json();
+    const msg = `已清空本会话素材（删除 ${data.removed ?? 0} 篇）`;
+    if (fromModal) {
+      setImportSourceStatus(msg, "ok");
+      if (importSourceTitleEl) importSourceTitleEl.value = "";
+      if (importSourceEditorEl) importSourceEditorEl.value = "";
+      renderImportSourceStoredOverview(null);
+    }
+    appendLine(msg, "system");
+    return true;
+  } catch (err) {
+    const msg = `清空失败：${err}`;
+    if (fromModal) setImportSourceStatus(msg, "error");
+    appendLine(msg, "error");
+    return false;
+  } finally {
+    if (fromModal) setImportSourceSaving(false);
+  }
+}
+
 function printHelp() {
   appendLine("Commands:", "system");
   appendLine("  <text>           Run agent task (SSE stream)", "system");
@@ -5228,6 +5766,9 @@ function printHelp() {
   appendLine("  /stop-all        Stop all in-flight missions in recent task list", "system");
   appendLine("  /append <text>   Add follow-up steer without replacing current goal", "system");
   appendLine("  /session         Show current session id (also in header)", "system");
+  appendLine("  /import          Open session source editor (example + save)", "system");
+  appendLine("  /import-clear    Remove all session-scoped source material", "system");
+  appendLine("  /import-guide    Show session source import format (Chinese)", "system");
   appendLine("  /mode [auto|chat|engineering|writing]  Interaction mode (header dropdown)", "system");
   appendLine("  /help            Show this help", "system");
   appendLine("  /history         List recent tasks", "system");
@@ -5263,7 +5804,7 @@ async function handleCommand(raw) {
     return;
   }
   if (text === "/new") {
-    if (requestNewSession("/new")) {
+    if (await requestNewSession("/new")) {
       appendLine("tip: use /stop-all if you want to stop old in-flight missions", "system");
     }
     return;
@@ -5316,6 +5857,18 @@ async function handleCommand(raw) {
   }
   if (text === "/session") {
     appendLine(`session_id: ${getSessionId()}`, "system");
+    return;
+  }
+  if (text === "/import" || text === "/import-template") {
+    await openImportSourceModal({ tab: text === "/import-template" ? "example" : "session" });
+    return;
+  }
+  if (text === "/import-guide") {
+    showImportSourceGuide();
+    return;
+  }
+  if (text === "/import-clear") {
+    await clearSessionSourceKnowledge();
     return;
   }
   if (text === "/history") {
@@ -5505,6 +6058,10 @@ formEl.addEventListener("submit", async (event) => {
       await handleMissionStatusInquiry(value, { suppressUserEcho: true });
       return;
     }
+    if (isSessionSourceInquiry(value)) {
+      await sendMessage(taskId, value);
+      return;
+    }
     enqueuePendingStreamInput(value);
     return;
   }
@@ -5603,6 +6160,67 @@ if (stateDebugSourceTabsEl) {
   });
 }
 
+if (importSourceBtnEl) {
+  importSourceBtnEl.addEventListener("click", () => {
+    void openImportSourceModal({ tab: "session" });
+  });
+}
+document.querySelectorAll(".import-source-tab").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    setImportSourceTab(btn.getAttribute("data-tab") || "session");
+  });
+});
+document.querySelectorAll(".import-source-example-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    void setImportSourceExample(btn.getAttribute("data-example") || "blank");
+  });
+});
+if (importSourceUseExampleBtnEl) {
+  importSourceUseExampleBtnEl.addEventListener("click", () => applyImportSourceExampleToEditor());
+}
+if (importSourceLoadFileBtnEl && importSourceFileInputEl) {
+  importSourceLoadFileBtnEl.addEventListener("click", () => {
+    importSourceFileInputEl.value = "";
+    armImportSourceFilePickerGuard();
+    importSourceFileInputEl.click();
+  });
+  importSourceFileInputEl.addEventListener("change", async () => {
+    importSourceFilePicking = false;
+    const file = importSourceFileInputEl.files && importSourceFileInputEl.files[0];
+    if (file) await loadImportSourceFileIntoEditor(file);
+  });
+  importSourceFileInputEl.addEventListener("cancel", () => {
+    importSourceFilePicking = false;
+  });
+}
+if (importSourceCopyBtnEl) {
+  importSourceCopyBtnEl.addEventListener("click", () => {
+    void copyImportSourceContent();
+  });
+}
+if (importSourceSaveBtnEl) {
+  importSourceSaveBtnEl.addEventListener("click", () => {
+    void saveSessionSourceFromModal();
+  });
+}
+if (importSourceClearBtnEl) {
+  importSourceClearBtnEl.addEventListener("click", async () => {
+    await clearSessionSourceKnowledge({ fromModal: true });
+  });
+}
+if (importSourceCancelBtnEl) {
+  importSourceCancelBtnEl.addEventListener("click", () => closeImportSourceModal());
+}
+if (importSourceCloseBtnEl) {
+  importSourceCloseBtnEl.addEventListener("click", () => closeImportSourceModal());
+}
+if (importSourceModalEl) {
+  // Only 取消/关闭 buttons dismiss; block backdrop click & Escape light-dismiss.
+  importSourceModalEl.addEventListener("cancel", (ev) => {
+    ev.preventDefault();
+    if (importSourceFilePicking) importSourceFilePicking = false;
+  });
+}
 if (stateDebugBtnEl) {
   stateDebugBtnEl.addEventListener("click", async () => {
     await openStateDebugModal();
@@ -5657,7 +6275,7 @@ if (historyRefreshBtnEl) {
 
 if (historyNewSessionBtnEl) {
   historyNewSessionBtnEl.addEventListener("click", () => {
-    requestNewSession("侧栏");
+    void requestNewSession("侧栏");
   });
 }
 
@@ -5677,7 +6295,7 @@ if (historyListEl) {
   historyListEl.addEventListener("click", async (ev) => {
     const newInline = ev.target.closest("#history-new-session-inline");
     if (newInline) {
-      requestNewSession("侧栏");
+      await requestNewSession("侧栏");
       return;
     }
     const deleteBtn = ev.target.closest("[data-history-delete]");
