@@ -183,6 +183,10 @@ class StateStore:
         return ensure_agent_state(merged)
 
     def _save(self, state: AgentState) -> AgentState:
+        from app.services.task_tombstone import is_task_tombstoned
+
+        if is_task_tombstoned(str(state.get("task_id") or "")):
+            return state
         state = self._preserve_volatile_fields(state)
         from app.services.invariant_guard import validate
         from app.runtime.agent_state_model import validate_session_snapshot

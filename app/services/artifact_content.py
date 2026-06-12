@@ -163,6 +163,17 @@ def generate_artifact_content(
     history = payload.get("conversation_history") or state.get("conversation_history") or []
 
     chars = int(target_chars or _effective_target_chars(goal, tool_name))
+    from app.services.writing_project import (
+        chapter_char_count,
+        is_chapter_path,
+        load_project,
+        mark_chapter_continuation_needed,
+    )
+
+    project = load_project(task_id)
+    if project and is_chapter_path(task_id, filename):
+        existing_count = chapter_char_count(task_id, filename)
+        chars = max(chars, project.words_per_chapter - existing_count)
     existing_excerpt = _read_artifact_snippet(task_id, filename, state=state)
 
     profile = str(
@@ -205,9 +216,15 @@ def generate_artifact_content(
         )
     elif tool_name == "append_text_artifact":
         part = f" (part {chunk_index + 1}/{chunk_total})" if chunk_total > 1 else ""
+        word_hint = ""
+        if project and is_chapter_path(task_id, filename):
+            written = chapter_char_count(task_id, filename)
+            word_hint = (
+                f"本章目标字数：{project.words_per_chapter}。当前已写 {written} 字。"
+            )
         task_desc = (
             f"Continue the existing document {filename}{part}: write the next section, "
-            f"target ~{chars} characters (±10%). Continue immediately after "
+            f"target ~{chars} characters (±10%). {word_hint} Continue immediately after "
             "previous_artifact_excerpt; do NOT repeat existing text."
         )
     else:
@@ -222,9 +239,15 @@ def generate_artifact_content(
                 "No placeholders, no meta commentary — only the final document body."
             )
         else:
+            word_hint = ""
+            if project and is_chapter_path(task_id, filename):
+                written = chapter_char_count(task_id, filename)
+                word_hint = (
+                    f"本章目标字数：{project.words_per_chapter}。当前已写 {written} 字。"
+                )
             task_desc = (
-                f"Write the requested content for {filename}, about {chars} characters, "
-                "directly satisfying the user's goal. No filler or meta commentary."
+                f"Write the requested content for {filename}, about {chars} characters. "
+                f"{word_hint} Directly satisfy the user's goal. No filler or meta commentary."
             )
 
     user_payload = {
@@ -237,24 +260,49 @@ def generate_artifact_content(
         "conversation_history": history[-12:],
         "previous_artifact_excerpt": existing_excerpt or None,
     }
+    from app.services.story_bible import should_supplement_source_rag
     from app.services.writing_context import (
         applied_session_source_ids,
         applied_writing_guideline_ids,
         build_session_source_excerpt,
+        build_story_bible_excerpt,
         build_writing_guidelines_excerpt,
+        format_material_usage_line,
     )
 
+    bible_text, bible_chars, bible_warn = build_story_bible_excerpt(task_id)
     guidelines_excerpt = build_writing_guidelines_excerpt(state)
-    source_excerpt = build_session_source_excerpt(state)
-    if guidelines_excerpt or source_excerpt:
+    source_excerpt = ""
+    rag_segments = 0
+    bible_source_chars = len(bible_text)
+    if should_supplement_source_rag(bible_source_chars):
+        from app.services.story_bible import build_source_rag_supplement_excerpt
+
+        rag_excerpt, rag_segments = build_source_rag_supplement_excerpt(state, task_id)
+        if rag_excerpt:
+            source_excerpt = rag_excerpt
+    elif not bible_text:
+        rag_excerpt = build_session_source_excerpt(state)
+        if rag_excerpt:
+            source_excerpt = rag_excerpt
+            rag_segments = len(applied_session_source_ids(state))
+
+    if guidelines_excerpt or source_excerpt or bible_text:
         writing_ctx = dict(user_payload.get("writing_context") or {})
         if guidelines_excerpt:
             writing_ctx["writing_guidelines_excerpt"] = guidelines_excerpt
+        if bible_text:
+            writing_ctx["story_bible_excerpt"] = bible_text
         if source_excerpt:
             writing_ctx["session_source_excerpt"] = source_excerpt
         user_payload["writing_context"] = writing_ctx
     applied_guidelines = applied_writing_guideline_ids(state)
-    applied_sources = applied_session_source_ids(state)
+    applied_sources = applied_session_source_ids(state) if source_excerpt else []
+    material_usage_line = format_material_usage_line(
+        bible_chars=bible_chars,
+        rag_segment_count=rag_segments,
+        warning=bible_warn,
+    )
     from app.services.prompt_context_gateway import (
         context_governance_enabled,
         mutate_state_context_trace,
@@ -269,26 +317,63 @@ def generate_artifact_content(
 
     action_label = "修订" if is_artifact_edit_goal(goal) and existing_excerpt else "生成"
     report_status_trace("writing", f"gateway: {action_label} {filename}（约 {chars} 字）…")
-    if trace_enabled() or artifact_stream_enabled():
-        draft = stream_artifact_draft(
-            purpose="writing",
-            task_desc=task_desc,
-            user_payload=user_payload,
-            filename=filename,
-            trace_state=state,
+
+    def _draft_once(desc: str, payload: dict[str, Any]) -> str:
+        if trace_enabled() or artifact_stream_enabled():
+            draft = stream_artifact_draft(
+                purpose="writing",
+                task_desc=desc,
+                user_payload=payload,
+                filename=filename,
+                trace_state=state,
+            )
+        else:
+            draft = invoke_artifact_draft(
+                purpose="writing",
+                task_desc=desc,
+                user_payload=payload,
+                filename=filename,
+                trace_state=state,
+            )
+        if profile == "source_code":
+            return draft.content.rstrip("\n")
+        return draft.content.strip()
+
+    content = _draft_once(task_desc, user_payload)
+    if project and is_chapter_path(task_id, filename):
+        threshold = int(project.words_per_chapter * 0.7)
+        prefix = existing_excerpt.strip()
+        new_parts = [content.strip()] if content.strip() else []
+        combined = (
+            f"{prefix}\n\n{new_parts[0]}".strip() if prefix and new_parts else (new_parts[0] if new_parts else "")
         )
-    else:
-        draft = invoke_artifact_draft(
-            purpose="writing",
-            task_desc=task_desc,
-            user_payload=user_payload,
-            filename=filename,
-            trace_state=state,
-        )
-    if profile == "source_code":
-        content = draft.content.rstrip("\n")
-    else:
-        content = draft.content.strip()
+        for _seg in range(2):
+            if len(combined) >= threshold:
+                break
+            tail = combined[-800:] if len(combined) > 800 else combined
+            cont_desc = (
+                f"继续写完本章 {filename}。已有内容结尾：\n{tail}\n"
+                f"本章目标 {project.words_per_chapter} 字，当前约 {len(combined)} 字。"
+            )
+            more = _draft_once(cont_desc, user_payload)
+            if not more.strip():
+                break
+            new_parts.append(more.strip())
+            combined = f"{combined}\n\n{more.strip()}"
+        if tool_name == "append_text_artifact":
+            content = "\n\n".join(new_parts)
+        else:
+            content = combined
+        if len(combined) < threshold:
+            mark_chapter_continuation_needed(task_id, filename)
+            from app.services.writing_turn_footer import record_writing_turn_metadata
+
+            record_writing_turn_metadata(
+                state,
+                chapter_shortfall=(
+                    f"本章 {len(combined)} 字，低于目标 {project.words_per_chapter} 字。"
+                ),
+            )
     if not content or needs_generated_content(content, goal):
         raise ValueError(
             f"LLM did not return usable artifact content (adapter_source={draft.source})"
@@ -303,9 +388,13 @@ def generate_artifact_content(
         report_block(
             "writing",
             "done",
-            f"【写作完成】{filename} — {len(content)} 字\n  开头: {preview}…{guideline_note}",
+            f"【写作完成】{filename} — {len(content)} 字\n  开头: {preview}…{guideline_note}\n  {material_usage_line}",
             field="content_preview",
         )
+    from app.services.writing_turn_footer import record_writing_turn_metadata
+
+    record_writing_turn_metadata(state, material_usage_line=material_usage_line)
+
     max_bytes = settings.ARTIFACT_MAX_WRITE_BYTES
     encoded = content.encode("utf-8")
     if len(encoded) > max_bytes:

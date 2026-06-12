@@ -129,7 +129,7 @@ RAG 流程并不是每次输入都强制执行，而是由前面的规划阶段�
 
 当系统判断需要知识支撑时，才会进入检索链路。
 
-**文稿写作例外**：`manuscript_mode` 且 `writing_intent.enabled` 时，规划阶段默认 `skip_retrieval=False`，检索域含 `{writing, common}`，已上传会话素材走 `source` 域（与风格规范一并注入写作 payload，不依赖模型每回合自行 emit `retrieve`）。其余模式仍由规划 actions 与 `skip_retrieval` 决定。
+**文稿写作例外**：`manuscript_mode` 且 `writing_intent.enabled` 时，规划阶段默认 `skip_retrieval=False`，检索域含 `{writing, common}`，已上传会话素材走 `source` 域（与风格规范一并注入写作 payload，不依赖模型每回合自行 emit `retrieve`）。首轮 `kickoff_novel` 薄路径固定 `read_artifact(素材卡)` → `write_artifact(大纲)`，素材卡（Story Bible）由上传蒸馏后确定性注入生成 prompt。其余模式仍由规划 actions 与 `skip_retrieval` 决定。
 
 ---
 
@@ -389,6 +389,16 @@ RAG 的最终目标不是“找到内容”，而是“把合适的内容送进�
 推理阶段需要证据材料来支撑结果组织与内容生成。
 
 **文稿写作消费**：`domain=writing` 的召回片段经 `writing_context` 组装为 `writing_guidelines_excerpt`，`domain=source` 的会话素材组装为 `session_source_excerpt`，随写作 purpose 的 governed payload 注入生成阶段（与 `continuation_rules` 并列）；写回工具结果可附带 `applied_guidelines` / `applied_sources`（doc_id 列表）供回合摘要与归因。
+
+**素材卡与 RAG 的分工**（硬约束 vs 补充检索）：
+
+| 通道 | 时机 | 作用 |
+|---|---|---|
+| **素材卡（Story Bible）** | 上传 `domain=source` 后后台蒸馏为 `素材卡.md` | 改编要求等硬约束**确定性全文注入** prompt，不依赖向量命中 |
+| **`source` 域 RAG** | 写作回合 `skip_retrieval=False` 时 | 风格片段、会话素材补充；超长原文（>5 万字）时按大纲 query 召回细节 |
+| **薄路径读文件** | `kickoff_novel` 等算子 | playbook 显式 `read_artifact(素材卡)`，与上述注入叠加，保证规划阶段已知素材结构 |
+
+检索 0 命中但库内仍有 `source` 文档时记 `source_recall_miss`；用户可见回复尾部「本轮素材使用：素材卡 N 字 + 原文检索 M 段」。项目契约与算子细则见 `docs/arch.md` §5.2。
 
 **output_guard 与写作轮**：忠实度闸门按回合契约与 `answer_mode` 判定，而非仅凭召回域或回复措辞。写作澄清/追问/状态回合（无落盘、非严格事实问答）不跑词面重合硬 REJECT；混合 `writing+source` 召回不再误杀「请补充素材」类回复。事实问答与伪造引用仍硬拦。流程侧见 `docs/arch.md` §4.4、§5.2。
 

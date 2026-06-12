@@ -553,6 +553,9 @@ def _build_tool_params(tool_name: str, state: AgentState) -> dict[str, Any]:
             "_agent_state": state,
             **tool_params,
         }
+        writing_operator = str(payload.get("writing_operator") or "")
+        if writing_operator:
+            params["writing_operator"] = writing_operator
         if tool_name != "read_text_artifact":
             from app.services.answer_compose import normalize_code_content
 

@@ -34,6 +34,7 @@ class TaskStatus(str, Enum):
     DEAD_LETTER = "DEAD_LETTER"
     ABANDONED = "ABANDONED"
     CANCELLED = "CANCELLED"
+    TIMED_OUT = "TIMED_OUT"
 
 
 class AgentState(TypedDict):

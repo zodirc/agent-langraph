@@ -45,6 +45,67 @@ def _event_log_issues(state: AgentState) -> list[str]:
     return issues[:5]
 
 
+def _writing_structured_reflection(state: AgentState) -> dict[str, object] | None:
+    """Code-only reflection for writing turns — no reflection LLM."""
+    payload = state.get("input_payload") or {}
+    intent = payload.get("writing_intent") or {}
+    if not intent.get("enabled"):
+        return None
+
+    from app.services.writing_project import (
+        chapter_char_count,
+        expected_body_target,
+        load_project,
+    )
+
+    task_id = str(state["task_id"])
+    operator = str(payload.get("writing_operator") or "")
+    issues: list[str] = []
+    fixes: list[str] = []
+
+    expected = expected_body_target(task_id, operator) if operator else None
+    written_files: list[str] = []
+    for item in state.get("tool_results") or []:
+        if not isinstance(item, dict):
+            continue
+        tool = str(item.get("tool") or "")
+        if tool not in ("write_text_artifact", "append_text_artifact"):
+            continue
+        if str(item.get("status") or "ok") not in ("ok", "cached"):
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else {}
+        fname = str(result.get("filename") or "")
+        if fname:
+            written_files.append(fname)
+
+    if expected and written_files and expected not in written_files:
+        issues.append(f"正文写入文件不符：期望 {expected}，实际 {written_files}")
+        fixes.append(f"改写到 {expected}")
+
+    project = load_project(task_id)
+    if project and expected and expected in written_files:
+        count = chapter_char_count(task_id, expected)
+        target = project.words_per_chapter
+        if count < int(target * 0.7):
+            issues.append(f"本章 {count} 字，低于目标 {target} 字的 70%")
+            fixes.append("同轮续写本章末尾内容")
+
+    outline = project.outline if project else ""
+    if outline:
+        for fname in written_files:
+            if fname.replace("\\", "/") == outline.replace("\\", "/"):
+                issues.append(f"大纲文件被意外修改: {fname}")
+
+    return {
+        "critique": "; ".join(issues) if issues else "writing checks passed",
+        "retry_reasoning": False,
+        "retry_planning": False,
+        "issues": issues,
+        "suggested_fixes": fixes,
+        "source": "writing_structured",
+    }
+
+
 def _rule_based_reflection(state: AgentState) -> dict[str, object]:
     """Critique when LLM is disabled — driven by fact_warnings and confidence."""
     reasoning = state.get("reasoning_result") or {}
@@ -91,23 +152,27 @@ def reflection_node(state: AgentState) -> AgentState:
             "planned_route": (input_payload.get("route_audit") or {}).get("planned_route"),
         }
         user_json = json.dumps(payload, ensure_ascii=False)
-        try:
-            result = invoke_structured(
-                "reflection",
-                REFLECTION_SYSTEM,
-                user_json,
-                trace_state=state,
-            )
-            reflection = {
-                "critique": str(result.get("critique", "")),
-                "retry_reasoning": bool(result.get("retry_reasoning", False)),
-                "retry_planning": bool(result.get("retry_planning", False)),
-                "issues": list(result.get("issues") or []),
-                "suggested_fixes": list(result.get("suggested_fixes") or []),
-                "source": "llm",
-            }
-        except (ValueError, RuntimeError):
-            reflection = _rule_based_reflection(state)
+        writing_reflection = _writing_structured_reflection(state)
+        if writing_reflection is not None:
+            reflection = writing_reflection
+        else:
+            try:
+                result = invoke_structured(
+                    "reflection",
+                    REFLECTION_SYSTEM,
+                    user_json,
+                    trace_state=state,
+                )
+                reflection = {
+                    "critique": str(result.get("critique", "")),
+                    "retry_reasoning": bool(result.get("retry_reasoning", False)),
+                    "retry_planning": bool(result.get("retry_planning", False)),
+                    "issues": list(result.get("issues") or []),
+                    "suggested_fixes": list(result.get("suggested_fixes") or []),
+                    "source": "llm",
+                }
+            except (ValueError, RuntimeError):
+                reflection = _rule_based_reflection(state)
 
         if not reflection.get("issues") and not reflection.get("critique"):
             reflection = _rule_based_reflection(state)
@@ -115,7 +180,11 @@ def reflection_node(state: AgentState) -> AgentState:
         route_issues = _route_audit_issues(state)
         contract_issues = _turn_contract_issues(state)
         replan_issues = route_issues + contract_issues
-        if replan_issues and not reflection.get("retry_planning"):
+        if (
+            replan_issues
+            and not reflection.get("retry_planning")
+            and reflection.get("source") != "writing_structured"
+        ):
             reflection = {
                 **reflection,
                 "retry_planning": True,

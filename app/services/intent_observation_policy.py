@@ -160,6 +160,14 @@ def decide_intent_observation_policy(
         and not goal_is_pure_greeting(goal)
         and not goal_is_capability_inquiry(goal)
     ):
+        from app.services.writing_intent_classifier import classify_writing_operator
+
+        if classify_writing_operator(goal, state) == "kickoff_novel":
+            return IntentObservationPolicyDecision(
+                invoke_model=False,
+                reason="kickoff_novel_playbook",
+                skip_reason="novel_kickoff_thin_path",
+            )
         if (
             explicit_key
             and explicit_key not in ("auto",)
@@ -199,6 +207,20 @@ def decide_intent_observation_policy(
         )
 
     if mission_active and goal and not payload.get("confirm"):
+        from app.services.writing_intent_classifier import classify_writing_operator
+        from app.services.writing_project import writing_project_manifest_exists
+
+        task_id = str(state.get("task_id") or state.get("session_id") or "")
+        if (
+            task_id
+            and writing_project_manifest_exists(task_id)
+            and classify_writing_operator(goal, state)
+        ):
+            return IntentObservationPolicyDecision(
+                invoke_model=False,
+                reason="writing_playbook_prune",
+                skip_reason="project_manifest_operator_classified",
+            )
         return IntentObservationPolicyDecision(
             invoke_model=True,
             reason="mission_active_non_confirm",

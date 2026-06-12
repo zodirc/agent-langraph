@@ -50,12 +50,20 @@ def route_after_incremental_planning(state: AgentState) -> str:
     if _session_source_inquiry_turn(state):
         return "retrieval"
 
-    if planning_replan_needed(state) and can_planning_replan_again(state):
-        replanned = apply_planning_replan_signal(state)
+    if planning_replan_needed(state):
+        if can_planning_replan_again(state):
+            replanned = apply_planning_replan_signal(state)
+            from app.services.state_store import get_state_store
+
+            get_state_store().save(replanned)
+            return "incremental_planning"
+        from app.services.planning_retry_signals import degrade_to_writing_playbook_state
         from app.services.state_store import get_state_store
 
-        get_state_store().save(replanned)
-        return "incremental_planning"
+        degraded = degrade_to_writing_playbook_state(state)
+        if degraded is not None:
+            get_state_store().save(degraded)
+            return "incremental_planning"
 
     if graph_turn_had_fatal_error(state):
         return _failed_route(state, "incremental_planning")

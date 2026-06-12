@@ -121,6 +121,12 @@ class Settings:
                 timeout_by_purpose.get("routing", min(20, self.MODEL_TIMEOUT)),
             )
         )
+        self.MODEL_TIMEOUT_PLANNING = int(
+            timeout_by_purpose.get("planning", self.MODEL_TIMEOUT)
+        )
+        self.MODEL_TIMEOUT_REFLECTION = int(
+            timeout_by_purpose.get("reflection", self.MODEL_TIMEOUT)
+        )
         self.MODEL_MAX_RETRIES = int(model.get("max_retries", 3))
         purpose_tokens = model.get("max_tokens_by_purpose", {})
         if not isinstance(purpose_tokens, dict):
@@ -743,6 +749,9 @@ class Settings:
         self.GRAPH_RUNNER_MAX_CONCURRENT = int(graph_runner_cfg.get("max_concurrent", 8))
         self.GRAPH_RUNNER_QUEUE_TIMEOUT_SEC = float(
             graph_runner_cfg.get("queue_timeout_sec", 30)
+        )
+        self.GRAPH_RUNNER_TURN_WALL_CLOCK_BUDGET_SEC = int(
+            graph_runner_cfg.get("turn_wall_clock_budget_sec", 480)
         )
 
         llm_cb = raw.get("llm", {})

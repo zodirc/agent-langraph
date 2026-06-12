@@ -237,6 +237,28 @@ def _retrieval_node_body(state: AgentState) -> AgentState:
         from app.services.context_registry import persist_retrieval_context
 
         updated = persist_retrieval_context(updated, knowledge=knowledge, memories=memories)
+        source_hits = [
+            h
+            for h in knowledge
+            if isinstance(h, dict)
+            and str((h.get("metadata") or {}).get("domain") or h.get("domain") or "")
+            .lower()
+            == "source"
+        ]
+        from app.services.session_scope import log_source_recall_miss_if_needed
+
+        log_source_recall_miss_if_needed(
+            session_id,
+            domains=domains,
+            source_hit_count=len(source_hits),
+        )
+        if "source" in domains and not source_hits:
+            from app.services.reasoning_trace import report_status_trace
+
+            report_status_trace(
+                "retrieval",
+                "source_recall_miss: 会话存在 source 素材但本轮检索 0 命中（请检查素材卡注入）",
+            )
         # 检索 trace 由 graph_runner.trace_after_node(retrieval) 统一发出，避免重复
         get_state_store().save(updated)
         return updated

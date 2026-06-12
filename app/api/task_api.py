@@ -199,19 +199,38 @@ def list_tasks(
 @router.delete("/{task_id}", response_model=TaskDeleteResponse)
 def delete_task(
     task_id: str,
-    _principal: AuthPrincipal = Depends(require_task_access_dep),
+    principal: AuthPrincipal = Depends(get_current_principal),
 ) -> TaskDeleteResponse:
-    stored = get_state_store().load(task_id, read_only=True)
-    if not stored:
-        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
-    session_turn_hint = int(stored.get("session_turn") or 1)
+    import time
 
-    deleted = get_state_store().delete_task(task_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    from app.api.tenant_access import assert_task_access
+    from app.services.task_control import request_cancel
+    from app.services.task_tombstone import mark_task_tombstone
+
+    stored = get_state_store().load(task_id, read_only=True)
+    if stored:
+        assert_task_access(principal, task_id)
+
+    try:
+        request_cancel(task_id, requested_by="delete_api", reason="task_deleted")
+    except Exception:
+        pass
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        from app.services.graph_run_registry import is_graph_run_active
+
+        if not is_graph_run_active(task_id):
+            break
+        time.sleep(0.1)
+
+    session_turn_hint = int(stored.get("session_turn") or 1) if stored else 1
+
+    if stored:
+        get_state_store().delete_task(task_id)
 
     from app.services.task_cleanup import purge_task_remains
 
+    mark_task_tombstone(task_id)
     purge_task_remains(task_id, session_turn_hint=session_turn_hint)
     return TaskDeleteResponse(task_id=task_id, deleted=True)
 
@@ -389,8 +408,6 @@ def stop_task(
     """
     try:
         control = get_graph_runner().pause_task(task_id, reason="user requested stop")
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -416,14 +433,11 @@ def interrupt_task_stream(
     _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> TaskControlResponse:
     """Stop SSE output only; task continues in background."""
-    try:
-        result = get_graph_runner().interrupt_task_stream(
-            task_id,
-            requested_by=request.requested_by,
-            reason=request.reason,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    result = get_graph_runner().interrupt_task_stream(
+        task_id,
+        requested_by=request.requested_by,
+        reason=request.reason,
+    )
     return TaskControlResponse(**result)
 
 
@@ -434,15 +448,12 @@ def pause_task(
     _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> TaskControlResponse:
     """Request task pause at next safe checkpoint."""
-    try:
-        result = get_graph_runner().pause_task(
-            task_id,
-            requested_by=request.requested_by,
-            reason=request.reason,
-            worker_id=request.worker_id,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    result = get_graph_runner().pause_task(
+        task_id,
+        requested_by=request.requested_by,
+        reason=request.reason,
+        worker_id=request.worker_id,
+    )
     return TaskControlResponse(**result)
 
 
@@ -453,15 +464,12 @@ def cancel_task(
     _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> TaskControlResponse:
     """Cancel task; discard uncommitted step buffer, keep committed artifacts."""
-    try:
-        result = get_graph_runner().cancel_task(
-            task_id,
-            requested_by=request.requested_by,
-            reason=request.reason,
-            worker_id=request.worker_id,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    result = get_graph_runner().cancel_task(
+        task_id,
+        requested_by=request.requested_by,
+        reason=request.reason,
+        worker_id=request.worker_id,
+    )
     return TaskControlResponse(**result)
 
 
@@ -473,15 +481,12 @@ def pause_worker(
     _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> TaskControlResponse:
     """Request pause for a specific OMAW worker scope."""
-    try:
-        result = get_graph_runner().pause_task(
-            task_id,
-            requested_by=request.requested_by,
-            reason=request.reason,
-            worker_id=worker_id,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    result = get_graph_runner().pause_task(
+        task_id,
+        requested_by=request.requested_by,
+        reason=request.reason,
+        worker_id=worker_id,
+    )
     return TaskControlResponse(**result)
 
 
@@ -493,15 +498,12 @@ def cancel_worker(
     _principal: AuthPrincipal = Depends(require_task_access_dep),
 ) -> TaskControlResponse:
     """Cancel a specific OMAW worker scope."""
-    try:
-        result = get_graph_runner().cancel_task(
-            task_id,
-            requested_by=request.requested_by,
-            reason=request.reason,
-            worker_id=worker_id,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    result = get_graph_runner().cancel_task(
+        task_id,
+        requested_by=request.requested_by,
+        reason=request.reason,
+        worker_id=worker_id,
+    )
     return TaskControlResponse(**result)
 
 

@@ -43,6 +43,10 @@ class CancelRequested(Exception):
     """Cancel requested; not a dead letter."""
 
 
+class OperationCancelled(CancelRequested):
+    """Hard cancel observed inside an LLM stream (chunk boundary)."""
+
+
 # Step kinds that allow partial commit at paragraph/section boundaries
 _PARTIAL_COMMIT_KINDS = frozenset({"append_body", "write_outline"})
 
@@ -340,12 +344,20 @@ def finalize_control_outcome(state: AgentState, control: TaskControl | None) -> 
     cancelled = bool((control and control.cancel_requested) or ctx.get("cancel_requested"))
 
     if cancelled:
+        reason = str(
+            (control.reason if control else None)
+            or (ctx.get("last_control_event") or {}).get("reason")
+            or ""
+        )
+        status = TaskStatus.CANCELLED.value
+        if "turn_wall_clock_budget" in reason:
+            status = TaskStatus.TIMED_OUT.value
         updated = merge_state(
             state,
-            status=TaskStatus.CANCELLED.value,
+            status=status,
             mission_control={
                 "pause_reason": PAUSE_USER_REQUESTED_CANCEL,
-                "reason": control.reason if control else ctx.get("last_control_event", {}).get("reason"),
+                "reason": reason,
                 "at": _now_iso(),
             },
         )
@@ -536,11 +548,17 @@ def handle_control_exception(state: AgentState, exc: BaseException) -> AgentStat
             mission_control={"pause_reason": PAUSE_USER_REQUESTED_PAUSE, "reason": str(exc)},
             audit_log=append_audit(state, "task_control", "task_pause_observed", {"detail": str(exc)}),
         )
-    if isinstance(exc, CancelRequested):
+    if isinstance(exc, (CancelRequested, OperationCancelled)):
         observe_control_executed(str(state["task_id"]), snapshot_task_control(str(state["task_id"])), started_at_iso=None, event="cancel")
+        ctx = ensure_interrupt_context(state)
+        ctx["runtime_state"] = "ABORTED"
+        status = TaskStatus.CANCELLED.value
+        if isinstance(exc, OperationCancelled):
+            status = TaskStatus.CANCELLED.value
         return merge_state(
             state,
-            status=TaskStatus.CANCELLED.value,
+            status=status,
+            interrupt_context=ctx,
             mission_control={"pause_reason": PAUSE_USER_REQUESTED_CANCEL, "reason": str(exc)},
             audit_log=append_audit(state, "task_control", "task_cancel_observed", {"detail": str(exc)}),
         )

@@ -63,6 +63,28 @@ def build_writing_guidelines_excerpt(
     return "\n\n---\n\n".join(parts)
 
 
+def build_story_bible_excerpt(task_id: str) -> tuple[str, int, str | None]:
+    """Read 素材卡.md deterministically (not via RAG)."""
+    from app.services.story_bible import read_story_bible
+
+    return read_story_bible(task_id)
+
+
+def format_material_usage_line(
+    *,
+    bible_chars: int,
+    rag_segment_count: int,
+    warning: str | None = None,
+) -> str:
+    parts = [f"素材卡 {bible_chars:,} 字"]
+    if rag_segment_count:
+        parts.append(f"原文检索 {rag_segment_count} 段")
+    line = "本轮素材使用：" + " + ".join(parts)
+    if warning:
+        return f"{warning}\n{line}"
+    return line
+
+
 def build_session_source_excerpt(
     state: Mapping[str, Any] | dict[str, Any],
     *,

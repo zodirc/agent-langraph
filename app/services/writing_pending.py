@@ -92,7 +92,13 @@ def apply_confirm_pending_delivery(
     out["interaction_goal_confidence"] = max(
         float(out.get("interaction_goal_confidence") or 0.0), 0.85
     )
-    out["force_write_after_reads"] = operator in ("kickoff_body", "append", "rewrite", "polish")
+    out["force_write_after_reads"] = operator in (
+        "kickoff_body",
+        "kickoff_novel",
+        "append",
+        "rewrite",
+        "polish",
+    )
     out.pop("pending_writing_delivery", None)
     out["pending_writing_delivery_consumed"] = pending
     intent = dict(out.get("writing_intent") or prior_payload.get("writing_intent") or {})

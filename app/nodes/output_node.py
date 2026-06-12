@@ -56,6 +56,9 @@ def output_node(state: AgentState) -> AgentState:
                 str(reasoning.get("summary") or ""),
                 structured_body,
             ) or "No reasoning summary available."
+            from app.services.writing_turn_footer import append_writing_footer
+
+            answer = append_writing_footer(answer, state)
             retrieved = state.get("retrieved_knowledge") or []
             if settings.RAG_CITATION_ENABLED and retrieved and "[" not in answer:
                 refs = " ".join(

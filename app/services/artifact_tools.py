@@ -82,14 +82,23 @@ def is_text_artifact_filename(filename: str) -> bool:
 
 
 def _safe_filename(filename: str) -> str:
-    name = Path(filename).name.strip()
-    if not name or name in (".", ".."):
+    """Return a safe artifact-relative path (supports one subdir, e.g. 正文/第001章.md)."""
+    raw = str(filename or "").replace("\\", "/").strip().lstrip("/")
+    if not raw:
         raise ValueError("Invalid filename")
+    parts = [p for p in raw.split("/") if p and p not in (".", "..")]
+    if not parts or any(part in (".", "..") for part in parts):
+        raise ValueError("Invalid filename")
+    if len(parts) > 2:
+        raise ValueError("Artifact path too deep")
+    name = parts[-1]
     suffix = Path(name).suffix.lower()
     if suffix not in _ALLOWED_EXTENSIONS:
         allowed = ", ".join(sorted(_ALLOWED_EXTENSIONS))
         raise ValueError(f"Extension not allowed. Use one of: {allowed}")
-    return name
+    if len(parts) == 1:
+        return name
+    return f"{parts[0]}/{name}"
 
 
 def _check_size(content: str, existing_bytes: int = 0) -> None:
@@ -139,8 +148,57 @@ def _assert_write_allowed(params: dict[str, Any]) -> None:
         raise RunCancelled("artifact write rejected: run inactive or superseded")
 
 
+_BODY_WRITE_OPS = frozenset({"append", "kickoff_body"})
+_OUTLINE_TARGET_RE = re.compile(r"(?i)(大纲|outline)")
+
+
+def _guard_body_write_target(params: dict[str, Any]) -> dict[str, Any] | None:
+    """Reject body operators targeting outline files (hard safety rail)."""
+    if params.get("_chapter_path_retry"):
+        return None
+    operator = str(params.get("writing_operator") or "")
+    if operator not in _BODY_WRITE_OPS:
+        return None
+    filename = str(params.get("filename") or "")
+    if _OUTLINE_TARGET_RE.search(filename):
+        return {
+            "status": "error",
+            "error_code": "body_write_targets_outline",
+            "message": f"正文写入目标不能是大纲文件: {filename}",
+            "filename": filename,
+        }
+    return None
+
+
+def _retry_body_write_with_chapter_path(
+    params: dict[str, Any],
+    *,
+    write_fn,
+) -> dict[str, Any]:
+    """On outline-target guard failure, retry once with project chapter path."""
+    task_id = str(params.get("task_id") or "")
+    operator = str(params.get("writing_operator") or "")
+    from app.services.writing_project import load_project, resolve_body_target
+
+    if not task_id or not load_project(task_id):
+        return write_fn(params)
+    alt = resolve_body_target(task_id, "", operator=operator)
+    if not alt or alt == params.get("filename"):
+        return {
+            "status": "error",
+            "error_code": "body_write_targets_outline",
+            "message": "正文写入目标不能是大纲文件",
+            "filename": str(params.get("filename") or ""),
+        }
+    retry_params = {**params, "filename": alt, "_chapter_path_retry": True}
+    return write_fn(retry_params)
+
+
 def handle_write_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
     _assert_write_allowed(params)
+    guard = _guard_body_write_target(params)
+    if guard:
+        return _retry_body_write_with_chapter_path(params, write_fn=handle_write_text_artifact)
     task_id = str(params["task_id"])
     filename = _safe_filename(str(params["filename"]))
     content = str(params.get("content", ""))
@@ -150,6 +208,9 @@ def handle_write_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
     if not chunks:
         _check_size(content, existing_bytes=0)
         path.write_text(content, encoding="utf-8")
+        from app.services.writing_project import post_chapter_write_update
+
+        post_chapter_write_update(task_id, filename, char_count=len(content))
         return {
             "path": str(path),
             "filename": filename,
@@ -167,6 +228,9 @@ def handle_write_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
         existing_bytes += len(chunk.encode("utf-8"))
     final_content = "\n\n".join(part for part in assembled_parts if part)
     path.write_text(final_content, encoding="utf-8")
+    from app.services.writing_project import post_chapter_write_update
+
+    post_chapter_write_update(task_id, filename, char_count=len(final_content))
     return {
         "path": str(path),
         "filename": filename,
@@ -179,6 +243,9 @@ def handle_write_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
 
 def handle_append_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
     _assert_write_allowed(params)
+    guard = _guard_body_write_target(params)
+    if guard:
+        return _retry_body_write_with_chapter_path(params, write_fn=handle_append_text_artifact)
     task_id = str(params["task_id"])
     filename = _safe_filename(str(params["filename"]))
     content = str(params.get("content", ""))
@@ -193,6 +260,9 @@ def handle_append_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
                 handle.write("\n\n")
             handle.write(content)
         total = path.read_text(encoding="utf-8")
+        from app.services.writing_project import post_chapter_write_update
+
+        post_chapter_write_update(task_id, filename, char_count=len(total))
         return {
             "path": str(path),
             "filename": filename,
@@ -213,6 +283,9 @@ def handle_append_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
             handle.write(chunk)
             current_bytes += len(chunk.encode("utf-8"))
     total = path.read_text(encoding="utf-8")
+    from app.services.writing_project import post_chapter_write_update
+
+    post_chapter_write_update(task_id, filename, char_count=len(total))
     return {
         "path": str(path),
         "filename": filename,

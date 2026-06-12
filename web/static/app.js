@@ -1764,9 +1764,26 @@ async function forceTerminateTask(taskId, { hadClientStream = false, announce = 
         body: JSON.stringify({ reason: "user_requested", requested_by: "web" }),
       });
       lastRes = res;
-      if (res.ok || res.status === 404) break;
+      if (res.ok) break;
+      if (res.status === 404) break;
     } catch {
       /* try next endpoint */
+    }
+  }
+
+  if (lastRes?.ok) {
+    let ctrl = {};
+    try {
+      ctrl = await lastRes.json();
+    } catch {
+      ctrl = {};
+    }
+    if (ctrl.outcome === "already_gone" || ctrl.status === "not_found") {
+      clearLocalTaskLiveState(tid);
+      if (announce) appendLine("任务已不存在，已从列表移除。", "system");
+      if (isCurrent) await afterClientStreamEnded(tid, { detached: hadStream, reason: "user_stop" });
+      await refreshHistorySidebar();
+      return true;
     }
   }
 
@@ -1774,6 +1791,7 @@ async function forceTerminateTask(taskId, { hadClientStream = false, announce = 
     clearLocalTaskLiveState(tid);
     if (announce) appendLine("任务不存在或已结束。", "system");
     if (isCurrent) await afterClientStreamEnded(tid, { detached: hadStream, reason: "user_stop" });
+    await refreshHistorySidebar();
     return true;
   }
 
@@ -2079,7 +2097,7 @@ async function deleteHistoryTask(taskId) {
       method: "DELETE",
       headers: getAuthHeaders(),
     });
-    if (!res.ok) {
+    if (!res.ok && res.status !== 404) {
       appendLine(`delete failed: ${res.status}`, "error");
       return;
     }
@@ -5551,6 +5569,28 @@ function closeImportSourceModal() {
   }
 }
 
+async function pollStoryBibleReady(sessionId, { attempts = 15, intervalMs = 2000 } = {}) {
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const res = await apiFetch(`/knowledge/sessions/${encodeURIComponent(sessionId)}/story-bible`);
+      if (!res.ok) break;
+      const body = await res.json();
+      if (body.ready && body.chars > 0) {
+        appendLine(`素材卡已生成（${body.chars} 字）`, "system");
+        return body;
+      }
+      if (!body.pending && body.status === "failed") {
+        appendLine("素材卡生成失败，可稍后手动编辑 素材卡.md。", "error");
+        return body;
+      }
+    } catch {
+      break;
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return null;
+}
+
 async function saveSessionSourceFromModal() {
   const sessionId = getSessionId();
   if (!sessionId) {
@@ -5586,7 +5626,10 @@ async function saveSessionSourceFromModal() {
       appendLine(msg, "error");
       return false;
     }
-    await res.json();
+    const upsertBody = await res.json();
+    if (upsertBody.story_bible_distillation === "started") {
+      pollStoryBibleReady(sessionId);
+    }
     const savedDoc = await fetchSessionSourceDocument(sessionId);
     if (savedDoc) {
       if (importSourceTitleEl) importSourceTitleEl.value = String(savedDoc.title || title);

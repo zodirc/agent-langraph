@@ -22,8 +22,13 @@ model:
   timeout_by_purpose:
     routing: 20
     intent_observation: 20
+    planning: 45
+    reflection: 30
   timeout: 120
   max_retries: 2
+
+graph_runner:
+  turn_wall_clock_budget_sec: 480
 
 storage:
   # Docker 默认走 compose 内 PostgreSQL；本地无 Docker 时可设 STORAGE_BACKEND=sqlite

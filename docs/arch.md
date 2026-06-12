@@ -158,6 +158,8 @@
 
 **前端展示**：前端只渲染后端投影的执行状态和阶段，不依赖本地猜测来决定当前任务处于什么流程。
 
+**硬取消与幂等控制**：`pause`/`cancel` 对 state store 中已不存在的任务返回 HTTP 200 + `outcome=already_gone`；`DELETE` 幂等并 `purge_task_remains`，写入 tombstone 丢弃迟到写入。`invoke_structured` 在 chunk 边界检查取消位并可硬断流；`graph_runner.turn_wall_clock_budget_sec` 超时将任务标为 `TIMED_OUT` 并推送可读失败事件。写作长回合详见 §5.2。
+
 ### 2.8 L1 分类与薄执行
 
 **分类只算一次。** 用户消息进入后，系统会先合并当前会话信息、最近轮次结果和必要上下文，再完成事件分类。后续所有控制分支读取同一份分类结果，避免不同阶段对同一输入得出不同语义。
@@ -448,16 +450,17 @@
 
 规划节点在调用规划 LLM 之前，先完成 **pre_planning**（意图观测、路由审计种子、`target_mode` 与模式契约），再按下列顺序短路（详见 `docs/agentic_artifact_editing_plan.md`）：
 
-**意图观测（intent_observation）与模式冻结。** L2 分类模型仅在 `auto`、低置信或歧义场景调用；UI 显式模式且结构化 `inferred_kind` 与模式对齐、置信达标时走结构化观测（不调模型），并补齐 `interaction_goal=delivery` 等字段。单轮 intent 快照冻结后，`mode_freeze` 阻止 route_audit 二次解析把手稿模式振荡到 `qa_mode`（高置信 + 审计对齐时保留 `target_mode`）；二次 mode resolution 仍尊重显式 UI 模式。L2 调用另有进程内 wall-clock 超时（`MODEL_TIMEOUT_INTENT_OBSERVATION`，默认 ≤20s），超时回退结构化观测。
+**意图观测（intent_observation）与模式冻结。** L2 分类模型仅在 `auto`、低置信或歧义场景调用；UI 显式模式且结构化 `inferred_kind` 与模式对齐、置信达标时走结构化观测（不调模型），并补齐 `interaction_goal=delivery` 等字段。首轮 `kickoff_novel` 算子命中时亦跳过 L2（`skip_reason=novel_kickoff_thin_path`）。单轮 intent 快照冻结后，`mode_freeze` 阻止 route_audit 二次解析把手稿模式振荡到 `qa_mode`（高置信 + 审计对齐时保留 `target_mode`）；二次 mode resolution 仍尊重显式 UI 模式。L2 调用另有进程内 wall-clock 超时（`MODEL_TIMEOUT_INTENT_OBSERVATION`，默认 ≤20s），超时回退结构化观测。
 
 | 路径 | 触发条件 | 产出 | 说明 |
 |---|---|---|---|
 | **产物编辑薄路径** | `detect_artifact_edit_intent` 且单文件可解析 | `read_artifact` → `write_artifact`；`thin_execution_profile=artifact_edit` | 跳过高成本规划 LLM；`pin_mode=False` 避免 route_audit 后工具被钉回无工具态 |
 | **QA 薄路径** | `qa_mode` 且 `goal_is_conversational_qa` 且非产物编辑 | `answer` only；`thin_execution_profile=qa_direct` | 寒暄/短闲聊，无工具 |
 | **工程薄路径** | `engineering_mode` 且规则判定可跳过规划 LLM | `run_code` + 工程工具集 | 交付类任务 |
-| **完整 LLM 规划** | 以上皆不满足（含多产物润色） | 结构化 `actions` + `planned_actions` | 规划上下文含 `artifact_manifest`；多文件时由模型具名 `filename` |
+| **写作 playbook 薄路径** | `classify_writing_operator` 命中且 `project.json` 存在 | 算子固定 `planned_actions`；`thin_execution_profile=writing_playbook` | 跳过高成本规划 LLM；含 `kickoff_novel` / `kickoff_body` 等；`skip_retrieval=False`（写作域检索仍执行）；细则见 §5.2 |
+| **完整 LLM 规划** | 以上皆不满足（含多产物润色、已有实质大纲时的开放式起稿） | 结构化 `actions` + `planned_actions` | 规划上下文含 `artifact_manifest`；多文件时由模型具名 `filename`；超时 45s，写作可降级 playbook |
 
-手稿**交付/编辑类短句**（如「开始写正文」「写第一章」「改大纲」）经 `goal_is_writing_manuscript_action` 识别，不再被「≤16 字」兜底误判为闲聊；`manuscript_mode` 下也不会因此被切到 `qa_mode`。纯寒暄、进度询问仍为 QA。显式 UI 模式（工程/写作）仅在 `explicit_mode_should_apply` 为真时覆盖 `target_mode`（例如工程 UI 下的「你好」仍走 `qa_mode`）。是否真的走产物编辑薄路径仍要求会话内**已有磁盘产物**。
+手稿**交付/编辑类短句**（如「写一篇小说」「基于素材写小说」「开始写正文」「写第一章」「改大纲」）经 `goal_is_writing_manuscript_action` 识别，不再被「≤16 字」兜底误判为闲聊；`manuscript_mode` 下也不会因此被切到 `qa_mode`。纯寒暄、进度询问仍为 QA。显式 UI 模式（工程/写作）仅在 `explicit_mode_should_apply` 为真时覆盖 `target_mode`（例如工程 UI 下的「你好」仍走 `qa_mode`）。产物编辑薄路径仍要求会话内**已有磁盘产物**；首轮起稿走 `kickoff_novel` 时要求大纲仍为占位（`outline_needs_kickoff()`）。
 
 多产物时从 goal 关键词（如「故事」「散文」）匹配 `artifact_manifest` 文件名，仍可走 `read_artifact → write_artifact` 薄路径。LLM 规划若 plan 含「保存/写回」但 actions 仅有 read，规划节点自动补 `write_artifact`；连续 3 次只读且尚未写回时：产物编辑场景收敛闸触发 `artifact_edit_needs_write` 再规划写回；`manuscript_mode` 且 `writing_intent` 有效时则发 `NEXT_FORCE_WRITE` 强制写动作（不耗 replan 配额），避免 read-loop 提前 finalize 导致回合 `PAUSED`。`writing_false_promise`（口头承诺即将写入同时索要确认）同样触发 `force_write`；用户 `confirm` 或纯确认话术在存在 `pending_writing_delivery` 时继承上一轮算子与 goal。路由审计对 `writing_intent.enabled` 且计划无写入动作的情形标 `aligned=false`，驱动 replan。
 
@@ -918,6 +921,7 @@ budget ≈ clamp(200000 × 0.6 − 8192, 12000, 160000) ≈ 111808
 
   | 算子 | 典型意图 | Playbook |
   |---|---|---|
+  | `kickoff_novel` | 首轮开写 / 基于素材写小说（大纲仍为占位） | `read_artifact(素材卡)` → `write_artifact(大纲)` |
   | `kickoff_body` | 大纲完成后开写正文 / 写第一章 | `read_artifact(大纲)` → `write_artifact(正文)` |
   | `replot` | 改大纲、调剧情 | `read_artifact(大纲)` → `write_artifact(大纲)` |
   | `append` | 续写下一章 | `append_text_artifact(正文)` |
@@ -926,8 +930,85 @@ budget ≈ clamp(200000 × 0.6 − 8192, 12000, 160000) ≈ 111808
 - **pending 与确认**：模型因缺素材等做**真实追问**时记录 `pending_writing_delivery`；用户 `confirm` 或「确认/好的」继承算子与 goal 并 `force_write`，避免空转确认轮
 - **回合契约**：交付轮须落盘或真实追问收尾；读满 3 次仍无写计划 → `NEXT_FORCE_WRITE`（见 §4.4）；`replot` 仅约束大纲文件，不强制写正文
 - **写作生成（LLM gateway）**：Thinking 模式不支持 `tool_choice` 时自动改 `json_text`（`{"content":...}`）输出；占位符（含「推理模块」「根据大纲生成」等）不直接落盘，强制走 gateway 重新生成
-- **RAG 注入**：写作回合默认开检索（域 `{writing, common}`，会话素材可为 `source`）；`writing_context` 组装 guidelines / session excerpt；写回可记录 `applied_guidelines` / `applied_sources` 归因（详见 `docs/rag_skills.md` §3.1、§5.2）
+- **RAG 注入**：写作回合默认开检索（域 `{writing, common}`，会话素材可为 `source`）；`writing_context` 组装 guidelines / session excerpt；写回可记录 `applied_guidelines` / `applied_sources` 归因（详见 `docs/rag_skills.md` §4.1、§5.2）
 - 工程工具被契约过滤；与 `qa_mode` 共用 Action 词汇表（`read_artifact` / `write_artifact` / `edit_artifact`）
+
+### 写作项目契约（`writing_project`）
+
+长文写作在产物目录内维护权威清单 `data/artifacts/{task_id}/project.json`，固定布局，避免「仅有大纲文件时把大纲当正文」等启发式歧义。
+
+```json
+{
+  "kind": "novel",
+  "outline": "大纲.md",
+  "bible": "素材卡.md",
+  "chapters_dir": "正文",
+  "chapter_pattern": "第{n:03d}章.md",
+  "next_chapter": 1,
+  "words_per_chapter": 3000,
+  "current_chapter_incomplete": false
+}
+```
+
+- **首次进入 `manuscript_mode`**：`apply_manuscript_mode_contract` 调用 `ensure_writing_project()`，创建 `大纲.md`（占位）、`素材卡.md`、`正文/` 与 `project.json`（纯本地操作）。
+- **文件名解析**：`resolve_body_target` / `resolve_outline_target` 以 `project.json` 为准；`append` / `kickoff_body` 写入 `正文/第{n:03d}章.md`；`replot` 仅写 `outline` 字段；无 manifest 的旧会话走 `migrate_legacy_layout()` 惰性迁移。
+- **正文写保护**：`artifact_tools` 在 `writing_operator ∈ {append, kickoff_body}` 且目标路径含 `大纲`/`outline` 时拒绝写入（`body_write_targets_outline`），由 playbook 按 `chapter_pattern` 重试。
+- **大纲占位判定**：`outline_needs_kickoff()` 区分自动占位大纲与已有实质内容（非标题正文 ≥80 字或全文 ≥400 字），供 `kickoff_novel` 算子命中与否使用。
+
+### 素材卡（Story Bible）
+
+用户上传 `domain=source` 的改编素材后，后台异步蒸馏（`purpose=summarization`）为 `素材卡.md`（≤2500 字，含改编要求/人物/情节点/世界观等章节）；UI 轮询 `GET /knowledge/sessions/{id}/story-bible` 展示「素材卡已生成（N 字）」。
+
+- **确定性注入**：`artifact_content.generate_artifact_content()` 直接读取 `素材卡.md` 全文写入写作 prompt（不经向量检索）；素材原文超长（>5 万字）时，以当前章节/大纲为 query 对 `source` 域做 RAG 补充。
+- **可观测性**：`final_answer` 尾部输出「本轮素材使用：素材卡 N 字 + 原文检索 M 段」；检索 0 命中但库内存在 `source` 文档时记 `source_recall_miss` 指标。
+
+硬约束（改编要求等）要求 100% 进 prompt，故以文件注入为主、RAG 为辅。RAG 与写作 payload 组装细节见 `docs/rag_skills.md` §5.2。
+
+### 算子分类与薄路径（`kickoff_novel` 等）
+
+`writing_intent_classifier` 用正则将 goal 映射为 7 类算子；`planning_node` 在调用规划 LLM **之前**（§4.2 写作 playbook 薄路径）若算子命中且 `project.json` 存在，则 `apply_writing_playbook` 产出固定 `planned_actions`（`audit_action=writing_playbook_thin`，`skip_retrieval=False`）。未命中时才走全量规划 LLM；规划结果仍可由 `classify_and_apply_playbook` 在后段归一化。
+
+**`kickoff_novel`（首轮起纲）** — 解决「基于现有素材写一篇小说」等开放式首轮目标卡在规划 LLM 的问题：
+
+| 项 | 说明 |
+|---|---|
+| 典型话术 | 「写一篇小说」「基于素材写小说」「我们来写个小说」等 |
+| 命中条件 | 手稿路由上下文（`manuscript_mode` 或 `route_audit.inferred_kind` 为 manuscript/writing）且 `outline_needs_kickoff()` 为真 |
+| Playbook | `read_artifact(素材卡.md)` → `write_artifact(大纲.md)` |
+| 意图观测 | turn1 命中时跳过 L2（`skip_reason=novel_kickoff_thin_path`） |
+| 不命中时 | 大纲已有实质内容、或非手稿上下文 → 落入全量规划 LLM |
+
+`kickoff_body` 优先于 `kickoff_novel`（「开始写正文」「写第一章」等走正文起稿，不走起纲）。
+
+mission 活跃且 `project.json` 存在且算子已分类时，意图观测亦走 `writing_playbook_prune` 跳过 L2。
+
+### 规划延迟、反思与重规划
+
+- **规划 / 反思超时**：`config.yaml` → `model.timeout_by_purpose` 中 `planning: 45`、`reflection: 30`（秒）；规划超时对写作算子降级为 playbook，否则 `answer` 单动作兜底。
+- **重规划预算**：`planning_revision_count` 全轮共享，上限 1；`route_audit` 与 `plan_validator` 不再叠乘独立计数；超限 `degrade_to_writing_playbook_state` 继续执行而非失败。
+- **写作轮反思**：`writing_intent.enabled` 时 `reflection_node` 走结构化检查（目标文件、字数、大纲是否被误改），替代 reflection LLM；失败时给出确定性修正而非整条链 `retry_planning`。
+
+### 章节字数契约
+
+- `project.json.words_per_chapter` 默认 3000，可从 goal 解析（如「每章五千字」）。
+- 生成 prompt 注入本章目标字数与当前已写字数；章末 `len(text)` &lt; 70% 目标时**同轮**最多续写 2 次并追加同一章文件；未达标则 `current_chapter_incomplete` 保持，`append` 续当前章而非开新章。
+- 回复尾部可提示「本章 X 字，低于目标 Y 字」。
+
+### 写作回合延迟预算（参考）
+
+| 场景 | 目标 P50 | 目标 P95 | LLM 调用数 |
+|---|---|---|---|
+| 闲聊 / QA 薄路径 | &lt;2s | &lt;5s | 0~1 |
+| 素材问答 | &lt;6s | &lt;12s | 1 |
+| 首轮起纲（`kickoff_novel`） | &lt;15s | &lt;60s | 1（生成写大纲） |
+| 续写一章（~3000 字） | &lt;60s | &lt;120s | 1（生成）+0~1（观测） |
+| 首轮起稿（薄路径未命中） | &lt;90s | &lt;150s | 2（规划 45s 封顶 + 生成） |
+| 取消生效 | &lt;1s | &lt;3s | — |
+| 单轮绝对上限（看门狗） | — | 480s | — |
+
+验收用例：`tests/services/test_kickoff_novel.py`（起纲薄路径）、`tests/services/test_writing_overhaul_acceptance.py`（素材注入、取消、删除幂等等）。
+
+配置汇总：`mode_contracts.manuscript_mode`、`intent_observation`、`model.timeout_by_purpose`、`graph_runner.turn_wall_clock_budget_sec`（默认 480，超时 `TIMED_OUT`）。
 
 ## 5.3 工程执行模式
 

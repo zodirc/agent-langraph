@@ -551,6 +551,10 @@ def _resolve_model_name(
 
 
 def _timeout_for_purpose(purpose: str) -> int:
+    if purpose == "planning":
+        return int(getattr(settings, "MODEL_TIMEOUT_PLANNING", settings.MODEL_TIMEOUT))
+    if purpose == "reflection":
+        return int(getattr(settings, "MODEL_TIMEOUT_REFLECTION", settings.MODEL_TIMEOUT))
     if purpose in ("routing", "session_turn", "intent_observation"):
         if purpose == "intent_observation":
             return int(
@@ -877,18 +881,68 @@ def invoke_structured(
 
     from langchain_core.messages import HumanMessage, SystemMessage
     from app.services.metrics_service import get_metrics_service
+    from app.services.llm_gateway import extract_chunk_stream_parts
 
     metrics = get_metrics_service()
     model_name = _resolve_model_name(budget_ctx)
     run_config = runnable_config_with_trace(trace_state if isinstance(trace_state, dict) else None)
+    task_id = ""
+    if isinstance(trace_state, dict):
+        task_id = str(trace_state.get("task_id") or "")
     try:
-        response = llm.invoke(
+        chunks: list[str] = []
+        last_usage_detail: dict[str, int] | None = None
+        for chunk in llm.stream(
             [SystemMessage(content=system_prompt), HumanMessage(content=user_content)],
             config=run_config or None,
-        )
-        content = response.content if hasattr(response, "content") else str(response)
+        ):
+            if task_id:
+                from app.services.execution_control import (
+                    CancelRequested,
+                    PauseRequested,
+                    check_for_control_signal,
+                )
+
+                try:
+                    check_for_control_signal(
+                        task_id,
+                        phase=f"invoke_structured:{purpose}",
+                        raise_on_cancel=True,
+                        raise_on_pause=True,
+                    )
+                except CancelRequested as exc:
+                    close_fn = getattr(chunk, "close", None)
+                    if callable(close_fn):
+                        try:
+                            close_fn()
+                        except Exception:
+                            pass
+                    from app.services.execution_control import OperationCancelled
+
+                    raise OperationCancelled(str(exc)) from exc
+                except PauseRequested:
+                    raise
+            chunk_usage = _extract_usage_detail(chunk)
+            if chunk_usage:
+                last_usage_detail = chunk_usage
+            _thinking, text_part = extract_chunk_stream_parts(
+                getattr(chunk, "content", "")
+            )
+            if text_part:
+                chunks.append(text_part)
+        normalized = "".join(chunks).strip()
+        if not normalized:
+            response = llm.invoke(
+                [SystemMessage(content=system_prompt), HumanMessage(content=user_content)],
+                config=run_config or None,
+            )
+            normalized = _normalize_content(
+                response.content if hasattr(response, "content") else str(response)
+            )
+            last_usage_detail = _extract_usage_detail(response) or last_usage_detail
+        content = normalized
         normalized = _normalize_content(content)
-        usage_detail = _extract_usage_detail(response)
+        usage_detail = last_usage_detail
         provider_tokens = int(usage_detail["total_tokens"]) if usage_detail else None
         if isinstance(trace_state, dict) and usage_detail:
             trace_state["_last_llm_usage_detail"] = usage_detail

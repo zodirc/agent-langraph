@@ -43,6 +43,15 @@ class SchedulerService:
                 id="checkpoint-cleanup",
                 replace_existing=True,
             )
+        watchdog_sec = int(getattr(settings, "GRAPH_RUNNER_TURN_WALL_CLOCK_BUDGET_SEC", 480))
+        if watchdog_sec > 0:
+            self._scheduler.add_job(
+                self._check_turn_wall_clock,
+                "interval",
+                seconds=30,
+                id="turn-wall-clock-watchdog",
+                replace_existing=True,
+            )
         logger.info("Scheduler started", extra={"jobs": len(self._job_map)})
 
     def shutdown(self) -> None:
@@ -113,6 +122,19 @@ class SchedulerService:
             logger.info("Checkpoint cleanup finished", extra={"removed_approx": removed})
         except Exception as exc:
             logger.exception("Checkpoint cleanup failed: %s", exc)
+
+    def _check_turn_wall_clock(self) -> None:
+        from app.services.graph_run_registry import check_turn_wall_clock_budget
+
+        try:
+            timed_out = check_turn_wall_clock_budget()
+            if timed_out:
+                logger.warning(
+                    "Turn wall-clock watchdog cancelled tasks",
+                    extra={"task_ids": timed_out},
+                )
+        except Exception as exc:
+            logger.exception("Turn wall-clock watchdog failed: %s", exc)
 
     def _process_task_queue(self) -> None:
         if settings.QUEUE_BACKEND.lower() == "celery":

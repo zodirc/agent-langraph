@@ -23,6 +23,8 @@ model:
   timeout_by_purpose:
     routing: 20
     intent_observation: 20
+    planning: 45
+    reflection: 30
   # 可选：多模型目录（切换模型时共用同一会话上下文，窗口大小随模型变化）
   # catalog:
   #   - id: claude-sonnet
@@ -542,6 +544,7 @@ graph_runner:
   backpressure_enabled: true
   max_concurrent: 8
   queue_timeout_sec: 30
+  turn_wall_clock_budget_sec: 480
 
 llm:
   circuit_breaker_enabled: false

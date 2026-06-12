@@ -169,6 +169,13 @@ def apply_manuscript_mode_contract(
         "enabled": True,
         "source": intent.get("source") or "manuscript_mode",
     }
+    task_id = str(state.get("task_id") or state.get("session_id") or "")
+    if task_id:
+        from app.services.writing_project import ensure_writing_project, writing_project_manifest_exists
+
+        goal = str(payload.get("goal") or payload.get("query") or "")
+        if not writing_project_manifest_exists(task_id):
+            ensure_writing_project(task_id, goal=goal)
     payload["skip_retrieval"] = False
     payload = _strip_disallowed_tool_params(payload, kept)
     payload.pop("mission", None)

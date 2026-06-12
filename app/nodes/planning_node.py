@@ -361,6 +361,68 @@ def planning_node(state: AgentState) -> AgentState:
                 },
             )
 
+        # --- Writing playbook thin path: classified operator skips planning LLM ---
+        from app.services.writing_intent_classifier import classify_writing_operator
+        from app.services.writing_playbook import apply_writing_playbook
+        from app.services.writing_project import (
+            ensure_writing_project,
+            writing_project_manifest_exists,
+        )
+
+        goal = str(payload.get("goal") or payload.get("query") or "").strip()
+        task_id = str(state["task_id"])
+        operator = classify_writing_operator(goal, state)
+        mode = str(payload.get("target_mode") or payload.get("current_mode") or "").lower()
+        if operator and not payload.get("latest_steer_message") and not payload.get(
+            "planning_must_run_llm"
+        ):
+            if mode == "manuscript_mode" and not writing_project_manifest_exists(task_id):
+                ensure_writing_project(task_id, goal=goal)
+            if writing_project_manifest_exists(task_id):
+                actions, plan, patched = apply_writing_playbook(
+                    [],
+                    operator=operator,
+                    goal=goal,
+                    task_id=task_id,
+                    state=state,
+                )
+                if actions and patched:
+                    from app.services.metrics_service import get_metrics_service
+
+                    exec_tools, tool_params, stages = _execution_transport_from_actions(actions)
+                    payload["tool_params"] = {**payload.get("tool_params", {}), **tool_params}
+                    payload["tool_stages"] = stages
+                    payload["writing_operator"] = operator
+                    payload["writing_intent"] = {
+                        "enabled": True,
+                        "source": "writing_playbook_thin",
+                    }
+                    payload["thin_execution_profile"] = "writing_playbook"
+                    report_plan_trace(
+                        plan,
+                        exec_tools,
+                        meta={
+                            "planning": "writing_playbook_thin",
+                            "writing_operator": operator,
+                            "skip_retrieval": False,
+                        },
+                    )
+                    get_metrics_service().inc_contract_event(f"writing_playbook_{operator}")
+                    return _finish_thin(
+                        state,
+                        payload=payload,
+                        plan=plan,
+                        tools=exec_tools,
+                        planned_actions=actions,
+                        audit_action="writing_playbook_thin",
+                        audit_detail={
+                            "writing_operator": operator,
+                            "goal_preview": goal[:80],
+                        },
+                        pin_mode=True,
+                        skip_retrieval=False,
+                    )
+
         # --- Full LLM planning: goal → actions ---
         report_status_trace("planning", "正在调用规划模型生成结构化计划…")
         goal_for_planning = str(
@@ -655,7 +717,7 @@ def planning_node(state: AgentState) -> AgentState:
                 {"issues": validation.issues, "suggestions": validation.suggestions},
             )
 
-        max_revisions = 2
+        max_revisions = 1
         revisions = int(updated.get("planning_revision_count") or 0)
         if validation.should_replan and revisions < max_revisions:
             next_payload = dict(updated.get("input_payload") or {})
@@ -682,6 +744,17 @@ def planning_node(state: AgentState) -> AgentState:
                 )
             )
 
+        if validation.should_replan and revisions >= max_revisions:
+            from app.services.planning_retry_signals import degrade_to_writing_playbook_state
+
+            degraded = degrade_to_writing_playbook_state(updated)
+            if degraded is not None:
+                from app.services.route_audit.pipeline import run_route_audit_pipeline
+
+                degraded = run_route_audit_pipeline(degraded)
+                get_state_store().save(degraded)
+                return degraded
+
         from app.services.route_audit.pipeline import run_route_audit_pipeline
 
         updated = run_route_audit_pipeline(updated)
@@ -696,6 +769,60 @@ def planning_node(state: AgentState) -> AgentState:
             audit_log=append_audit(state, "planning", "budget_exceeded", {"detail": str(exc)}),
         )
     except Exception as exc:
+        from app.services.llm_client import RetryableError
+        from app.services.writing_intent_classifier import classify_writing_operator
+        from app.services.writing_playbook import apply_writing_playbook
+        from app.services.writing_project import writing_project_manifest_exists
+
+        payload_fb = dict(state.get("input_payload") or {})
+        goal_fb = str(
+            payload_fb.get("goal") or payload_fb.get("query") or ""
+        ).strip()
+        operator = classify_writing_operator(goal_fb, state)
+        if isinstance(exc, RetryableError) and operator and writing_project_manifest_exists(
+            str(state["task_id"])
+        ):
+            actions, plan, patched = apply_writing_playbook(
+                [],
+                operator=operator,
+                goal=goal_fb,
+                task_id=str(state["task_id"]),
+                state=state,
+            )
+            if actions and patched:
+                payload_fb["writing_operator"] = operator
+                payload_fb["writing_intent"] = {
+                    "enabled": True,
+                    "source": "planning_timeout_playbook",
+                }
+                exec_tools, tool_params, stages = _execution_transport_from_actions(actions)
+                payload_fb["tool_params"] = {**payload_fb.get("tool_params", {}), **tool_params}
+                payload_fb["tool_stages"] = stages
+                return _finish_thin(
+                    state,
+                    payload=payload_fb,
+                    plan=plan,
+                    tools=exec_tools,
+                    planned_actions=actions,
+                    audit_action="planning_timeout_playbook",
+                    audit_detail={"operator": operator, "error": str(exc)[:200]},
+                    skip_retrieval=False,
+                )
+        if isinstance(exc, RetryableError):
+            payload_fb["writing_intent"] = payload_fb.get("writing_intent") or {
+                "enabled": False,
+            }
+            return _finish_thin(
+                state,
+                payload=payload_fb,
+                plan=["answer user directly"],
+                tools=[],
+                planned_actions=[
+                    Action(type="answer", completes_turn=True, source="structural")
+                ],
+                audit_action="planning_timeout_answer",
+                audit_detail={"error": str(exc)[:200]},
+            )
         return merge_state(
             state,
             errors=list(state.get("errors", [])) + [f"planning: {exc}"],

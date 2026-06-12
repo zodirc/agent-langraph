@@ -1502,6 +1502,19 @@ class GraphRunner:
 
             paused_body = build_mission_paused_payload(latest)
             yield _format_stream_event("mission_paused", paused_body)
+        from app.services.turn_watchdog import pop_watchdog_stream_event
+
+        watchdog_evt = pop_watchdog_stream_event(str(latest["task_id"]))
+        if watchdog_evt:
+            yield _format_stream_event(
+                "error",
+                {
+                    "task_id": latest["task_id"],
+                    "error": "turn_wall_clock_budget_exceeded",
+                    "message": watchdog_evt.get("final_answer"),
+                    "status": watchdog_evt.get("status"),
+                },
+            )
         done_payload_lp = latest.get("input_payload") or {}
         from app.services.confirmation.stream_display import (
             build_gate_sse_fields,
@@ -1545,7 +1558,17 @@ class GraphRunner:
     ) -> dict[str, Any]:
         stored = get_state_store().load(task_id)
         if not stored:
-            raise KeyError(f"Task not found: {task_id}")
+            return {
+                "task_id": task_id,
+                "status": "not_found",
+                "outcome": "already_gone",
+                "accepted": True,
+                "control_action": control_action,
+                "effective_state": "IDLE",
+                "active_step_id": None,
+                "run_id": None,
+                "worker_id": worker_id,
+            }
 
         if worker_id:
             control = mutator(

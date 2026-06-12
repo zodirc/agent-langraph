@@ -11,7 +11,16 @@ _WRITE_ACTION_TYPES = frozenset({"write_artifact", "edit_artifact"})
 _READ_ACTION_TYPES = frozenset({"read_artifact"})
 
 
-def _resolve_body_filename(task_id: str, goal: str) -> str:
+def _resolve_body_filename(task_id: str, goal: str, *, operator: str = "") -> str:
+    from app.services.writing_project import resolve_body_target
+
+    resolved = resolve_body_target(task_id, goal, operator=operator)
+    if resolved:
+        return resolved
+    return _legacy_resolve_body_filename(task_id, goal)
+
+
+def _legacy_resolve_body_filename(task_id: str, goal: str) -> str:
     from app.services.artifact_edit_intent import resolve_artifact_edit_filename
 
     resolved = resolve_artifact_edit_filename(task_id, goal)
@@ -24,8 +33,6 @@ def _resolve_body_filename(task_id: str, goal: str) -> str:
         for entry in manifest:
             if entry.filename.lower() == preferred:
                 return entry.filename
-    if len(manifest) == 1:
-        return manifest[0].filename
     for entry in manifest:
         name = entry.filename.lower()
         if "outline" not in name and "大纲" not in name:
@@ -33,7 +40,19 @@ def _resolve_body_filename(task_id: str, goal: str) -> str:
     return ""
 
 
+def _resolve_bible_filename(task_id: str) -> str:
+    from app.services.writing_project import DEFAULT_BIBLE, load_project
+
+    project = load_project(task_id)
+    return (project.bible if project else DEFAULT_BIBLE) or DEFAULT_BIBLE
+
+
 def _resolve_outline_filename(task_id: str, goal: str) -> str:
+    from app.services.writing_project import resolve_outline_target
+
+    resolved = resolve_outline_target(task_id, goal)
+    if resolved:
+        return resolved
     from app.services.artifact_resolver import build_artifact_manifest
 
     manifest = build_artifact_manifest(task_id)
@@ -41,8 +60,6 @@ def _resolve_outline_filename(task_id: str, goal: str) -> str:
         name = entry.filename.lower()
         if "outline" in name or "大纲" in name:
             return entry.filename
-    if "大纲" in goal:
-        return _resolve_body_filename(task_id, goal)
     return ""
 
 
@@ -123,6 +140,8 @@ def playbook_plan_steps(operator: WritingOperator, filename: str) -> list[str]:
         return [f"读取 {filename}", f"修改人物 {filename}"]
     if operator == "replot":
         return ["读取大纲", "修改大纲与受影响章节"]
+    if operator == "kickoff_novel":
+        return ["读取素材卡", f"撰写大纲 {filename}"]
     return []
 
 
@@ -141,7 +160,7 @@ def apply_writing_playbook(
 
     Returns (actions, plan_steps, patched).
     """
-    body = _resolve_body_filename(task_id, goal)
+    body = _resolve_body_filename(task_id, goal, operator=operator)
     outline = _resolve_outline_filename(task_id, goal)
     patched = False
     plan = playbook_plan_steps(operator, body or outline or "artifact")
@@ -172,8 +191,6 @@ def apply_writing_playbook(
             actions = [_read_action(body), _write_action(body)]
             patched = True
         elif operator in ("polish", "character", "rewrite") and body:
-            # Imprecise polish/character goals need LLM-generated full text, not
-            # edit_text_artifact without old_text/new_text (always 0 replacements).
             actions = [_read_action(body, with_line_numbers=True), _write_action(body)]
             patched = True
         elif operator == "kickoff_body" and outline and body:
@@ -185,11 +202,14 @@ def apply_writing_playbook(
         elif operator == "replot" and outline:
             actions = [_read_action(outline), _write_action(outline)]
             patched = True
-        elif operator == "replot" and body:
-            actions = [_read_action(body), _write_action(body)]
+        elif operator == "kickoff_novel" and outline:
+            bible = _resolve_bible_filename(task_id)
+            reads: list[Action] = []
+            if bible:
+                reads.append(_read_action(bible))
+            actions = [*reads, _write_action(outline)]
             patched = True
     elif operator == "append":
-        # Drop redundant full-text reads; append uses tail excerpt at generation time.
         trimmed = [a for a in actions if a.type != "read_artifact"]
         if not any(
             a.type == "run_tool" and str(a.params.get("name") or "") == "append_text_artifact"
@@ -217,7 +237,15 @@ def classify_and_apply_playbook(
     operator = classify_writing_operator(goal, state)
     if not operator:
         existing = str(payload.get("writing_operator") or "").strip()
-        if existing in ("append", "rewrite", "polish", "character", "replot", "kickoff_body"):
+        if existing in (
+            "append",
+            "rewrite",
+            "polish",
+            "character",
+            "replot",
+            "kickoff_body",
+            "kickoff_novel",
+        ):
             operator = existing  # type: ignore[assignment]
     if not operator:
         return actions, [], None, False

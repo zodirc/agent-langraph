@@ -54,7 +54,34 @@ def upsert_document(
         from app.services.retrieval_cache import invalidate_session
 
         invalidate_session(request.session_id)
+        domain = str(metadata.get("domain") or "").lower()
+        story_bible_started = False
+        if domain == "source" and request.content.strip():
+            from app.services.story_bible import distill_story_bible_async
+
+            distill_story_bible_async(
+                request.session_id,
+                title=request.title,
+                content=request.content,
+            )
+            story_bible_started = True
+        result = {"doc_id": doc_id, "status": "upserted"}
+        if story_bible_started:
+            result["story_bible_distillation"] = "started"
+        return result
     return {"doc_id": doc_id, "status": "upserted"}
+
+
+@router.get("/sessions/{session_id}/story-bible")
+def get_session_story_bible(
+    session_id: str,
+    principal: AuthPrincipal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Story bible (素材卡) distillation status for UI polling."""
+    assert_session_knowledge_access(principal, session_id)
+    from app.services.story_bible import story_bible_status
+
+    return story_bible_status(session_id)
 
 
 @router.get("/documents")

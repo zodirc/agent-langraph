@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.runtime.state import AgentState, merge_state
+from app.runtime.state import AgentState, append_audit, merge_state
 from app.services.route_audit.config import load_route_audit_config
 
 
@@ -61,6 +61,53 @@ def can_planning_replan_again(state: AgentState) -> bool:
     cfg = load_route_audit_config()
     revisions = int(state.get("planning_revision_count") or 0)
     return revisions < cfg.max_planning_revisions
+
+
+def degrade_to_writing_playbook_state(state: AgentState) -> AgentState | None:
+    """When replan budget is exhausted, apply writing playbook instead of failing."""
+    from app.services.writing_intent_classifier import classify_writing_operator
+    from app.services.writing_playbook import apply_writing_playbook
+    from app.services.writing_project import writing_project_manifest_exists
+
+    payload = dict(state.get("input_payload") or {})
+    goal = str(payload.get("goal") or payload.get("query") or "").strip()
+    task_id = str(state["task_id"])
+    operator = classify_writing_operator(goal, state) or str(payload.get("writing_operator") or "")
+    if not operator or not writing_project_manifest_exists(task_id):
+        return None
+    actions, plan, patched = apply_writing_playbook(
+        [],
+        operator=operator,  # type: ignore[arg-type]
+        goal=goal,
+        task_id=task_id,
+        state=state,
+    )
+    if not actions or not patched:
+        return None
+    from app.nodes.planning_node import _execution_transport_from_actions
+
+    exec_tools, tool_params, stages = _execution_transport_from_actions(actions)
+    payload["writing_operator"] = operator
+    payload["writing_intent"] = {"enabled": True, "source": "replan_budget_playbook"}
+    payload["tool_params"] = {**payload.get("tool_params", {}), **tool_params}
+    payload["tool_stages"] = stages
+    payload["thin_execution_profile"] = "writing_playbook"
+    return merge_state(
+        state,
+        input_payload=payload,
+        plan=plan,
+        planned_actions=[a.to_dict() for a in actions],
+        selected_tools=exec_tools,
+        skip_retrieval=False,
+        status="PLANNED",
+        current_node="planning",
+        audit_log=append_audit(
+            state,
+            "planning",
+            "replan_budget_playbook_degrade",
+            {"writing_operator": operator},
+        ),
+    )
 
 
 _FORCE_WRITE_FEEDBACK = (
