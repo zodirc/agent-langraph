@@ -164,17 +164,31 @@ def generate_artifact_content(
 
     chars = int(target_chars or _effective_target_chars(goal, tool_name))
     from app.services.writing_project import (
+        MAX_CHAPTER_CONTINUATION_SEGMENTS,
         chapter_char_count,
-        is_chapter_path,
+        completion_threshold,
+        extract_outline_for_chapter,
+        is_body_path,
         load_project,
         mark_chapter_continuation_needed,
+        merge_body_write_content,
+        novel_tail_excerpt,
+        read_body_text,
     )
 
     project = load_project(task_id)
-    if project and is_chapter_path(task_id, filename):
+    if project and is_body_path(task_id, filename):
         existing_count = chapter_char_count(task_id, filename)
         chars = max(chars, project.words_per_chapter - existing_count)
-    existing_excerpt = _read_artifact_snippet(task_id, filename, state=state)
+    from app.services.writing_project import body_draft_tool_name, kickoff_should_write_not_append
+
+    effective_tool = tool_name
+    if project and is_body_path(task_id, filename):
+        effective_tool = body_draft_tool_name(task_id, filename)
+    if project and is_body_path(task_id, filename) and not kickoff_should_write_not_append(task_id):
+        existing_excerpt = novel_tail_excerpt(task_id)
+    else:
+        existing_excerpt = _read_artifact_snippet(task_id, filename, state=state)
 
     profile = str(
         payload.get("artifact_profile")
@@ -206,26 +220,30 @@ def generate_artifact_content(
             task_desc = (
                 f"Write a complete document OUTLINE in the user's language (markdown), "
                 f"about {chars} characters, into {filename}. "
-                "Structure it with clear sections the user can expand later. "
-                "Do NOT write full prose in the outline file."
+                "Structure it with clear sections the user can expand later: "
+                "title, characters, and per-chapter plot beats (bullets or short lines). "
+                "Do NOT write full chapter prose, dialogue scenes, or chapter footers "
+                "such as （第N章完）. Ignore chapter_index for drafting a single chapter."
             )
     elif profile == "source_code":
         task_desc = (
             f"Write complete source code for the user's goal in file {filename}. "
             "Preserve indentation and newlines. Output code only — no prose, no markdown essay."
         )
-    elif tool_name == "append_text_artifact":
+    elif effective_tool == "append_text_artifact":
         part = f" (part {chunk_index + 1}/{chunk_total})" if chunk_total > 1 else ""
         word_hint = ""
-        if project and is_chapter_path(task_id, filename):
+        if project and is_body_path(task_id, filename):
             written = chapter_char_count(task_id, filename)
             word_hint = (
-                f"本章目标字数：{project.words_per_chapter}。当前已写 {written} 字。"
+                f"第{project.next_chapter}章目标字数：{project.words_per_chapter}。"
+                f"本章当前已写 {written} 字。"
             )
         task_desc = (
-            f"Continue the existing document {filename}{part}: write the next section, "
-            f"target ~{chars} characters (±10%). {word_hint} Continue immediately after "
-            "previous_artifact_excerpt; do NOT repeat existing text."
+            f"Continue the novel in {filename}{part}: write chapter {project.next_chapter if project else '?'} "
+            f"or continue the current chapter, target ~{chars} characters (±10%). {word_hint} "
+            "End the chapter with a footer line （第N章完）. Continue immediately after "
+            "previous_artifact_excerpt; do NOT repeat earlier chapters or scenes."
         )
     else:
         from app.services.artifact_edit_intent import is_artifact_edit_goal
@@ -240,21 +258,24 @@ def generate_artifact_content(
             )
         else:
             word_hint = ""
-            if project and is_chapter_path(task_id, filename):
+            if project and is_body_path(task_id, filename):
                 written = chapter_char_count(task_id, filename)
                 word_hint = (
-                    f"本章目标字数：{project.words_per_chapter}。当前已写 {written} 字。"
+                    f"第{project.next_chapter}章目标字数：{project.words_per_chapter}。"
+                    f"本章当前已写 {written} 字。"
                 )
             task_desc = (
-                f"Write the requested content for {filename}, about {chars} characters. "
-                f"{word_hint} Directly satisfy the user's goal. No filler or meta commentary."
+                f"Write chapter {project.next_chapter if project else '?'} for {filename}, "
+                f"about {chars} characters. {word_hint} "
+                "End with a footer line （第N章完）. Directly satisfy the user's goal. "
+                "No filler or meta commentary."
             )
 
     user_payload = {
         "task_id": task_id,
         "current_goal": goal,
         "filename": filename,
-        "tool": tool_name,
+        "tool": effective_tool,
         "target_chars": chars,
         "chunk_index": chunk_index,
         "conversation_history": history[-12:],
@@ -287,14 +308,27 @@ def generate_artifact_content(
             source_excerpt = rag_excerpt
             rag_segments = len(applied_session_source_ids(state))
 
-    if guidelines_excerpt or source_excerpt or bible_text:
-        writing_ctx = dict(user_payload.get("writing_context") or {})
-        if guidelines_excerpt:
-            writing_ctx["writing_guidelines_excerpt"] = guidelines_excerpt
-        if bible_text:
-            writing_ctx["story_bible_excerpt"] = bible_text
-        if source_excerpt:
-            writing_ctx["session_source_excerpt"] = source_excerpt
+    writing_ctx = dict(user_payload.get("writing_context") or {})
+    if guidelines_excerpt:
+        writing_ctx["writing_guidelines_excerpt"] = guidelines_excerpt
+    if bible_text:
+        writing_ctx["story_bible_excerpt"] = bible_text
+    if source_excerpt:
+        writing_ctx["session_source_excerpt"] = source_excerpt
+    if project and is_body_path(task_id, filename):
+        outline_slice = extract_outline_for_chapter(task_id, project.next_chapter)
+        novel_tail = novel_tail_excerpt(task_id)
+        if outline_slice:
+            writing_ctx["outline_for_chapter"] = outline_slice
+        if novel_tail:
+            writing_ctx["novel_tail"] = novel_tail
+        writing_ctx["chapter_index"] = project.next_chapter
+        user_payload["chapter_index"] = project.next_chapter
+        writing_ctx["continuation_rules"] = (
+            "Follow outline_for_chapter for plot beats; continue from novel_tail; "
+            "write only chapter_index; end with （第N章完）; do not repeat prior chapters."
+        )
+    if writing_ctx:
         user_payload["writing_context"] = writing_ctx
     applied_guidelines = applied_writing_guideline_ids(state)
     applied_sources = applied_session_source_ids(state) if source_excerpt else []
@@ -340,38 +374,42 @@ def generate_artifact_content(
         return draft.content.strip()
 
     content = _draft_once(task_desc, user_payload)
-    if project and is_chapter_path(task_id, filename):
-        threshold = int(project.words_per_chapter * 0.7)
-        prefix = existing_excerpt.strip()
+    if project and is_body_path(task_id, filename):
+        threshold = completion_threshold(project)
+        chapter_prefix_len = chapter_char_count(task_id, filename)
         new_parts = [content.strip()] if content.strip() else []
-        combined = (
-            f"{prefix}\n\n{new_parts[0]}".strip() if prefix and new_parts else (new_parts[0] if new_parts else "")
+        combined_len = chapter_prefix_len + (
+            len(new_parts[0]) + (2 if chapter_prefix_len and new_parts else 0) if new_parts else 0
         )
-        for _seg in range(2):
-            if len(combined) >= threshold:
+        for _seg in range(MAX_CHAPTER_CONTINUATION_SEGMENTS):
+            if combined_len >= threshold:
                 break
-            tail = combined[-800:] if len(combined) > 800 else combined
+            tail_source = new_parts[-1] if new_parts else (existing_excerpt or "")
+            tail = tail_source[-800:] if len(tail_source) > 800 else tail_source
             cont_desc = (
-                f"继续写完本章 {filename}。已有内容结尾：\n{tail}\n"
-                f"本章目标 {project.words_per_chapter} 字，当前约 {len(combined)} 字。"
+                f"继续写完第{project.next_chapter}章（文件 {filename}）。本章已有内容结尾：\n{tail}\n"
+                f"本章目标 {project.words_per_chapter} 字（至少 {threshold} 字），"
+                f"当前本章约 {combined_len} 字。章末须保留 （第{project.next_chapter}章完）。"
             )
             more = _draft_once(cont_desc, user_payload)
             if not more.strip():
                 break
             new_parts.append(more.strip())
-            combined = f"{combined}\n\n{more.strip()}"
-        if tool_name == "append_text_artifact":
+            combined_len += len(more.strip()) + 2
+        if effective_tool == "append_text_artifact":
             content = "\n\n".join(new_parts)
         else:
-            content = combined
-        if len(combined) < threshold:
+            full_body = read_body_text(task_id, filename)
+            content = merge_body_write_content(full_body, "\n\n".join(new_parts))
+        if combined_len < threshold:
             mark_chapter_continuation_needed(task_id, filename)
             from app.services.writing_turn_footer import record_writing_turn_metadata
 
             record_writing_turn_metadata(
                 state,
                 chapter_shortfall=(
-                    f"本章 {len(combined)} 字，低于目标 {project.words_per_chapter} 字。"
+                    f"第{project.next_chapter}章 {combined_len} 字，"
+                    f"低于目标 {project.words_per_chapter} 字（需至少 {threshold} 字）。"
                 ),
             )
     if not content or needs_generated_content(content, goal):

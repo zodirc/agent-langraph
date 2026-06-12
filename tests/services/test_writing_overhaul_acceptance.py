@@ -57,7 +57,7 @@ def test_source_requirements_injected_into_writing_prompt(
         generate_artifact_content(
             state=state,
             tool_name="write_text_artifact",
-            filename="正文/第001章.md",
+            filename="正文/novel.md",
             goal="开始写正文",
         )
 

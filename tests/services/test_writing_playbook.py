@@ -67,6 +67,40 @@ def test_kickoff_body_playbook_reads_outline_writes_body(isolated_stores, test_s
     assert "撰写正文" in " ".join(plan)
 
 
+def test_kickoff_body_with_existing_body_appends_without_outline_read(
+    isolated_stores, test_settings, monkeypatch,
+):
+    import app.services.artifact_tools as art
+
+    from app.services.writing_project import ensure_writing_project
+
+    monkeypatch.setattr(art.settings, "ARTIFACTS_PATH", test_settings.ARTIFACTS_PATH)
+    task_id = "playbook-kickoff-append"
+    project = ensure_writing_project(task_id)
+    from app.services.artifact_tools import handle_write_text_artifact
+
+    handle_write_text_artifact(
+        {
+            "task_id": task_id,
+            "filename": project.body_file,
+            "content": "第一章。（第1章完）",
+            "writing_operator": "kickoff_body",
+        }
+    )
+    actions, _, patched = apply_writing_playbook(
+        [],
+        operator="kickoff_body",
+        goal="开始写正文，写1-10章",
+        task_id=task_id,
+        force_write=True,
+    )
+    assert patched is True
+    assert len(actions) == 1
+    assert actions[0].type == "run_tool"
+    assert actions[0].params.get("name") == "append_text_artifact"
+    assert not any(a.type == "read_artifact" for a in actions)
+
+
 def test_append_playbook_uses_run_tool_append(isolated_stores, test_settings, monkeypatch):
     import app.services.artifact_tools as art
 

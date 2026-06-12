@@ -371,20 +371,26 @@ def planning_node(state: AgentState) -> AgentState:
 
         goal = str(payload.get("goal") or payload.get("query") or "").strip()
         task_id = str(state["task_id"])
-        operator = classify_writing_operator(goal, state)
+        from app.services.writing_turn_reset import resolve_writing_playbook_operator
+
+        operator = resolve_writing_playbook_operator(goal, state, payload)
         mode = str(payload.get("target_mode") or payload.get("current_mode") or "").lower()
         if operator and not payload.get("latest_steer_message") and not payload.get(
             "planning_must_run_llm"
         ):
-            if mode == "manuscript_mode" and not writing_project_manifest_exists(task_id):
+            if mode == "manuscript_mode":
                 ensure_writing_project(task_id, goal=goal)
             if writing_project_manifest_exists(task_id):
+                force_write = bool(payload.get("force_write_after_reads")) or str(
+                    payload.get("thin_execution_profile") or ""
+                ) == "writing_batch"
                 actions, plan, patched = apply_writing_playbook(
                     [],
-                    operator=operator,
+                    operator=operator,  # type: ignore[arg-type]
                     goal=goal,
                     task_id=task_id,
                     state=state,
+                    force_write=force_write,
                 )
                 if actions and patched:
                     from app.services.metrics_service import get_metrics_service

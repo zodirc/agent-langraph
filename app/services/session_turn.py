@@ -104,6 +104,11 @@ def build_inbound_merged_payload(
         )
     elif not merged.get("goal"):
         merged["goal"] = str(existing.get("input_payload", {}).get("goal") or "")
+    from app.services.writing_pending import goal_looks_like_confirm_only
+    from app.services.writing_turn_reset import clear_writing_operator_carryover
+
+    if goal and not goal_looks_like_confirm_only(goal) and not merged.get("confirm"):
+        merged = clear_writing_operator_carryover(merged)
     return merged
 
 

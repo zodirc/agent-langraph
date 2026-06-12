@@ -158,8 +158,25 @@ def apply_force_write_signal(state: AgentState) -> AgentState:
             "Do NOT answer-only or write body prose."
         )
     else:
+        from app.services.writing_project import (
+            body_file_exists_nonempty,
+            parse_target_chapter_from_goal,
+        )
+
+        task_id = str(state.get("task_id") or "")
+        if (
+            task_id
+            and body_file_exists_nonempty(task_id)
+            and parse_target_chapter_from_goal(goal)
+        ):
+            payload["writing_operator"] = "append"
+            payload["route_audit_replan_feedback"] = (
+                "Body file already exists. Append the next chapter only — "
+                "do NOT read outline again or rewrite prior chapters."
+            )
+        else:
+            payload["route_audit_replan_feedback"] = _FORCE_WRITE_FEEDBACK
         payload["force_write_after_reads"] = True
         payload.pop("force_edit_after_reads", None)
-        payload["route_audit_replan_feedback"] = _FORCE_WRITE_FEEDBACK
     payload.pop("route_audit_replan", None)
     return merge_state(state, input_payload=payload)

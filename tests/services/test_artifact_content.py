@@ -62,3 +62,39 @@ def test_generate_artifact_content_injects_writing_guidelines(
     user_payload = mock_invoke.call_args.kwargs["user_payload"]
     excerpt = (user_payload.get("writing_context") or {}).get("writing_guidelines_excerpt") or ""
     assert "对话单独成行" in excerpt
+
+
+@patch("app.services.artifact_content.artifact_stream_enabled", return_value=False)
+@patch("app.services.artifact_content.trace_enabled", return_value=False)
+@patch("app.services.artifact_content.invoke_artifact_draft")
+def test_generate_artifact_content_injects_outline_for_chapter(
+    mock_invoke, _trace, _stream, isolated_stores, test_settings, monkeypatch
+):
+    import app.services.artifact_tools as art
+
+    from app.services.writing_project import ensure_writing_project
+
+    monkeypatch.setattr(art.settings, "ARTIFACTS_PATH", test_settings.ARTIFACTS_PATH)
+    mock_invoke.return_value = type("Draft", (), {"content": "第二章正文。（第2章完）", "source": "tool"})()
+    task_id = "outline-inject"
+    project = ensure_writing_project(task_id)
+    handle_write_text_artifact(
+        {
+            "task_id": task_id,
+            "filename": project.outline,
+            "content": "# 大纲\n\n## 第一章\n\n按大纲写反派登场。",
+        }
+    )
+    state = {
+        "task_id": task_id,
+        "input_payload": {"goal": "写第一章", "target_mode": "manuscript_mode"},
+    }
+    generate_artifact_content(
+        state=state,
+        tool_name="append_text_artifact",
+        filename=project.body_file,
+        goal="写第一章",
+    )
+    ctx = (mock_invoke.call_args.kwargs["user_payload"] or {}).get("writing_context") or {}
+    assert "反派登场" in str(ctx.get("outline_for_chapter") or "")
+    assert ctx.get("chapter_index") == 1

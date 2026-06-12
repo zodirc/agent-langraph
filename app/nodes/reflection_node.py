@@ -53,6 +53,7 @@ def _writing_structured_reflection(state: AgentState) -> dict[str, object] | Non
         return None
 
     from app.services.writing_project import (
+        CHAPTER_COMPLETION_RATIO,
         chapter_char_count,
         expected_body_target,
         load_project,
@@ -86,20 +87,25 @@ def _writing_structured_reflection(state: AgentState) -> dict[str, object] | Non
     if project and expected and expected in written_files:
         count = chapter_char_count(task_id, expected)
         target = project.words_per_chapter
-        if count < int(target * 0.7):
-            issues.append(f"本章 {count} 字，低于目标 {target} 字的 70%")
+        min_chars = int(target * CHAPTER_COMPLETION_RATIO)
+        if count < min_chars:
+            issues.append(f"本章 {count} 字，低于目标 {target} 字的 {int(CHAPTER_COMPLETION_RATIO * 100)}%")
             fixes.append("同轮续写本章末尾内容")
 
     outline = project.outline if project else ""
-    if outline:
+    from app.services.writing_turn_reset import BODY_WRITE_OPERATORS, OUTLINE_ONLY_OPERATORS
+
+    outline_norm = outline.replace("\\", "/") if outline else ""
+    if outline_norm and operator not in OUTLINE_ONLY_OPERATORS:
         for fname in written_files:
-            if fname.replace("\\", "/") == outline.replace("\\", "/"):
-                issues.append(f"大纲文件被意外修改: {fname}")
+            if fname.replace("\\", "/") == outline_norm and operator in BODY_WRITE_OPERATORS:
+                issues.append(f"正文算子误写大纲文件: {fname}")
+                fixes.append(f"改写到正文文件 {expected or '正文/novel.md'}")
 
     return {
         "critique": "; ".join(issues) if issues else "writing checks passed",
         "retry_reasoning": False,
-        "retry_planning": False,
+        "retry_planning": bool(issues and operator in BODY_WRITE_OPERATORS),
         "issues": issues,
         "suggested_fixes": fixes,
         "source": "writing_structured",

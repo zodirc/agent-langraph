@@ -174,7 +174,7 @@ def apply_manuscript_mode_contract(
         from app.services.writing_project import ensure_writing_project, writing_project_manifest_exists
 
         goal = str(payload.get("goal") or payload.get("query") or "")
-        if not writing_project_manifest_exists(task_id):
+        if goal or not writing_project_manifest_exists(task_id):
             ensure_writing_project(task_id, goal=goal)
     payload["skip_retrieval"] = False
     payload = _strip_disallowed_tool_params(payload, kept)

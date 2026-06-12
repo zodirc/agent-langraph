@@ -1753,9 +1753,10 @@ async function forceTerminateTask(taskId, { hadClientStream = false, announce = 
   }
   if (isCurrent) setRunning(false);
 
-  const useCancelFirst = isWritingInteractionMode();
-  const endpoints = useCancelFirst ? ["cancel", "stop"] : ["stop", "cancel"];
+  const writingMode = isWritingInteractionMode();
+  const endpoints = writingMode ? ["stop", "pause", "cancel"] : ["stop", "cancel"];
   let lastRes = null;
+  let stopEndpointUsed = null;
   for (const ep of endpoints) {
     try {
       const res = await apiFetch(`/tasks/${tid}/${ep}`, {
@@ -1764,7 +1765,10 @@ async function forceTerminateTask(taskId, { hadClientStream = false, announce = 
         body: JSON.stringify({ reason: "user_requested", requested_by: "web" }),
       });
       lastRes = res;
-      if (res.ok) break;
+      if (res.ok) {
+        stopEndpointUsed = ep;
+        break;
+      }
       if (res.status === 404) break;
     } catch {
       /* try next endpoint */
@@ -1815,7 +1819,7 @@ async function forceTerminateTask(taskId, { hadClientStream = false, announce = 
     const display = data.client_display || {};
     if (display.system_lines?.length) {
       appendSystemLines(display.system_lines);
-    } else if (useCancelFirst) {
+    } else if (writingMode && stopEndpointUsed === "cancel") {
       appendLine("已请求取消任务；后台将在当前步骤结束后停止。", "system");
     } else {
       appendLine("已请求暂停任务；后台将在当前步骤结束后停止。", "system");

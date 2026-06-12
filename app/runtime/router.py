@@ -89,6 +89,16 @@ def route_after_tool(state: AgentState) -> str:
         can_planning_replan_again,
     )
 
+    if not graph_last_tool_failed(state):
+        from app.services.writing_batch import maybe_schedule_batch_continuation
+
+        batch_continued = maybe_schedule_batch_continuation(state)
+        if batch_continued is not None:
+            from app.services.state_store import get_state_store
+
+            get_state_store().save(batch_continued)
+            return "tool_execution"
+
     conv = evaluate_convergence(state)
     if not graph_last_tool_failed(state) and conv.next == NEXT_FORCE_WRITE:
         replanned = apply_force_write_signal(state)
@@ -118,6 +128,7 @@ def route_after_tool(state: AgentState) -> str:
         if state.get("retry_count", 0) >= settings.MAX_RETRY_COUNT:
             return "dead_letter"
         return "tool_execution"
+
     if conv.done or conv.next == NEXT_FINALIZE:
         # Single gate says this turn converged (or is stuck): finalize forward,
         # never re-enter the tool loop.
@@ -125,7 +136,17 @@ def route_after_tool(state: AgentState) -> str:
     payload = state.get("input_payload") or {}
     if _writing_route_allowed(state):
         return "context_governance"
-    if contract_requires_side_effects(payload, state=state) and contract_tool_names(payload):
+    from app.services.converge import _pending_planned_actions
+    from app.services.turn_contract import is_turn_contract_fulfilled
+
+    tool_results = list(state.get("tool_results") or [])
+    pending_actions = _pending_planned_actions(state, tool_results)
+    if (
+        contract_requires_side_effects(payload, state=state)
+        and contract_tool_names(payload)
+        and pending_actions
+        and not is_turn_contract_fulfilled(state)
+    ):
         return "tool_execution"
     return "context_governance"
 

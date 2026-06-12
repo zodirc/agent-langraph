@@ -96,6 +96,28 @@ def _execute_run_tool(action: Action, state: AgentState) -> dict[str, Any]:
     payload = state.get("input_payload") or {}
     user_role = str(payload.get("user_role", "user"))
     params.setdefault("task_id", str(state["task_id"]))
+    if name in ("write_text_artifact", "append_text_artifact"):
+        from app.services.artifact_content import generate_artifact_content, needs_generated_content
+
+        goal = str(
+            (state.get("input_payload") or {}).get("goal")
+            or (state.get("input_payload") or {}).get("query")
+            or ""
+        )
+        filename = str(params.get("filename") or "")
+        raw = params.get("content")
+        content = "" if raw is None else str(raw).strip()
+        if filename and needs_generated_content(content, goal):
+            from app.services.writing_project import body_draft_tool_name
+
+            draft_tool = body_draft_tool_name(str(state["task_id"]), filename)
+            params["content"] = generate_artifact_content(
+                state=state,
+                tool_name=draft_tool,
+                filename=filename,
+                goal=goal,
+            )
+            name = draft_tool
     try:
         invoked = _invoke_registry_tool(name, params, user_role=user_role)
     except KeyError as exc:
@@ -158,9 +180,13 @@ def _resolve_write_content(state: AgentState, params: dict[str, Any]) -> str:
     if not filename:
         raise ValueError("write_artifact requires params.filename")
 
+    from app.services.writing_project import body_draft_tool_name
+
+    task_id = str(state["task_id"])
+    tool_name = body_draft_tool_name(task_id, filename)
     return generate_artifact_content(
         state=state,
-        tool_name="write_text_artifact",
+        tool_name=tool_name,
         filename=filename,
         goal=goal,
     )
@@ -175,6 +201,31 @@ def _execute_artifact(action: Action, state: AgentState) -> dict[str, Any]:
         params["_agent_state"] = state
     if action.type == "write_artifact":
         params["content"] = _resolve_write_content(state, params)
+        from app.services.writing_project import body_draft_tool_name
+
+        filename = str(params.get("filename") or "")
+        draft_tool = body_draft_tool_name(str(state["task_id"]), filename)
+        if draft_tool == "append_text_artifact":
+            try:
+                from app.services.artifact_tools import handle_append_text_artifact
+
+                result = handle_append_text_artifact(params)
+            except FileNotFoundError as exc:
+                return _error_entry(
+                    "append_text_artifact", exc, action_type=action.type,
+                    error_code="artifact_not_found", non_retryable=True,
+                )
+            except ValueError as exc:
+                return _error_entry("append_text_artifact", exc, action_type=action.type, non_retryable=True)
+            except Exception as exc:
+                return _error_entry("append_text_artifact", exc, action_type=action.type)
+            result_body = result if isinstance(result, dict) else {"content": str(result)}
+            return {
+                "tool": "append_text_artifact",
+                "status": "ok",
+                "action_type": action.type,
+                "result": result_body,
+            }
     elif action.type == "edit_artifact" and not _edit_has_target(params):
         params["content"] = _resolve_write_content(state, {**params, "filename": params.get("filename")})
         action_type = "write_artifact"

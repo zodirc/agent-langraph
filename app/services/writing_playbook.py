@@ -193,11 +193,17 @@ def apply_writing_playbook(
         elif operator in ("polish", "character", "rewrite") and body:
             actions = [_read_action(body, with_line_numbers=True), _write_action(body)]
             patched = True
-        elif operator == "kickoff_body" and outline and body:
-            actions = [_read_action(outline), _write_action(body)]
-            patched = True
         elif operator == "kickoff_body" and body:
-            actions = [_write_action(body)]
+            from app.services.writing_project import kickoff_should_write_not_append
+
+            if kickoff_should_write_not_append(task_id):
+                body_action = _write_action(body)
+                if outline:
+                    actions = [_read_action(outline), body_action]
+                else:
+                    actions = [body_action]
+            else:
+                actions = [_append_action(body)]
             patched = True
         elif operator == "replot" and outline:
             actions = [_read_action(outline), _write_action(outline)]
@@ -209,15 +215,29 @@ def apply_writing_playbook(
                 reads.append(_read_action(bible))
             actions = [*reads, _write_action(outline)]
             patched = True
-    elif operator == "append":
+    elif operator in ("append", "kickoff_body") and body:
         trimmed = [a for a in actions if a.type != "read_artifact"]
+        write_tool = "append_text_artifact"
+        if operator == "kickoff_body":
+            from app.services.writing_project import kickoff_should_write_not_append
+
+            write_tool = (
+                "write_text_artifact"
+                if kickoff_should_write_not_append(task_id)
+                else "append_text_artifact"
+            )
         if not any(
-            a.type == "run_tool" and str(a.params.get("name") or "") == "append_text_artifact"
+            a.type == "run_tool" and str(a.params.get("name") or "") == write_tool
             for a in trimmed
         ):
-            if body:
+            if operator == "kickoff_body" and write_tool == "write_text_artifact":
+                trimmed.append(_write_action(body))
+            else:
                 trimmed.append(_append_action(body))
-                patched = True
+            patched = True
+        for action in trimmed:
+            if action.type in ("write_artifact", "run_tool") and action.params.get("filename"):
+                action.params["filename"] = body
         if patched or len(trimmed) != len(actions):
             actions = trimmed
             patched = True

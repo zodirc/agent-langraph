@@ -25,6 +25,21 @@ def _manuscript_state(task_id: str, goal: str):
     )
 
 
+def test_kickoff_novel_classifies_outline_first_goal(isolated_stores, test_settings, monkeypatch):
+    import app.services.artifact_tools as art
+
+    monkeypatch.setattr(art.settings, "ARTIFACTS_PATH", test_settings.ARTIFACTS_PATH)
+    task_id = "kickoff-outline-first"
+    ensure_writing_project(task_id)
+    goal = (
+        "基于已有素材，写一部小说，先写大纲，"
+        "你要基于新的改动设定来写大纲和章节情节概览"
+    )
+    state = _manuscript_state(task_id, goal)
+    operator = classify_writing_operator(goal, state)
+    assert operator == "kickoff_novel", f"expected kickoff_novel, got {operator!r}"
+
+
 def test_kickoff_novel_classifies_open_goal(isolated_stores, test_settings, monkeypatch):
     import app.services.artifact_tools as art
 
