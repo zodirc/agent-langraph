@@ -86,7 +86,7 @@ def degrade_to_writing_playbook_state(state: AgentState) -> AgentState | None:
         return None
     from app.nodes.planning_node import _execution_transport_from_actions
 
-    exec_tools, tool_params, stages = _execution_transport_from_actions(actions)
+    exec_tools, tool_params, stages = _execution_transport_from_actions(actions, task_id=task_id)
     payload["writing_operator"] = operator
     payload["writing_intent"] = {"enabled": True, "source": "replan_budget_playbook"}
     payload["tool_params"] = {**payload.get("tool_params", {}), **tool_params}

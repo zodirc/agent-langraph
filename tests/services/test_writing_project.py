@@ -10,6 +10,7 @@ from app.services.writing_project import (
     load_project,
     parse_target_chapter_from_goal,
     slice_current_chapter_text,
+    in_progress_chapter_text,
     writing_project_manifest_exists,
 )
 
@@ -80,6 +81,69 @@ def test_slice_current_chapter_text_after_footer():
     full = "第一章内容。\n\n（第1章完）\n\n第二章开头。"
     assert slice_current_chapter_text(full) == "第二章开头。"
     assert slice_current_chapter_text("") == ""
+
+
+def test_premature_footer_not_treated_as_chapter_end():
+    full = (
+        "第六章正文。\n\n（第6章完）\n\n"
+        "李云龙没有回家吃晚饭，田雨一个人坐在饭桌前发呆。"
+    )
+    assert in_progress_chapter_text(full) == full.strip()
+    assert "（第6章完）" in in_progress_chapter_text(full)
+
+
+def test_sanitize_body_append_strips_overlap():
+    from app.services.writing_project import sanitize_body_append_content
+
+    existing = "前文。" * 50 + "结尾重复段。" * 20
+    overlap = "结尾重复段。" * 20 + "新段落。"
+    sanitized = sanitize_body_append_content(existing, overlap)
+    assert sanitized == "新段落。"
+    import app.services.artifact_tools as art
+
+    from app.services.artifact_tools import handle_append_text_artifact
+    from app.services.writing_project import load_project
+
+    monkeypatch.setattr(art.settings, "ARTIFACTS_PATH", test_settings.ARTIFACTS_PATH)
+    task_id = "footer-gate"
+    project = ensure_writing_project(task_id)
+    body = project.body_file
+    min_chars = int(DEFAULT_WORDS_PER_CHAPTER * CHAPTER_COMPLETION_RATIO)
+    long_body = "第六章。" * (min_chars // 3 + 1)
+    handle_append_text_artifact(
+        {
+            "task_id": task_id,
+            "filename": body,
+            "content": long_body,
+            "writing_operator": "append",
+        }
+    )
+    updated = load_project(task_id)
+    assert updated is not None
+    assert updated.next_chapter == 1
+    assert updated.current_chapter_incomplete is True
+
+    handle_append_text_artifact(
+        {
+            "task_id": task_id,
+            "filename": body,
+            "content": "\n\n（第1章完）",
+            "writing_operator": "append",
+        }
+    )
+    updated = load_project(task_id)
+    assert updated is not None
+    assert updated.next_chapter == 2
+    assert updated.current_chapter_incomplete is False
+
+
+def test_sanitize_body_append_strips_overlap():
+    from app.services.writing_project import sanitize_body_append_content
+
+    existing = "前文。" * 50 + "结尾重复段。" * 20
+    overlap = "结尾重复段。" * 20 + "新段落。"
+    sanitized = sanitize_body_append_content(existing, overlap)
+    assert sanitized == "新段落。"
 
 
 def test_parse_target_chapter_from_goal():

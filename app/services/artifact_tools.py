@@ -251,18 +251,37 @@ def handle_append_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
     content = str(params.get("content", ""))
     path = task_artifact_dir(task_id) / filename
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    from app.services.writing_project import is_body_path, sanitize_body_append_content
+
+    if is_body_path(task_id, filename):
+        content = sanitize_body_append_content(existing, content)
     chunks = split_long_text(content)
 
     if not chunks:
+        if not content.strip():
+            return {
+                "path": str(path),
+                "filename": filename,
+                "appended_bytes": 0,
+                "total_bytes": len(existing.encode("utf-8")),
+                "mode": "append",
+                "chunks_written": 0,
+                "status": "ok",
+                "deduped_empty": True,
+            }
         _check_size(content, existing_bytes=len(existing.encode("utf-8")))
         with path.open("a", encoding="utf-8") as handle:
             if existing.strip() and not existing.endswith("\n"):
                 handle.write("\n\n")
             handle.write(content)
         total = path.read_text(encoding="utf-8")
-        from app.services.writing_project import post_chapter_write_update
+        from app.services.writing_project import post_chapter_write_update, slice_current_chapter_text
 
-        post_chapter_write_update(task_id, filename, char_count=len(total))
+        post_chapter_write_update(
+            task_id,
+            filename,
+            char_count=len(slice_current_chapter_text(total)),
+        )
         return {
             "path": str(path),
             "filename": filename,
@@ -283,9 +302,13 @@ def handle_append_text_artifact(params: dict[str, Any]) -> dict[str, Any]:
             handle.write(chunk)
             current_bytes += len(chunk.encode("utf-8"))
     total = path.read_text(encoding="utf-8")
-    from app.services.writing_project import post_chapter_write_update
+    from app.services.writing_project import post_chapter_write_update, slice_current_chapter_text
 
-    post_chapter_write_update(task_id, filename, char_count=len(total))
+    post_chapter_write_update(
+        task_id,
+        filename,
+        char_count=len(slice_current_chapter_text(total)),
+    )
     return {
         "path": str(path),
         "filename": filename,

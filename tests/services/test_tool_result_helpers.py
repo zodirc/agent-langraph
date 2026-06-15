@@ -18,11 +18,29 @@ def test_format_read_preview_with_lines():
             "scope": {"start_line": 10, "end_line": 20},
             "content": "   1| 梁致远走进办公室\n   2| 秦池在等他",
             "with_line_numbers": True,
+            "line_count": 120,
         },
     )
     assert "chapter_01.md" in snippet
     assert "行 10" in snippet
-    assert "梁致远" in snippet
+    assert "梁致远" not in snippet
+
+
+def test_format_read_cached_shows_lines_only():
+    snippet = format_tool_preview_snippet(
+        "read_text_artifact",
+        {
+            "filename": "正文/novel.md",
+            "status": "cached",
+            "read_repeat_blocked": True,
+            "line_count": 450,
+            "content": "很长的正文" * 500,
+        },
+    )
+    assert "正文/novel.md" in snippet
+    assert "行 1–450" in snippet
+    assert "复用上次读取" in snippet
+    assert "很长的正文" not in snippet
 
 
 def test_format_edit_preview():

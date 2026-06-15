@@ -24,6 +24,23 @@ def tool_result_flag(item: Mapping[str, Any] | dict[str, Any] | None, key: str) 
     return tool_result_body(item).get(key)
 
 
+def _read_line_range_label(result: Mapping[str, Any]) -> str | None:
+    """Human-readable line range for a read_text_artifact result."""
+    scope = result.get("scope")
+    if isinstance(scope, Mapping) and scope.get("start_line") is not None:
+        start = int(scope["start_line"])
+        end_raw = scope.get("end_line")
+        end = int(end_raw) if end_raw is not None else start
+        return f"行 {start}–{end}"
+    line_count = result.get("line_count")
+    if isinstance(line_count, int) and line_count > 0:
+        return f"行 1–{line_count}"
+    total_chars = result.get("total_chars")
+    if isinstance(total_chars, int) and total_chars > 0:
+        return f"共 {total_chars:,} 字"
+    return None
+
+
 def format_tool_preview_snippet(tool: str, result: Mapping[str, Any] | dict[str, Any]) -> str:
     """Human-readable preview for SSE tool_preview (reads/edits with line context)."""
     from pathlib import Path
@@ -38,24 +55,37 @@ def format_tool_preview_snippet(tool: str, result: Mapping[str, Any] | dict[str,
     if name:
         parts.append(f"📄 {name}")
 
-    scope = result.get("scope")
-    if isinstance(scope, Mapping):
-        start = scope.get("start_line")
-        end = scope.get("end_line")
-        if start is not None:
-            end_disp = end if end is not None else start
-            parts.append(f"行 {start}–{end_disp}")
-
     status = str(result.get("status") or "").strip()
-    if status == "cached":
-        parts.append("(复用上次读取)")
+    read_repeat = bool(result.get("read_repeat_blocked")) or status == "cached"
 
-    content = result.get("content")
-    if content:
-        text = str(content)
-        if result.get("truncated"):
+    if tool == "read_text_artifact":
+        line_label = _read_line_range_label(result)
+        if line_label:
+            parts.append(line_label)
+        if read_repeat:
+            parts.append("(复用上次读取，未重复展示正文)")
+        elif result.get("truncated"):
             parts.append(f"[已截断，共 {result.get('total_chars', '?')} 字]")
-        parts.append(text[:2000])
+        if not read_repeat and not result.get("with_line_numbers") and not result.get("scope"):
+            content = result.get("content")
+            if content:
+                parts.append(str(content)[:2000])
+    else:
+        scope = result.get("scope")
+        if isinstance(scope, Mapping):
+            start = scope.get("start_line")
+            end = scope.get("end_line")
+            if start is not None:
+                end_disp = end if end is not None else start
+                parts.append(f"行 {start}–{end_disp}")
+        if status == "cached":
+            parts.append("(复用上次读取)")
+        content = result.get("content")
+        if content:
+            text = str(content)
+            if result.get("truncated"):
+                parts.append(f"[已截断，共 {result.get('total_chars', '?')} 字]")
+            parts.append(text[:2000])
 
     if tool == "edit_text_artifact":
         reps = result.get("replacements")

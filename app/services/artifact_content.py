@@ -206,6 +206,9 @@ def generate_artifact_content(
             profile = "text"
 
     if profile == "outline":
+        from app.services.story_bible import ensure_story_bible_ready
+
+        ensure_story_bible_ready(task_id)
         from app.services.artifact_edit_intent import is_artifact_edit_goal
 
         if is_artifact_edit_goal(goal) and existing_excerpt:

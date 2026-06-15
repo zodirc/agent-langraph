@@ -73,11 +73,16 @@ def _actions_from_result(result: dict[str, Any]) -> tuple[list[Action], list[str
 
 def _execution_transport_from_actions(
     actions: list[Action],
+    *,
+    task_id: str | None = None,
 ) -> tuple[list[str], dict[str, dict[str, Any]], list[list[str]]]:
     """Render actions into the legacy tool transport (zero re-interpretation).
 
     Until tool_node consumes ``planned_actions`` directly (WP-5), artifact and
     run_tool actions ride on selected_tools + tool_params + tool_stages.
+
+    When ``task_id`` is set, ``write_artifact`` on the novel body resolves to
+    ``append_text_artifact`` once a kickoff write already exists.
     """
     tools: list[str] = []
     tool_params: dict[str, dict[str, Any]] = {}
@@ -91,6 +96,12 @@ def _execution_transport_from_actions(
         else:
             name = action.tool_name or ""
             params = dict(action.params)
+            if action.type == "write_artifact" and task_id:
+                filename = str(params.get("filename") or "")
+                if filename:
+                    from app.services.writing_project import body_draft_tool_name
+
+                    name = body_draft_tool_name(task_id, filename)
         if not name:
             continue
         if name not in tools:
@@ -251,7 +262,9 @@ def planning_node(state: AgentState) -> AgentState:
             if not actions:
                 metrics.inc_contract_event("artifact_edit_ambiguous_multi")
             if actions:
-                exec_tools, tool_params, stages = _execution_transport_from_actions(actions)
+                exec_tools, tool_params, stages = _execution_transport_from_actions(
+                    actions, task_id=str(state["task_id"])
+                )
                 payload["tool_params"] = {**payload.get("tool_params", {}), **tool_params}
                 payload["tool_stages"] = stages
                 payload["thin_execution_profile"] = "artifact_edit"
@@ -380,6 +393,10 @@ def planning_node(state: AgentState) -> AgentState:
         ):
             if mode == "manuscript_mode":
                 ensure_writing_project(task_id, goal=goal)
+            if operator == "kickoff_novel":
+                from app.services.story_bible import ensure_story_bible_ready
+
+                ensure_story_bible_ready(task_id)
             if writing_project_manifest_exists(task_id):
                 force_write = bool(payload.get("force_write_after_reads")) or str(
                     payload.get("thin_execution_profile") or ""
@@ -395,7 +412,9 @@ def planning_node(state: AgentState) -> AgentState:
                 if actions and patched:
                     from app.services.metrics_service import get_metrics_service
 
-                    exec_tools, tool_params, stages = _execution_transport_from_actions(actions)
+                    exec_tools, tool_params, stages = _execution_transport_from_actions(
+                    actions, task_id=str(state["task_id"])
+                )
                     payload["tool_params"] = {**payload.get("tool_params", {}), **tool_params}
                     payload["tool_stages"] = stages
                     payload["writing_operator"] = operator
@@ -566,7 +585,7 @@ def planning_node(state: AgentState) -> AgentState:
 
             get_metrics_service().inc_contract_event("artifact_edit_write_patched")
         exec_tools, action_tool_params, action_stages = _execution_transport_from_actions(
-            actions
+            actions, task_id=str(state["task_id"])
         )
 
         # Legacy selected_tools from the LLM still count (transitional), merged
@@ -801,7 +820,9 @@ def planning_node(state: AgentState) -> AgentState:
                     "enabled": True,
                     "source": "planning_timeout_playbook",
                 }
-                exec_tools, tool_params, stages = _execution_transport_from_actions(actions)
+                exec_tools, tool_params, stages = _execution_transport_from_actions(
+                    actions, task_id=str(state["task_id"])
+                )
                 payload_fb["tool_params"] = {**payload_fb.get("tool_params", {}), **tool_params}
                 payload_fb["tool_stages"] = stages
                 return _finish_thin(

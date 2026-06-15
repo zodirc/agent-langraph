@@ -29,6 +29,17 @@ def writing_turn_footer_lines(state: dict[str, Any]) -> list[str]:
     if not isinstance(payload, dict):
         return []
     lines: list[str] = []
+    pending = payload.get("pending_batch_continuation")
+    if isinstance(pending, dict) and pending.get("next_chapter"):
+        target = pending.get("target_chapter")
+        next_ch = pending.get("next_chapter")
+        if target:
+            lines.append(
+                f"正文批量写作未完成（已完成至第{int(next_ch) - 1}章附近），"
+                f"将自动续写至第{target}章。"
+            )
+        else:
+            lines.append("正文批量写作未完成，将自动续写下一章。")
     material = str(payload.get(_MATERIAL_KEY) or "").strip()
     if material:
         lines.append(material)

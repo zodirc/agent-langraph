@@ -1,8 +1,12 @@
 """Tests for multi-chapter batch continuation."""
 
-from app.runtime.state import create_initial_state
+from app.runtime.state import create_initial_state, merge_state
 from app.services.artifact_tools import handle_write_text_artifact
-from app.services.writing_batch import maybe_schedule_batch_continuation
+from app.services.writing_batch import (
+    maybe_schedule_batch_continuation,
+    prepare_auto_batch_turn,
+    stamp_pending_batch_if_incomplete,
+)
 from app.services.writing_project import (
     CHAPTER_COMPLETION_RATIO,
     DEFAULT_BODY_FILE,
@@ -117,3 +121,45 @@ def test_playbook_thin_path_respects_pinned_append_operator(isolated_stores, tes
     assert len(actions) == 1
     assert actions[0].type == "run_tool"
     assert actions[0].params.get("name") == "append_text_artifact"
+
+
+def test_stamp_pending_and_prepare_auto_batch_turn(isolated_stores, test_settings, monkeypatch):
+    import app.services.artifact_tools as art
+
+    monkeypatch.setattr(art.settings, "ARTIFACTS_PATH", test_settings.ARTIFACTS_PATH)
+    task_id = "batch-auto-turn"
+    ensure_writing_project(task_id, goal="写到第6章")
+    project = load_project(task_id)
+    assert project is not None
+    project.target_chapter = 6
+    project.next_chapter = 5
+    from app.services.writing_project import save_project
+
+    save_project(task_id, project)
+
+    state = create_initial_state(
+        task_id=task_id,
+        session_id=task_id,
+        input_payload={
+            "goal": "写到第6章",
+            "writing_intent": {"enabled": True},
+        },
+    )
+    state = merge_state(state, session_turn=1, status="COMPLETED")
+    state["tool_results"] = [
+        {
+            "tool": "append_text_artifact",
+            "status": "ok",
+            "result": {"filename": project.body_file},
+        }
+    ]
+    stamped = stamp_pending_batch_if_incomplete(state)
+    assert (stamped.get("input_payload") or {}).get("pending_batch_continuation")
+
+    auto = prepare_auto_batch_turn(stamped)
+    assert auto is not None
+    assert auto.get("session_turn") == 2
+    payload = auto.get("input_payload") or {}
+    assert payload.get("writing_operator") == "append"
+    assert payload.get("auto_batch_resume") is True
+    assert "自动续章" in str(payload.get("goal") or "")

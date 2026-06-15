@@ -1317,6 +1317,26 @@ class GraphRunner:
 
         yield from self._stream_finalize(latest, interrupted_for_review, msg_ctx=msg_ctx)
 
+        stored = get_state_store().load(task_id)
+        auto_turn = None
+        if stored is not None:
+            from app.services.writing_batch import prepare_auto_batch_turn
+
+            auto_turn = prepare_auto_batch_turn(stored)
+            if auto_turn is not None:
+                get_state_store().save(auto_turn)
+                yield _format_stream_event(
+                    "batch_auto_continue",
+                    {
+                        "task_id": task_id,
+                        "session_id": auto_turn.get("session_id"),
+                        "session_turn": auto_turn.get("session_turn"),
+                        "message": "Batch writing continues in a new turn",
+                    },
+                )
+        if auto_turn is not None:
+            yield from self._stream_single(auto_turn, created=False)
+
     def _stream_supervisor(
         self,
         *,

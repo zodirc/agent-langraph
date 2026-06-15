@@ -44,6 +44,9 @@ def output_node(state: AgentState) -> AgentState:
     Writes: final_answer, structured_output, artifacts, status, current_node, audit_log
     """
     try:
+        from app.services.writing_batch import stamp_pending_batch_if_incomplete
+
+        state = stamp_pending_batch_if_incomplete(state)
         if state.get("status") == TaskStatus.REJECTED.value:
             answer = "Task rejected by policy or human review."
             structured: dict[str, Any] = {"rejected": True, "policy_result": state.get("policy_result")}

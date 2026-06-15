@@ -26,6 +26,12 @@ _OUTLINE_HINT_RE = re.compile(r"(?i)(大纲|outline)")
 _CHARS_RE = re.compile(r"(\d+)\s*字")
 _WAN_RE = re.compile(r"([一二两三四五六七八九十\d]+)\s*万\s*字?")
 _CHAPTER_DONE_RE = re.compile(r"（第(\d+)章完）")
+_CHAPTER_HEADER_RE = re.compile(
+    r"^\s*第[0-9一二三四五六七八九十百千零两]+章",
+    re.MULTILINE,
+)
+_MIN_CONTINUED_PROSE_AFTER_FOOTER = 80
+_APPEND_OVERLAP_MIN_CHARS = 120
 _PER_CHAPTER_FILE_RE = re.compile(r"第(\d+)章\.md$", re.IGNORECASE)
 _OUTLINE_CHAPTER_HEAD_RE = re.compile(
     r"(?im)^(?:#+\s*)?(?:第\s*([0-9]+|[一二三四五六七八九十百千零两]+)\s*章|chapter\s*(\d+))[^\n]*"
@@ -479,12 +485,43 @@ def extract_outline_for_chapter(task_id: str, chapter: int, *, max_chars: int = 
     return excerpt
 
 
+def _is_chapter_header_line(line: str) -> bool:
+    return bool(_CHAPTER_HEADER_RE.match(line.strip()))
+
+
+def last_sealed_chapter_end(
+    full_text: str,
+) -> int:
+    """Index after the last (第N章完) that truly closes a chapter (no trailing prose)."""
+    if not full_text.strip():
+        return 0
+    matches = list(_CHAPTER_DONE_RE.finditer(full_text))
+    if not matches:
+        return 0
+    for match in reversed(matches):
+        after = full_text[match.end() :].strip()
+        if not after:
+            return match.end()
+        first_line = after.splitlines()[0].strip() if after else ""
+        if _is_chapter_header_line(first_line):
+            return match.end()
+        continue
+    return 0
+
+
+def in_progress_chapter_text(full_text: str) -> str:
+    """Prose for the active chapter (text after the last sealed completed footer)."""
+    return full_text[last_sealed_chapter_end(full_text) :].strip()
+
+
 def chapter_prefix_end(full_text: str) -> int:
-    """Byte index in full_text after the last completed-chapter footer."""
-    last_end = 0
-    for match in _CHAPTER_DONE_RE.finditer(full_text):
-        last_end = match.end()
-    return last_end
+    """Byte index in full_text after the last sealed completed-chapter footer."""
+    return last_sealed_chapter_end(full_text)
+
+
+def chapter_prose_ends_with_footer(text: str) -> bool:
+    """True when in-progress chapter prose ends with a standard chapter-done marker."""
+    return bool(re.search(r"（第\d+章完）\s*$", (text or "").strip()))
 
 
 def merge_body_write_content(full_text: str, new_chapter_text: str) -> str:
@@ -520,13 +557,39 @@ def novel_tail_excerpt(task_id: str, *, max_chars: int = 1200) -> str:
 
 
 def slice_current_chapter_text(full_text: str) -> str:
-    """Return prose for the in-progress chapter (text after the last chapter footer)."""
-    if not full_text.strip():
+    """Return in-progress chapter prose (empty when the latest chapter is already sealed at EOF)."""
+    segment = in_progress_chapter_text(full_text)
+    if chapter_prose_ends_with_footer(segment):
         return ""
-    last_end = 0
-    for match in _CHAPTER_DONE_RE.finditer(full_text):
-        last_end = match.end()
-    return full_text[last_end:].strip()
+    return segment
+
+
+def sanitize_body_append_content(existing: str, content: str) -> str:
+    """Drop overlap/duplicate chapter tails before appending body prose."""
+    content = (content or "").strip()
+    if not content or not (existing or "").strip():
+        return content
+    max_overlap = min(len(existing), len(content), 2000)
+    for size in range(max_overlap, _APPEND_OVERLAP_MIN_CHARS - 1, -1):
+        if existing[-size:] == content[:size]:
+            content = content[size:].lstrip()
+            break
+    if not content:
+        return content
+    sealed_end = last_sealed_chapter_end(existing)
+    sealed = existing[:sealed_end]
+    while content.strip():
+        stripped = content.lstrip()
+        footer = _CHAPTER_DONE_RE.match(stripped)
+        if footer and footer.group(0) in sealed:
+            content = stripped[footer.end() :].lstrip()
+            continue
+        tail = existing[-500:].strip()
+        if tail and len(tail) >= _APPEND_OVERLAP_MIN_CHARS and stripped.startswith(tail):
+            content = stripped[len(tail) :].lstrip()
+            continue
+        break
+    return content
 
 
 def current_chapter_char_count(task_id: str) -> int:
@@ -607,15 +670,29 @@ def post_chapter_write_update(
     if norm != project.body_file.replace("\\", "/"):
         return
 
-    count = current_chapter_char_count(task_id)
-    if char_count is not None and count == 0:
-        count = char_count
+    full_text = read_body_text(task_id, filename)
+    stripped = full_text.strip()
     threshold = completion_threshold(project)
-    if count >= threshold:
-        project.current_chapter_incomplete = False
-        project.next_chapter += 1
+    if chapter_prose_ends_with_footer(stripped):
+        footers = list(_CHAPTER_DONE_RE.finditer(stripped))
+        last = footers[-1]
+        prefix = last_sealed_chapter_end(stripped[: last.start()])
+        block = stripped[prefix:].strip()
+        if len(block) >= threshold:
+            project.current_chapter_incomplete = False
+            project.next_chapter += 1
+        else:
+            project.current_chapter_incomplete = True
     else:
-        project.current_chapter_incomplete = True
+        segment = in_progress_chapter_text(full_text)
+        count = len(segment)
+        if char_count is not None and count == 0:
+            count = char_count
+        if count >= threshold and chapter_prose_ends_with_footer(segment):
+            project.current_chapter_incomplete = False
+            project.next_chapter += 1
+        else:
+            project.current_chapter_incomplete = True
     save_project(task_id, project)
 
 

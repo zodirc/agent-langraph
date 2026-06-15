@@ -19,8 +19,15 @@ STORY_BIBLE_SYSTEM = (
 )
 
 _STORY_BIBLE_HEADER = "# 素材卡（自动生成，可手动编辑）"
+_SUBSTANTIVE_BIBLE_CHARS = 80
+_DEFAULT_ENSURE_TIMEOUT_SEC = 90.0
 _distill_lock = threading.Lock()
 _distill_status: dict[str, dict[str, Any]] = {}
+
+
+def _bible_is_substantive(task_id: str) -> bool:
+    text, chars, _ = read_story_bible(task_id)
+    return bool(text) and chars >= _SUBSTANTIVE_BIBLE_CHARS
 
 
 def story_bible_relative_path(task_id: str) -> str:
@@ -98,6 +105,55 @@ def clear_story_bible_status_for_tests() -> None:
         _distill_status.clear()
 
 
+def bootstrap_story_bible_from_session_source(task_id: str) -> bool:
+    """Build a fallback 素材卡 from the session source doc when bible is still empty."""
+    if _bible_is_substantive(task_id):
+        return False
+    from app.services.knowledge_store import get_knowledge_store
+
+    doc_id = f"session-source-{str(task_id).strip()}"
+    doc = get_knowledge_store().get_document(doc_id)
+    if not doc:
+        return False
+    body = str(doc.get("content") or "").strip()
+    if not body:
+        return False
+    title = str(doc.get("title") or "会话素材").strip() or "会话素材"
+    _write_fallback_bible(task_id, title, body)
+    return True
+
+
+def ensure_story_bible_ready(
+    task_id: str,
+    *,
+    timeout_sec: float = _DEFAULT_ENSURE_TIMEOUT_SEC,
+    poll_interval_sec: float = 0.25,
+) -> tuple[str, int, str | None]:
+    """
+    Block until 素材卡 has substantive content or distillation finishes.
+
+    Writes a synchronous fallback from session source when needed.
+    """
+    import time
+
+    deadline = time.monotonic() + max(0.5, float(timeout_sec))
+    while True:
+        text, chars, warn = read_story_bible(task_id)
+        if chars >= _SUBSTANTIVE_BIBLE_CHARS:
+            return text, chars, warn
+        with _distill_lock:
+            pending = (_distill_status.get(str(task_id)) or {}).get("status") == "pending"
+        if not pending:
+            if bootstrap_story_bible_from_session_source(task_id):
+                return read_story_bible(task_id)
+            return text, chars, warn
+        if time.monotonic() >= deadline:
+            if bootstrap_story_bible_from_session_source(task_id):
+                return read_story_bible(task_id)
+            return text, chars, warn
+        time.sleep(max(0.05, float(poll_interval_sec)))
+
+
 def distill_story_bible_async(
     task_id: str,
     *,
@@ -107,6 +163,8 @@ def distill_story_bible_async(
     """Background distillation after source material upload."""
     if not (content or "").strip():
         return
+    if not _bible_is_substantive(task_id):
+        _write_fallback_bible(task_id, title, content)
     mark_story_bible_distillation_started(task_id)
     thread = threading.Thread(
         target=_distill_story_bible,
