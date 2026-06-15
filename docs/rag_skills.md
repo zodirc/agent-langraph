@@ -402,7 +402,7 @@ RAG 的最终目标不是“找到内容”，而是“把合适的内容送进�
 
 **output_guard 与写作轮**：忠实度闸门按回合契约与 `answer_mode` 判定，而非仅凭召回域或回复措辞。写作澄清/追问/状态回合（无落盘、非严格事实问答）不跑词面重合硬 REJECT；混合 `writing+source` 召回不再误杀「请补充素材」类回复。事实问答与伪造引用仍硬拦。流程侧见 `docs/arch.md` §4.4、§5.2。
 
-离线可用 `tests/eval/run_writing_rag_ab_eval.py` 对开/关 RAG 做规范遵循度 A/B，阈值门见 `eval_thresholds.check_writing_compliance_thresholds`。
+离线可用 `tests/eval/run_writing_rag_ab_eval.py` 对开/关 RAG 做规范遵循度 A/B，阈值门见 `tests/eval/eval_thresholds.py` 中 `check_writing_compliance_thresholds`。
 
 ### 5.3 服务工程判断与结果生成
 
@@ -431,9 +431,18 @@ RAG 的最终目标不是“找到内容”，而是“把合适的内容送进�
 
 ## 6. Skills 流程总览
 
-Skills 在当前项目中的目标，是把不同场景下的系统行为组织成稳定的策略包。
+Skills 在当前项目中的目标，是把不同场景下的系统行为组织成**可声明、可解析、可注入**的策略包。与 `mode_contracts`（按 `qa_mode` / `manuscript_mode` / `engineering_mode` 的全局偏置）互补：Skill 由任务 API **显式挂载**（`skill_id`），在单次任务内叠加工具边界与 prompt overlay。
 
-Skills 关注的不是“系统能不能做”，而是“在这个场景下应该怎么做”。
+Skills 关注的不是“系统能不能做”，而是“**在这个已选 Skill 下应该怎么做**”。
+
+### 6.0 与模式契约（mode contract）的分工
+
+| 机制 | 绑定粒度 | 典型内容 |
+|---|---|---|
+| **mode contract** | 会话/任务模式（`target_mode`） | 默认工具集、步数偏置、工程隔离 |
+| **Skill** | 单次任务可选（`skill_id`） | `allowed_tools` / overlay / `output_contract` / 执行模式提示 |
+
+二者可同时生效：模式决定大方向，Skill 在任务创建时进一步收窄或偏置规划/推理行为。
 
 ### 6.1 Skills 总体流程图
 
@@ -485,29 +494,53 @@ Skills 关注的不是“系统能不能做”，而是“在这个场景下应�
 
 ## 7. Skills 流程详细说明
 
-## 7.1 任务识别与场景判断
+## 7.0 配置与定义来源
 
-系统在接到任务后，需要识别当前任务更适合哪种场景。
+- **配置开关**：`config.yaml` → `skill.enabled`、`skill.runtime_policy_enabled`（默认均为 true）
+- **内置定义目录**：`config/skills/*.yaml`（如 `qa_general`、`chapter_writer`、`novel_outline`、`code_review` 等）
+- **可选扩展**：`config/skill_packages/`（`packages_enabled`）、租户级 `data/skills/`
+
+每个 Skill YAML 定义至少包含：`skill_id`、`allowed_tools` / `blocked_tools`、`planning_overlay`、`reasoning_overlay`、可选 `reflection_overlay` 与 `output_contract`。
+
+## 7.1 任务挂载与解析
+
+用户在创建任务时可通过 API 传入 `skill_id` 与 `skill_params`。图执行前完成两阶段解析：
+
+1. **API 阶段**（`attach_skill_to_payload`）：校验 skill 存在、状态为 published、角色/租户可见 → 写入 `input_payload._skill_policy` 与 `_skill_snapshot`
+2. **图启动阶段**（`apply_skill_from_payload`）：剥离内部键，执行 `pre_task` hook，将 **`skill_runtime_policy`** 提升到 `AgentState`
+
+`skill_runtime_policy` 核心字段：
+
+| 字段 | 作用 |
+|---|---|
+| `resolved_tool_allowlist` / `resolved_tool_blocklist` | 与 domain pack 工具集求交，约束规划与 `validate_tool_selection` |
+| `resolved_planning_overlay` | 注入规划 system prompt（`[Skill overlay]` 段） |
+| `resolved_reasoning_overlay` | 注入推理 system prompt |
+| `resolved_reflection_overlay` | 注入反思 prompt（若走 reflection LLM） |
+| `resolved_output_contract` | 输出结构约束（供 output_guard 等消费） |
+| `resolved_action_weights` | 可选 action 偏置权重 |
+
+Overlay 文本支持 `skill_params` 模板渲染（如 goal 占位）。
+
+## 7.2 任务识别与场景判断
+
+系统在接到任务后，除 **pre_planning 的模式解析**（`target_mode`、route_audit、intent_observation）外，若 payload 含 `skill_id`，则 Skill 策略与模式契约 **并行生效**。
+
+Skill **不替代** 事件分类或 `target_mode` 推断；它是在模式确定（或显式指定）之后，对单次任务叠加的策略层。
 
 例如，一个任务可能偏向：
 
-- 通用问答
-- 工程交付
-- 审核评估
-- 持续推进型任务
-- 其他特定能力包
+- 通用问答（`qa_mode` + `skill_id=qa_general`）
+- 长文章节（`manuscript_mode` + `skill_id=chapter_writer`）
+- 工程交付（`engineering_mode` + `skill_id=code_review`）
 
-在这个阶段，系统会把任务与合适的场景能力联系起来。
+## 7.3 选择或附加 Skill
 
----
+当 API 请求携带 `skill_id` 时，系统在图执行前完成解析并挂载；未携带时 Skill 层不生效，仅依赖 mode contract 与默认 domain overlay。
 
-## 7.2 选择或附加 Skill
+若 Skill 定义含 `preferred_execution_mode` 或 `base_domain`，且 payload 未显式覆盖，解析结果可写入 payload 的 `execution_mode` / `domain` 提示（不强制覆盖 `target_mode`）。
 
-当系统确认当前任务处于某个场景时，会选择对应的 Skill，或者把某个 Skill 附加到当前任务上。
-
-这一步的目标是让后续规划和执行不再只依赖通用逻辑，而是带着场景化约束前进。
-
-### 7.2.1 Skill 选择视图
+### 7.3.1 Skill 选择视图
 
 ```text
 +------------------------+
@@ -531,7 +564,7 @@ Skills 关注的不是“系统能不能做”，而是“在这个场景下应�
 
 ---
 
-## 7.3 解析 Skill 策略内容
+## 7.4 解析 Skill 策略内容
 
 一个 Skill 在系统中的作用，不只是给模型一段额外提示，而是提供一整组场景化约束。
 
@@ -548,21 +581,21 @@ Skills 关注的不是“系统能不能做”，而是“在这个场景下应�
 
 ---
 
-## 7.4 注入规划与执行流程
+## 7.5 注入规划与执行流程
 
-Skill 生效之后，不会停留在静态定义层，而是会真正参与后续执行。
+Skill 生效后参与以下环节（均读取 `state.skill_runtime_policy`）：
 
-它会影响的部分包括：
+| 阶段 | 注入方式 |
+|---|---|
+| **规划** | `build_planning_system_prompt` 追加 `resolved_planning_overlay`；`merge_domain_pack_tools_with_skill` 收窄 `runtime_capabilities` 工具集 |
+| **工具执行** | `validate_tool_selection` 与 allowlist/blocklist 对齐 |
+| **推理** | reasoning system prompt 追加 `resolved_reasoning_overlay` |
+| **反思** | 若走 reflection LLM，追加 `resolved_reflection_overlay`；写作算子结构化反思时 overlay 仍可用于边界提示 |
+| **任务结束** | `record_skill_task_finished` 写入 skill 指标 |
 
-- 规划阶段的计划生成
-- 工具选择边界
-- 推理阶段的行为偏置
-- 输出阶段的结构要求
-- 风险控制与校验方式
+trusted plugin hooks（`HOOK_TYPE_PLANNING`、`HOOK_TYPE_TOOL_FILTER`）可在解析阶段进一步 patch policy。
 
-因此，Skill 是一种“运行时场景策略注入”。
-
-### 7.4.1 Skills 注入视图
+### 7.5.1 Skills 注入视图
 
 ```text
 +------------------------+
@@ -589,7 +622,7 @@ Skill 生效之后，不会停留在静态定义层，而是会真正参与后�
 
 ---
 
-## 7.5 影响工具选择与动作边界
+## 7.6 影响工具选择与动作边界
 
 Skill 不直接替代工具，但会决定在某个场景下：
 
@@ -602,7 +635,7 @@ Skill 不直接替代工具，但会决定在某个场景下：
 
 它实际上决定了系统在该场景中的“能力边界与行为方式”。
 
-### 7.5.1 动作边界视图
+### 7.6.1 动作边界视图
 
 ```text
 +------------------------+
@@ -627,7 +660,7 @@ Skill 不直接替代工具，但会决定在某个场景下：
 
 ---
 
-## 7.6 输出契约与结果收敛
+## 7.7 输出契约与结果收敛
 
 Skill 还会影响系统最终结果的形式。
 
@@ -727,7 +760,7 @@ RAG 是当前项目中的知识支撑流程。它负责在任务需要知识时�
 
 ### 10.2 Skills 的本质
 
-Skills 是当前项目中的场景策略流程。它负责在不同任务场景下，为系统提供行为边界、能力约束、规划偏置和输出契约。
+Skills 是当前项目中的**可选任务级策略包**：YAML 定义 → API 挂载 → `skill_runtime_policy` → 工具 allowlist 与 planning/reasoning/reflection overlay 注入。与 `mode_contracts` 的全局模式偏置叠加，而非替代事件分类或 `target_mode` 解析。
 
 ### 10.3 二者关系
 

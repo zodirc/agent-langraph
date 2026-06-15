@@ -448,17 +448,50 @@
 
 ### 规划路径分流（预规划 → 规划节点）
 
-规划节点在调用规划 LLM 之前，先完成 **pre_planning**（意图观测、路由审计种子、`target_mode` 与模式契约），再按下列顺序短路（详见 `docs/agentic_artifact_editing_plan.md`）：
+规划节点在调用规划 LLM 之前，先完成 **pre_planning**（意图观测、路由审计种子、`target_mode` 与模式契约），再按下列**固定顺序**短路（先命中先返回，后续路径不再执行）：
 
 **意图观测（intent_observation）与模式冻结。** L2 分类模型仅在 `auto`、低置信或歧义场景调用；UI 显式模式且结构化 `inferred_kind` 与模式对齐、置信达标时走结构化观测（不调模型），并补齐 `interaction_goal=delivery` 等字段。首轮 `kickoff_novel` 算子命中时亦跳过 L2（`skip_reason=novel_kickoff_thin_path`）。单轮 intent 快照冻结后，`mode_freeze` 阻止 route_audit 二次解析把手稿模式振荡到 `qa_mode`（高置信 + 审计对齐时保留 `target_mode`）；二次 mode resolution 仍尊重显式 UI 模式。L2 调用另有进程内 wall-clock 超时（`MODEL_TIMEOUT_INTENT_OBSERVATION`，默认 ≤20s），超时回退结构化观测。
 
-| 路径 | 触发条件 | 产出 | 说明 |
-|---|---|---|---|
-| **产物编辑薄路径** | `detect_artifact_edit_intent` 且单文件可解析 | `read_artifact` → `write_artifact`；`thin_execution_profile=artifact_edit` | 跳过高成本规划 LLM；`pin_mode=False` 避免 route_audit 后工具被钉回无工具态 |
-| **QA 薄路径** | `qa_mode` 且 `goal_is_conversational_qa` 且非产物编辑 | `answer` only；`thin_execution_profile=qa_direct` | 寒暄/短闲聊，无工具 |
-| **工程薄路径** | `engineering_mode` 且规则判定可跳过规划 LLM | `run_code` + 工程工具集 | 交付类任务 |
-| **写作 playbook 薄路径** | `classify_writing_operator` 命中且 `project.json` 存在 | 算子固定 `planned_actions`；`thin_execution_profile=writing_playbook` | 跳过高成本规划 LLM；含 `kickoff_novel` / `kickoff_body` 等；`skip_retrieval=False`（写作域检索仍执行）；细则见 §5.2 |
-| **完整 LLM 规划** | 以上皆不满足（含多产物润色、已有实质大纲时的开放式起稿） | 结构化 `actions` + `planned_actions` | 规划上下文含 `artifact_manifest`；多文件时由模型具名 `filename`；超时 45s，写作可降级 playbook |
+| 顺序 | 路径 | 触发条件 | 产出 | 说明 |
+|---|---|---|---|---|
+| 1 | **素材确认薄路径** | `goal_is_session_source_inquiry`（如「素材读了吗」） | `retrieve(domains=[source])` → `answer`；`thin_execution_profile=session_source_qa` | 跳过高成本规划 LLM；`skip_retrieval=False`；`turn_kind=narrate_only` |
+| 2 | **产物编辑薄路径** | `detect_artifact_edit_intent` 且 `resolve_artifact_edit_filename` 非空 | `read_artifact` → `write_artifact`；`thin_execution_profile=artifact_edit` | 跳过高成本规划 LLM；`pin_mode=False`；`skip_retrieval=True`；实现要点见下节 |
+| 3 | **QA 薄路径** | `qa_mode` 且 `goal_is_conversational_qa` 且非产物编辑、非素材确认 | `answer` only；`thin_execution_profile=qa_direct` | 寒暄/短闲聊，无工具 |
+| 4 | **工程薄路径** | `engineering_mode` 且 `derive_planning_required=false` | `run_code` + 模式契约工具集 | 交付类任务 |
+| 5 | **写作 playbook 薄路径** | `resolve_writing_playbook_operator` 命中且 `project.json` 存在 | 算子固定 `planned_actions`；`thin_execution_profile=writing_playbook` | 跳过高成本规划 LLM；含 `kickoff_novel` / `kickoff_body` 等；`skip_retrieval=False`；细则见 §5.2 |
+| 6 | **完整 LLM 规划** | 以上皆不满足（含多产物润色歧义、已有实质大纲时的开放式起稿） | 结构化 `actions` + `planned_actions` | 规划上下文含 `artifact_manifest`；多文件时由模型具名 `filename`；超时 45s，写作可降级 playbook |
+
+#### 产物编辑薄路径（实现要点）
+
+**意图判定**（`artifact_edit_intent`）：
+
+- **编辑动词**：goal 匹配润色/修改/改写/重写/优化/续写/接着写等（`_EDIT_VERB_RE`），即 `is_artifact_edit_goal`
+- **可执行前提**：会话磁盘上已有产物（`build_artifact_manifest` 非空），二者同时满足才为 `detect_artifact_edit_intent`
+- **开关**：`performance.artifact_edit_fast_path`（默认 true）
+
+**文件名解析**（`resolve_artifact_edit_filename`）：
+
+- 仅 **1 个** 产物 → 直接选中
+- **多个** 产物 → 用 goal 关键词（故事/散文/大纲/正文/章节及 stem 片段）对 manifest 打分；须 **唯一最高分** 才返回文件名，否则返回空
+- 解析失败（多产物歧义）→ 不走薄路径，记 `artifact_edit_ambiguous_multi`，落入完整 LLM 规划
+
+**薄路径产出**（`artifact_edit_thin_actions`）：
+
+- 固定 `read_artifact(filename)` → `write_artifact(filename)`（正文在执行阶段由 gateway 生成，params 可不含 inline content）
+- `writing_intent.enabled=true`，`source=artifact_edit`；`pin_mode=False` 避免 route_audit 后模式被钉死
+
+**完整规划后的结构补丁**（`ensure_artifact_edit_write_action`）：
+
+- 当 plan/goal 含保存语义（编辑动词或 plan 步骤含保存/写回），但 planner 只产出 `read_artifact` → 自动追加 `write_artifact`（`artifact_edit_write_patched`）
+
+**收敛与 read-loop**（`converge` + `artifact_edit_needs_write_after_reads`）：
+
+- 本回合已成功 read、尚无 write/edit/append 落盘，且 plan 仍含保存语义 → `NEXT_REPLAN`，reason=`artifact_edit_needs_write`
+- 与写作轮的 `NEXT_FORCE_WRITE` 分流：产物编辑看 plan 保存语义；手稿模式看 `writing_intent` 与算子契约
+
+**与 QA 薄路径的互斥**：
+
+- `should_skip_qa_planning_llm` 在判定闲聊前 **先排除** `detect_artifact_edit_intent`，避免「润色一下」被 QA 直答
 
 手稿**交付/编辑类短句**（如「写一篇小说」「基于素材写小说」「开始写正文」「写第一章」「改大纲」）经 `goal_is_writing_manuscript_action` 识别，不再被「≤16 字」兜底误判为闲聊；`manuscript_mode` 下也不会因此被切到 `qa_mode`。纯寒暄、进度询问仍为 QA。显式 UI 模式（工程/写作）仅在 `explicit_mode_should_apply` 为真时覆盖 `target_mode`（例如工程 UI 下的「你好」仍走 `qa_mode`）。产物编辑薄路径仍要求会话内**已有磁盘产物**；首轮起稿走 `kickoff_novel` 时要求大纲仍为占位（`outline_needs_kickoff()`）。
 
@@ -978,7 +1011,7 @@ budget ≈ clamp(200000 × 0.6 − 8192, 12000, 160000) ≈ 111808
 | 意图观测 | turn1 命中时跳过 L2（`skip_reason=novel_kickoff_thin_path`） |
 | 不命中时 | 大纲已有实质内容、或非手稿上下文 → 落入全量规划 LLM |
 
-`kickoff_body` 优先于 `kickoff_novel`（「开始写正文」「写第一章」等走正文起稿，不走起纲）。
+算子分类按固定顺序试探：`character` → `kickoff_novel` → `kickoff_body` → `replot` → `append` → `rewrite` → `polish`。`kickoff_novel` 额外要求手稿路由上下文且 `outline_needs_kickoff()`；故「写第一章」「开始写正文」通常只命中 `kickoff_body`，「写一篇小说」在占位大纲时命中 `kickoff_novel`。
 
 mission 活跃且 `project.json` 存在且算子已分类时，意图观测亦走 `writing_playbook_prune` 跳过 L2。
 
