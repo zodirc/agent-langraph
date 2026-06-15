@@ -21,9 +21,22 @@ def test_format_read_preview_with_lines():
             "line_count": 120,
         },
     )
-    assert "chapter_01.md" in snippet
-    assert "行 10" in snippet
+    assert snippet == "阅读了 chapter_01.md，L10-20"
     assert "梁致远" not in snippet
+
+
+def test_format_read_full_file_preview():
+    snippet = format_tool_preview_snippet(
+        "read_text_artifact",
+        {
+            "filename": "大纲.md",
+            "content": "很长的大纲正文" * 200,
+            "line_count": 88,
+            "total_chars": 5000,
+        },
+    )
+    assert snippet == "阅读了 大纲.md，L1-88"
+    assert "很长" not in snippet
 
 
 def test_format_read_cached_shows_lines_only():
@@ -37,9 +50,7 @@ def test_format_read_cached_shows_lines_only():
             "content": "很长的正文" * 500,
         },
     )
-    assert "正文/novel.md" in snippet
-    assert "行 1–450" in snippet
-    assert "复用上次读取" in snippet
+    assert snippet == "阅读了 正文/novel.md，L1-450（复用缓存）"
     assert "很长的正文" not in snippet
 
 

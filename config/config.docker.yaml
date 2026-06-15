@@ -185,7 +185,7 @@ session:
 
 context_governance:
   enabled: true
-  default_token_budget: 64800
+  default_token_budget: 200000
   window_adaptive_budget: true
   window_utilization: 0.6
   prompt_budget_floor: 12000
