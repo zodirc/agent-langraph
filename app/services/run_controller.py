@@ -67,12 +67,28 @@ class RunController:
     @staticmethod
     def assert_run_active(state: AgentState, *, phase: str = "") -> None:
         """Drop stale work: cancelled run or superseded revision."""
+        from app.runtime.state import TaskStatus
+
         task_id = str(state.get("task_id") or "")
+        stored = get_state_store().load(task_id, read_only=True) if task_id else None
+        if stored:
+            terminal = str(stored.get("status") or "")
+            if terminal in (TaskStatus.TIMED_OUT.value, TaskStatus.CANCELLED.value):
+                raise RunCancelled(f"run terminal ({terminal}){f' at {phase}' if phase else ''}")
+            ctx = stored.get("interrupt_context") or {}
+            if str(ctx.get("runtime_state") or "") == "ABORTED":
+                raise RunCancelled(f"run aborted{f' at {phase}' if phase else ''}")
+
         run_meta = state.get("execution_run") if isinstance(state.get("execution_run"), dict) else {}
         if run_meta.get("cancelled"):
             raise RunCancelled(f"run cancelled{f' at {phase}' if phase else ''}")
         run_id = str(run_meta.get("run_id") or "")
         if run_id and task_id and not is_graph_run_active(task_id, run_id):
+            if stored and str(stored.get("status") or "") in (
+                TaskStatus.TIMED_OUT.value,
+                TaskStatus.CANCELLED.value,
+            ):
+                raise RunCancelled(f"run ended{f' at {phase}' if phase else ''}")
             revision_at_start = int(run_meta.get("revision_at_start") or 0)
             payload = state.get("input_payload") or {}
             current_revision = int(payload.get("intent_revision") or 0)

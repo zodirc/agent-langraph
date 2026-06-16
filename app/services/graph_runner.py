@@ -986,6 +986,7 @@ class GraphRunner:
         ack_q: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
         node_q: queue.SimpleQueue[tuple[str, AgentState] | None] = queue.SimpleQueue()
         stream_error: list[BaseException | None] = [None]
+        stream_abort_control = [False]
         last_event_at = started_at
         delivered_emitted = False
 
@@ -1087,6 +1088,14 @@ class GraphRunner:
                         control_state=effective_control_state(control),
                         active_step_id=live_entry.active_step_id if live_entry else None,
                     )
+                    if control.cancel_requested:
+                        stored_ctrl = get_state_store().load(task_id)
+                        if stored_ctrl is not None:
+                            latest = stored_ctrl
+                        stream_abort_control[0] = True
+
+                if stream_abort_control[0] and not worker.is_alive():
+                    break
 
                 if now - last_event_at >= 8.0 and worker.is_alive() and not delivered_emitted:
                     yield from _emit_progress(
@@ -1303,6 +1312,16 @@ class GraphRunner:
             if stream_error[0] is not None:
                 yield from self._stream_error(latest, stream_error[0])
                 return
+
+            stored_terminal = get_state_store().load(task_id)
+            if stored_terminal is not None:
+                terminal_status = str(stored_terminal.get("status") or "")
+                if terminal_status in (
+                    TaskStatus.TIMED_OUT.value,
+                    TaskStatus.CANCELLED.value,
+                    TaskStatus.PAUSED.value,
+                ):
+                    latest = stored_terminal
         finally:
             set_progress_handler(None)
             set_trace_handler(None)

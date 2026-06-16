@@ -19,6 +19,29 @@ _PENDING_BATCH_KEY = "pending_batch_continuation"
 _AUTO_BATCH_GOAL = "继续写作（自动续章）"
 
 
+def is_batch_continuation_ready(state: AgentState) -> bool:
+    """True when tool_execution should run the next in-turn batch chapter immediately."""
+    payload = state.get("input_payload") or {}
+    if str(payload.get("thin_execution_profile") or "") != "writing_batch":
+        return False
+    if str(state.get("status") or "") != TaskStatus.PLANNED.value:
+        return False
+    if not state.get("planned_actions"):
+        return False
+    intent = payload.get("writing_intent") or {}
+    return bool(intent.get("enabled"))
+
+
+def apply_batch_continuation_after_tools(state: AgentState) -> AgentState:
+    """Schedule the next chapter inside the graph checkpoint (not only external store)."""
+    from app.services.graph_execution_signals import graph_last_tool_failed
+
+    if graph_last_tool_failed(state):
+        return state
+    continued = maybe_schedule_batch_continuation(state)
+    return continued if continued is not None else state
+
+
 def _turn_had_successful_body_write(state: AgentState) -> bool:
     from app.services.writing_project import load_project
 

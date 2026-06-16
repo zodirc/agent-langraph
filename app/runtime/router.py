@@ -90,13 +90,9 @@ def route_after_tool(state: AgentState) -> str:
     )
 
     if not graph_last_tool_failed(state):
-        from app.services.writing_batch import maybe_schedule_batch_continuation
+        from app.services.writing_batch import is_batch_continuation_ready
 
-        batch_continued = maybe_schedule_batch_continuation(state)
-        if batch_continued is not None:
-            from app.services.state_store import get_state_store
-
-            get_state_store().save(batch_continued)
+        if is_batch_continuation_ready(state):
             return "tool_execution"
 
     conv = evaluate_convergence(state)

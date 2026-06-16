@@ -22,6 +22,7 @@ def timed_out_user_message() -> str:
 def finalize_timed_out_task(task_id: str, *, reason: str = "turn_wall_clock_budget_exceeded") -> bool:
     """Mark task TIMED_OUT, set final_answer, request cancel. Returns True if state existed."""
     from app.runtime.state import TaskStatus, append_audit, merge_state
+    from app.services.graph_run_registry import end_graph_run, get_active_run_id
     from app.services.state_store import get_state_store
     from app.services.task_control import request_cancel
 
@@ -29,6 +30,10 @@ def finalize_timed_out_task(task_id: str, *, reason: str = "turn_wall_clock_budg
     stored = store.load(task_id)
     if not stored:
         return False
+
+    active_run_id = get_active_run_id(task_id)
+    if active_run_id:
+        end_graph_run(task_id, active_run_id)
 
     try:
         request_cancel(task_id, requested_by="turn_watchdog", reason=reason)
@@ -39,11 +44,16 @@ def finalize_timed_out_task(task_id: str, *, reason: str = "turn_wall_clock_budg
     ctx = dict(stored.get("interrupt_context") or {})
     ctx["runtime_state"] = "ABORTED"
     ctx["cancel_requested"] = True
+    run_meta = dict(stored.get("execution_run") or {})
+    if active_run_id:
+        run_meta["run_id"] = active_run_id
+    run_meta["cancelled"] = True
     updated = merge_state(
         stored,
         status=TaskStatus.TIMED_OUT.value,
         final_answer=msg,
         current_node="watchdog",
+        execution_run=run_meta,
         interrupt_context=ctx,
         audit_log=append_audit(
             stored,

@@ -122,6 +122,9 @@ def _run_planned_actions(state: AgentState) -> AgentState:
         payload_facts["turn_facts"] = merged_facts
         updated = merge_state(updated, turn_facts=merged_facts, input_payload=payload_facts)
     updated = mark_turn_step_executed(updated)
+    from app.services.writing_batch import apply_batch_continuation_after_tools
+
+    updated = apply_batch_continuation_after_tools(updated)
     get_state_store().save(updated)
     return updated
 
@@ -139,6 +142,12 @@ def tool_execution_node(state: AgentState) -> AgentState:
         try:
             RunController.assert_run_active(state, phase="tool_execution_enter")
         except RunCancelled:
+            from app.services.execution_control import CancelRequested, handle_control_exception
+
+            handled = handle_control_exception(state, CancelRequested("run cancelled"))
+            if handled is not None:
+                get_state_store().save(handled)
+                return handled
             return merge_state(state, current_node="tool_execution")
         from app.services.execution_control import (
             CancelRequested,
@@ -431,6 +440,9 @@ def tool_execution_node(state: AgentState) -> AgentState:
         from app.services.turn_guard import mark_turn_step_executed
 
         updated = mark_turn_step_executed(updated)
+        from app.services.writing_batch import apply_batch_continuation_after_tools
+
+        updated = apply_batch_continuation_after_tools(updated)
         get_state_store().save(updated)
         return updated
     except Exception as exc:

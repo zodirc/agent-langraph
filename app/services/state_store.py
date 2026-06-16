@@ -60,6 +60,19 @@ _STEER_BATCH_GATE_KEYS = frozenset(
         "steer_outcome_confirmed",
     }
 )
+
+# Terminal statuses must not be overwritten by in-flight graph node snapshots.
+_TERMINAL_PROTECT_STATUSES = frozenset(
+    {
+        TaskStatus.TIMED_OUT.value,
+        TaskStatus.CANCELLED.value,
+        TaskStatus.COMPLETED.value,
+        TaskStatus.DEAD_LETTER.value,
+        TaskStatus.FAILED.value,
+        TaskStatus.REJECTED.value,
+        TaskStatus.ABANDONED.value,
+    }
+)
 from app.services.db import (
     postgres_connection,
     postgres_read_connection,
@@ -187,6 +200,15 @@ class StateStore:
 
         if is_task_tombstoned(str(state.get("task_id") or "")):
             return state
+        existing = self.load(state["task_id"], read_only=True)
+        if existing:
+            existing_status = str(existing.get("status") or "")
+            incoming_status = str(state.get("status") or "")
+            if (
+                existing_status in _TERMINAL_PROTECT_STATUSES
+                and incoming_status not in _TERMINAL_PROTECT_STATUSES
+            ):
+                return existing
         state = self._preserve_volatile_fields(state)
         from app.services.invariant_guard import validate
         from app.runtime.agent_state_model import validate_session_snapshot

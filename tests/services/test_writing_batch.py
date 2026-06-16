@@ -3,6 +3,9 @@
 from app.runtime.state import create_initial_state, merge_state
 from app.services.artifact_tools import handle_write_text_artifact
 from app.services.writing_batch import (
+    apply_batch_continuation_after_tools,
+    batch_chapters_written_this_turn,
+    is_batch_continuation_ready,
     maybe_schedule_batch_continuation,
     prepare_auto_batch_turn,
     stamp_pending_batch_if_incomplete,
@@ -121,6 +124,76 @@ def test_playbook_thin_path_respects_pinned_append_operator(isolated_stores, tes
     assert len(actions) == 1
     assert actions[0].type == "run_tool"
     assert actions[0].params.get("name") == "append_text_artifact"
+
+
+def test_batch_counter_increments_in_graph_checkpoint(isolated_stores, test_settings, monkeypatch):
+    import app.services.artifact_tools as art
+
+    monkeypatch.setattr(art.settings, "ARTIFACTS_PATH", test_settings.ARTIFACTS_PATH)
+    task_id = "batch-counter"
+    ensure_writing_project(task_id, goal="写到第6章")
+    min_chars = int(DEFAULT_WORDS_PER_CHAPTER * CHAPTER_COMPLETION_RATIO)
+    handle_write_text_artifact(
+        {
+            "task_id": task_id,
+            "filename": DEFAULT_BODY_FILE,
+            "content": "第一章。" * (min_chars // 3 + 1) + "\n\n（第1章完）",
+            "writing_operator": "kickoff_body",
+        }
+    )
+
+    state = create_initial_state(
+        task_id=task_id,
+        input_payload={
+            "goal": "写到第6章",
+            "writing_operator": "kickoff_body",
+            "writing_intent": {"enabled": True},
+        },
+    )
+    state["tool_results"] = [
+        {
+            "tool": "write_text_artifact",
+            "status": "ok",
+            "result": {"filename": DEFAULT_BODY_FILE},
+        }
+    ]
+    first = apply_batch_continuation_after_tools(state)
+    assert batch_chapters_written_this_turn(first) == 1
+    assert is_batch_continuation_ready(first)
+
+    first["tool_results"] = list(first.get("tool_results") or []) + [
+        {
+            "tool": "append_text_artifact",
+            "status": "ok",
+            "result": {"filename": DEFAULT_BODY_FILE},
+        }
+    ]
+    second = apply_batch_continuation_after_tools(first)
+    assert batch_chapters_written_this_turn(second) == 2
+
+
+def test_batch_cap_stops_in_turn_scheduling(isolated_stores, test_settings, monkeypatch):
+    import app.services.artifact_tools as art
+
+    monkeypatch.setattr(art.settings, "ARTIFACTS_PATH", test_settings.ARTIFACTS_PATH)
+    task_id = "batch-cap"
+    ensure_writing_project(task_id, goal="写到第10章")
+    state = create_initial_state(
+        task_id=task_id,
+        input_payload={
+            "goal": "写到第10章",
+            "writing_intent": {"enabled": True},
+            "writing_batch_chapters_written": 4,
+        },
+    )
+    state["tool_results"] = [
+        {
+            "tool": "append_text_artifact",
+            "status": "ok",
+            "result": {"filename": DEFAULT_BODY_FILE},
+        }
+    ]
+    assert maybe_schedule_batch_continuation(state) is None
 
 
 def test_stamp_pending_and_prepare_auto_batch_turn(isolated_stores, test_settings, monkeypatch):

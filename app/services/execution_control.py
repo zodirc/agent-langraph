@@ -552,14 +552,28 @@ def handle_control_exception(state: AgentState, exc: BaseException) -> AgentStat
         observe_control_executed(str(state["task_id"]), snapshot_task_control(str(state["task_id"])), started_at_iso=None, event="cancel")
         ctx = ensure_interrupt_context(state)
         ctx["runtime_state"] = "ABORTED"
+        control = snapshot_task_control(str(state["task_id"]))
+        reason = str(
+            (control.reason if control else None)
+            or (ctx.get("last_control_event") or {}).get("reason")
+            or exc
+        )
         status = TaskStatus.CANCELLED.value
-        if isinstance(exc, OperationCancelled):
-            status = TaskStatus.CANCELLED.value
+        final_answer = state.get("final_answer")
+        if "turn_wall_clock_budget" in reason:
+            from app.services.turn_watchdog import timed_out_user_message
+            from app.services.state_store import get_state_store
+
+            status = TaskStatus.TIMED_OUT.value
+            if not str(final_answer or "").strip():
+                stored = get_state_store().load(str(state["task_id"]), read_only=True)
+                final_answer = (stored or {}).get("final_answer") or timed_out_user_message()
         return merge_state(
             state,
             status=status,
+            final_answer=final_answer,
             interrupt_context=ctx,
-            mission_control={"pause_reason": PAUSE_USER_REQUESTED_CANCEL, "reason": str(exc)},
+            mission_control={"pause_reason": PAUSE_USER_REQUESTED_CANCEL, "reason": reason},
             audit_log=append_audit(state, "task_control", "task_cancel_observed", {"detail": str(exc)}),
         )
     if isinstance(exc, StreamInterrupted):
