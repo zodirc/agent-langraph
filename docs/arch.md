@@ -4,13 +4,20 @@
 
 这是一个面向多场景任务执行的 Agent Runtime。
 
-它的核心目标不是让模型直接回答问题，而是把一次任务组织成一条可治理、可恢复、可扩展、可观测的执行链路。系统将模型能力、工具能力、检索能力、记忆能力和场景策略能力组合在一起，形成统一运行时。
+它的核心目标包括将一次任务组织为可治理、可恢复、可扩展、可观测的执行链路。系统将模型能力、工具能力、检索能力、记忆能力和场景策略能力组合在一起，形成统一运行时。
 
 从整体上看，这个项目更适合被理解为：
 
 - 有状态的任务执行系统
 - 多模式 Agent Runtime
 - 支持事件驱动控制、知识检索、工具执行、上下文治理、记忆写回和场景策略的统一平台
+
+这个定位意味着：
+
+- 用户输入不是一次性消息，而是一次 Turn 的起点
+- 一轮执行需要经过控制、规划、执行、验证和交付
+- 检索、记忆、工具与工程交付均属于主链内的正式阶段
+- 系统管理对象是任务闭环及其阶段状态
 
 ---
 
@@ -27,7 +34,16 @@
 - 自检与修正
 - 总结压缩
 
-模型层负责“思考和表达”，但不独立承担系统执行。
+模型层负责认知与表达，但系统执行由运行时控制面统一编排。
+
+在这里，模型并不是直接接管整个流程，而是被放置在多个受控环节中：
+
+- 在入口阶段参与事件理解和意图观测
+- 在规划阶段将自然语言目标转成结构化执行意图
+- 在推理阶段基于证据、记忆与工具结果生成回答或交付说明
+- 在必要时参与修复、压缩或重写
+
+模型在运行时中承担认知引擎角色，负责理解、规划、推理和生成。
 
 ## 2.2 运行时层
 
@@ -43,6 +59,17 @@
 
 运行时层是整个系统的骨架。
 
+如果把系统比作一条生产线，运行时层负责：
+
+- 什么时候开工
+- 本轮应该走哪条支线
+- 哪一步已经完成
+- 哪一步可恢复
+- 哪一步必须审核
+- 哪一步可以结束并交付
+
+因此，这一层决定了系统是否能真正稳定地做复杂任务。
+
 ## 2.3 检索与证据层
 
 这一层负责：
@@ -53,11 +80,11 @@
 - 如何将知识与记忆结果合并
 - 如何将证据送入后续上下文治理
 
-检索链路默认走**混合召回**（语义 + 关键词/BM25）→ **RRF 合并** → **重排与 relevance 准入** → **证据管线**（去重、来源多样性、冲突检测、token 预算、失败归因）。关键词路径在开启 FTS 开关时可走倒排索引（SQLite FTS5），否则为内存 BM25 全表扫描。
+检索链路默认走**混合召回**（语义 + 关键词/BM25）→ **RRF 合并** → **重排与 relevance 准入** → **证据管线**（去重、来源多样性、冲突检测、token 预算、失败归因）。关键词路径在开启 FTS 开关时可走倒排索引，否则为内存 BM25 全表扫描。
 
 查询整理默认含**正则代词消解**；可选开关启用 **LLM 查询改写**与 **multi-query**（通常在准入全过滤、低召回重试时触发）。
 
-证据 token 预算默认独立常量；开启 **`budget_link_context`** 后从上下文治理的 `retrieved_knowledge` 桶 cap 推导，并与 envelope trace 中的**证据保真率**对齐，避免检索层与上下文层双层裁剪打架。
+证据 token 预算默认独立常量；开启 **budget_link_context** 后从上下文治理的 `retrieved_knowledge` 桶 cap 推导，并与 envelope trace 中的**证据保真率**对齐，避免检索层与上下文层双层裁剪打架。
 
 这一层的目标是给规划、推理、工程判断和结果生成提供知识支撑。
 
@@ -74,6 +101,16 @@
 
 这一层解决的是“系统能做什么动作”。
 
+需要特别注意的是，这一层不是简单地“暴露一组函数”。它还负责：
+
+- 执行前的参数校验
+- 作用域限制
+- 风险等级控制
+- 执行结果的结构化沉淀
+- 与回合契约对齐，避免未执行却口头声称已完成
+
+因此工具层是受治理的动作执行面。
+
 ## 2.5 场景策略层
 
 这一层负责根据任务场景对系统行为进行约束和定制。
@@ -87,6 +124,16 @@
 - 输出应满足什么契约
 
 这一层让系统可以在不同业务场景下呈现稳定、一致的行为模式。
+
+场景策略对以下行为产生直接影响：
+
+- 规划阶段是否允许工程动作
+- 工具阶段能否执行写入
+- 上下文阶段哪些桶优先保留
+- 输出阶段以解释为主还是以交付为主
+- 是否允许进入某些高成本路径
+
+因此这一层是统一运行时能承载多模式任务的关键。
 
 ## 2.6 上下文与记忆层
 
@@ -103,14 +150,14 @@
 
 **七桶预算**（system_policy / recent_messages / working_memory / retrieval_evidence / tool_results / file_slices / response_reserve）带 soft(0.85) / hard(0.95) / emergency 阈值，用于任务级占用跟踪；与单次 LLM 调用的 envelope 预算相互关联但不完全等同。
 
-**单次 prompt 预算**（决定「这次模型可见上下文塞多少」）：
+**单次 prompt 预算**（决定“这次模型可见上下文塞多少”）：
 
 | 模式 | 行为 |
 |---|---|
 | `window_adaptive_budget: false`（仓库默认） | `min(purpose 策略 cap, 任务剩余)`，reasoning 等通常 ~24K–36K |
 | `window_adaptive_budget: true`（可灰度，如 Docker 部署） | `clamp(模型窗口 × utilization − 已用 − 输出预留, floor, ceiling)`；桶 cap 可按 budget 等比放大 |
 
-`default_token_budget: 64800` 与 `session_context_window` 主要服务**会话占用条刻度**、七桶初始化默认值、API 可选 `token_budget` 上限；在 adaptive 开启且未显式传任务 `token_budget` 时，**不**作为单次 prompt 注入上限。模型窗口由 catalog / 模型名推断 / `model.context_window` 解析，须与模型真实能力一致（详见 §4.6）。
+`default_token_budget: 64800` 与 `session_context_window` 主要服务**会话占用条刻度**、七桶初始化默认值、API 可选 `token_budget` 上限；在 adaptive 开启且未显式传任务 `token_budget` 时，**不**作为单次 prompt 注入上限。模型窗口由 catalog / 模型名推断 / `model.context_window` 解析，须与模型真实能力一致。
 
 **压缩**：超 cap 时按桶走结构化裁剪；`extractive_enabled` 对知识/工具桶做抽取式句子保留；可选语义压缩（默认关）；压缩产出 **dropped_entities / kept_anchors** 等回执写入 trace。
 
@@ -118,7 +165,7 @@
 
 ## 2.7 控制面与能力面（运行时骨架）
 
-能力分层（§2.1–§2.6）回答「系统能做什么」；**控制面**回答「用户一句话进来后，系统如何统一受理、取消、推进并结束一轮」。
+能力分层用于描述系统可提供的能力集合；**控制面**用于描述用户输入进入后如何完成统一受理、取消、推进与结束。
 
 当前运行时骨架的核心特点是：
 
@@ -154,11 +201,11 @@
 | **Run** | 表达当前一次图执行实例 | 本次执行是否仍存活、是否可被取消、是否已被新输入覆盖 |
 | **Turn** | 表达一次用户输入触发的受理闭环 | 从接收输入到给出结果或停在等用户的完整单位 |
 
-**对外接口**：用户只感知统一消息通道，而不是多套业务动作接口。继续、补充、重试、查询，本质上都是同一入口下的不同事件语义。
+**对外接口**：用户侧感知为统一消息通道。继续、补充、重试、查询等行为在运行时中归入同一入口下的不同事件语义。
 
 **前端展示**：前端只渲染后端投影的执行状态和阶段，不依赖本地猜测来决定当前任务处于什么流程。
 
-**硬取消与幂等控制**：`pause`/`cancel` 对 state store 中已不存在的任务返回 HTTP 200 + `outcome=already_gone`；`DELETE` 幂等并 `purge_task_remains`，写入 tombstone 丢弃迟到写入。`invoke_structured` 在 chunk 边界检查取消位并可硬断流；`graph_runner.turn_wall_clock_budget_sec` 超时将任务标为 `TIMED_OUT` 并推送可读失败事件。写作长回合详见 §5.2。
+**硬取消与幂等控制**：`pause`/`cancel` 对状态存储中已不存在的任务返回成功态并声明该任务已清空；删除动作会清理残留并丢弃迟到写入。长回合存在 wall-clock 总预算，超时后任务会被标记为超时并推送可读失败事件。
 
 ### 2.8 L1 分类与薄执行
 
@@ -176,9 +223,9 @@
 
 **薄执行契约。** 当系统判断当前任务属于轻量问答、寒暄或低复杂度解释时，不必进入高成本长链路，而是走轻量规划和低预算推理通道。薄执行的重点不是写死回复模板，而是在保证真实生成的前提下缩短响应路径。
 
-薄执行**不会**因短句或 `qa_mode` 就剥夺工具能力：若用户意图是润色/修改/改写已有产物（`artifact_edit_intent`），且磁盘上存在可编辑产物，则走产物编辑薄路径或完整 LLM 规划，而非 `qa_direct` 直答。
+薄执行**不会**因短句或问答模式就剥夺工具能力：若用户意图是润色、修改、改写已有产物，且当前会话中存在可编辑产物，则会走产物编辑薄路径或完整规划，而不是直接给出一句口头答复。
 
-**模式契约（mode contract）与能力发放。** 场景模式（`qa_mode` / `manuscript_mode` / `engineering_mode`）主要表达**偏置**（默认交付形态、步数预算、工程隔离），不再把 `qa_mode` 等同于「零工具」。当 `performance.qa_mode_tools_resident` 为真时，`qa_mode` 按 `mode_contracts.qa_mode.allowed_tools` 过滤工具（产物读写、计算器、运行时查询等常驻），仅剥离工程类工具；写意图由规划产出的 Action 驱动，而非入口一次性封死。回滚：`qa_mode_tools_resident: false` 恢复旧版「qa 清空工具集」语义。
+**模式契约与能力发放。** 场景模式主要表达**偏置**（默认交付形态、步数预算、工程隔离），不再把问答模式等同于“零工具”。当常驻工具开关打开时，问答模式保留轻量工具集，只剥离工程类能力；写动作是否发生由规划产出的 Action 决定，而不是入口一次性封死。
 
 ---
 
@@ -244,7 +291,6 @@
 | - 工具边界决策           |
 | - 检索需求判断           |
 +-----+---------+--------+
-      |         |        |
       |         |        |
       |         |        +--------------------------+
       |         |                                   |
@@ -321,7 +367,7 @@
 
 ### 3.2 主流 Agent 视角下的层面划分
 
-如果按照主流 Agent 产品与工程系统常见的划分方式来看，这条链路更适合拆成以下几层：
+如果按照主流 Agent 产品与工程系统常见的划分方式来看，这条链路可拆分为以下几层：
 
 - **任务入口层**：用户交互、事件进入与状态装配
 - **前台反馈与控制层**：首响确认、中断控制、恢复决策
@@ -423,9 +469,19 @@
 
 用户输入进入系统后，会先被转换为当前任务所需的统一输入结构。系统会把当前轮输入与已有状态结合起来，形成当前任务视图。
 
-如果这是一个多轮任务，系统还会合并已有会话信息、历史结果和已知任务状态。这样后续阶段看到的不是裸输入，而是已经被结构化的任务上下文。
+如果这是一个多轮任务，系统还会合并已有会话信息、历史结果和已知任务状态。这样后续阶段接收到的是结构化后的任务上下文。
 
-在这个基础上，系统还会先判断当前输入属于哪类事件，并给后续控制流程打上统一标记。这样进入后续阶段的就不只是消息内容，还包括当前轮的控制语义。
+在这个基础上，系统还会先判断当前输入属于哪类事件，并给后续控制流程打上统一标记。这样进入后续阶段的内容同时包含消息载荷与当前轮控制语义。
+
+输入阶段关注的是当前文本在已有会话与任务状态中的事件语义。
+
+举例：
+
+- 用户说“继续”，如果当前没有活跃任务，它更像一条无上下文短句
+- 用户说“继续”，如果上一轮停在待确认写入，它就是明确恢复指令
+- 用户说“就按这个改”，如果上一轮刚展示了大纲，这通常是对既有产物的补充约束
+
+因此输入阶段承担统一语义受理与状态装配职责。
 
 ---
 
@@ -448,54 +504,18 @@
 
 ### 规划路径分流（预规划 → 规划节点）
 
-规划节点在调用规划 LLM 之前，先完成 **pre_planning**（意图观测、路由审计种子、`target_mode` 与模式契约），再按下列**固定顺序**短路（先命中先返回，后续路径不再执行）：
+规划节点在调用规划模型之前，先完成 **pre_planning**（意图观测、路由审计种子、目标模式与模式契约），再按固定顺序进行短路。
 
-**意图观测（intent_observation）与模式冻结。** L2 分类模型仅在 `auto`、低置信或歧义场景调用；UI 显式模式且结构化 `inferred_kind` 与模式对齐、置信达标时走结构化观测（不调模型），并补齐 `interaction_goal=delivery` 等字段。首轮 `kickoff_novel` 算子命中时亦跳过 L2（`skip_reason=novel_kickoff_thin_path`）。单轮 intent 快照冻结后，`mode_freeze` 阻止 route_audit 二次解析把手稿模式振荡到 `qa_mode`（高置信 + 审计对齐时保留 `target_mode`）；二次 mode resolution 仍尊重显式 UI 模式。L2 调用另有进程内 wall-clock 超时（`MODEL_TIMEOUT_INTENT_OBSERVATION`，默认 ≤20s），超时回退结构化观测。
+常见短路路径包括：
 
 | 顺序 | 路径 | 触发条件 | 产出 | 说明 |
 |---|---|---|---|---|
-| 1 | **素材确认薄路径** | `goal_is_session_source_inquiry`（如「素材读了吗」） | `retrieve(domains=[source])` → `answer`；`thin_execution_profile=session_source_qa` | 跳过高成本规划 LLM；`skip_retrieval=False`；`turn_kind=narrate_only` |
-| 2 | **产物编辑薄路径** | `detect_artifact_edit_intent` 且 `resolve_artifact_edit_filename` 非空 | `read_artifact` → `write_artifact`；`thin_execution_profile=artifact_edit` | 跳过高成本规划 LLM；`pin_mode=False`；`skip_retrieval=True`；实现要点见下节 |
-| 3 | **QA 薄路径** | `qa_mode` 且 `goal_is_conversational_qa` 且非产物编辑、非素材确认 | `answer` only；`thin_execution_profile=qa_direct` | 寒暄/短闲聊，无工具 |
-| 4 | **工程薄路径** | `engineering_mode` 且 `derive_planning_required=false` | `run_code` + 模式契约工具集 | 交付类任务 |
-| 5 | **写作 playbook 薄路径** | `resolve_writing_playbook_operator` 命中且 `project.json` 存在 | 算子固定 `planned_actions`；`thin_execution_profile=writing_playbook` | 跳过高成本规划 LLM；含 `kickoff_novel` / `kickoff_body` 等；`skip_retrieval=False`；细则见 §5.2 |
-| 6 | **完整 LLM 规划** | 以上皆不满足（含多产物润色歧义、已有实质大纲时的开放式起稿） | 结构化 `actions` + `planned_actions` | 规划上下文含 `artifact_manifest`；多文件时由模型具名 `filename`；超时 45s，写作可降级 playbook |
-
-#### 产物编辑薄路径（实现要点）
-
-**意图判定**（`artifact_edit_intent`）：
-
-- **编辑动词**：goal 匹配润色/修改/改写/重写/优化/续写/接着写等（`_EDIT_VERB_RE`），即 `is_artifact_edit_goal`
-- **可执行前提**：会话磁盘上已有产物（`build_artifact_manifest` 非空），二者同时满足才为 `detect_artifact_edit_intent`
-- **开关**：`performance.artifact_edit_fast_path`（默认 true）
-
-**文件名解析**（`resolve_artifact_edit_filename`）：
-
-- 仅 **1 个** 产物 → 直接选中
-- **多个** 产物 → 用 goal 关键词（故事/散文/大纲/正文/章节及 stem 片段）对 manifest 打分；须 **唯一最高分** 才返回文件名，否则返回空
-- 解析失败（多产物歧义）→ 不走薄路径，记 `artifact_edit_ambiguous_multi`，落入完整 LLM 规划
-
-**薄路径产出**（`artifact_edit_thin_actions`）：
-
-- 固定 `read_artifact(filename)` → `write_artifact(filename)`（正文在执行阶段由 gateway 生成，params 可不含 inline content）
-- `writing_intent.enabled=true`，`source=artifact_edit`；`pin_mode=False` 避免 route_audit 后模式被钉死
-
-**完整规划后的结构补丁**（`ensure_artifact_edit_write_action`）：
-
-- 当 plan/goal 含保存语义（编辑动词或 plan 步骤含保存/写回），但 planner 只产出 `read_artifact` → 自动追加 `write_artifact`（`artifact_edit_write_patched`）
-
-**收敛与 read-loop**（`converge` + `artifact_edit_needs_write_after_reads`）：
-
-- 本回合已成功 read、尚无 write/edit/append 落盘，且 plan 仍含保存语义 → `NEXT_REPLAN`，reason=`artifact_edit_needs_write`
-- 与写作轮的 `NEXT_FORCE_WRITE` 分流：产物编辑看 plan 保存语义；手稿模式看 `writing_intent` 与算子契约
-
-**与 QA 薄路径的互斥**：
-
-- `should_skip_qa_planning_llm` 在判定闲聊前 **先排除** `detect_artifact_edit_intent`，避免「润色一下」被 QA 直答
-
-手稿**交付/编辑类短句**（如「写一篇小说」「基于素材写小说」「开始写正文」「写第一章」「改大纲」）经 `goal_is_writing_manuscript_action` 识别，不再被「≤16 字」兜底误判为闲聊；`manuscript_mode` 下也不会因此被切到 `qa_mode`。纯寒暄、进度询问仍为 QA。显式 UI 模式（工程/写作）仅在 `explicit_mode_should_apply` 为真时覆盖 `target_mode`（例如工程 UI 下的「你好」仍走 `qa_mode`）。产物编辑薄路径仍要求会话内**已有磁盘产物**；首轮起稿走 `kickoff_novel` 时要求大纲仍为占位（`outline_needs_kickoff()`）。
-
-多产物时从 goal 关键词（如「故事」「散文」）匹配 `artifact_manifest` 文件名，仍可走 `read_artifact → write_artifact` 薄路径。LLM 规划若 plan 含「保存/写回」但 actions 仅有 read，规划节点自动补 `write_artifact`；连续 3 次只读且尚未写回时：产物编辑场景收敛闸触发 `artifact_edit_needs_write` 再规划写回；`manuscript_mode` 且 `writing_intent` 有效时则发 `NEXT_FORCE_WRITE` 强制写动作（不耗 replan 配额），避免 read-loop 提前 finalize 导致回合 `PAUSED`。`writing_false_promise`（口头承诺即将写入同时索要确认）同样触发 `force_write`；用户 `confirm` 或纯确认话术在存在 `pending_writing_delivery` 时继承上一轮算子与 goal。路由审计对 `writing_intent.enabled` 且计划无写入动作的情形标 `aligned=false`，驱动 replan。
+| 1 | 素材确认薄路径 | 当前目标只是确认素材是否已读、已纳入上下文 | 检索素材域后直接回答 | 跳过高成本规划 |
+| 2 | 产物编辑薄路径 | 目标是修改既有产物且能明确定位到目标文件 | 固定读 → 写动作链 | 跳过完整规划 |
+| 3 | QA 薄路径 | 轻量解释、寒暄、短问答 | 直接进入回答 | 延迟最低 |
+| 4 | 工程薄路径 | 工程交付意图明确且无需复杂拆解 | 直接构造工程动作 | 强调交付 |
+| 5 | 写作 playbook 薄路径 | 明确命中写作算子 | 固定动作剧本 | 避免首轮大延迟 |
+| 6 | 完整规划 | 前述条件都不满足 | 结构化计划对象 | 最通用但成本更高 |
 
 ### 规划阶段的核心作用
 
@@ -565,13 +585,59 @@
 +------------------------+
 ```
 
+### 规划阶段的例子
+
+#### 例 1：简单问答
+
+用户输入：
+
+> 这套系统和普通聊天机器人有什么区别？
+
+规划阶段通常会得出：
+
+- 当前是新的解释型任务
+- 不一定需要检索
+- 不需要工具动作
+- 可以进入轻量回答路径
+- 输出目标是解释性总结而不是文件交付
+
+#### 例 2：对已有产物做修改
+
+用户输入：
+
+> 把刚才那份大纲改得更黑暗一点，主角更冷静。
+
+规划阶段通常会得出：
+
+- 当前不是全新任务，而是对既有产物的补充约束
+- 需要先定位“大纲”这一目标产物
+- 需要执行读 → 写动作
+- 不需要进入工程交付链
+- 成功条件是目标产物实际写回，而不是只给出修改建议
+
+#### 例 3：写作首轮起纲
+
+用户输入：
+
+> 基于我上传的素材，先写一个长篇小说大纲。
+
+规划阶段通常会得出：
+
+- 当前是写作场景
+- 需要使用素材信息
+- 当前轮目标不是直接写正文，而是生成大纲
+- 若满足薄路径条件，可直接走素材卡读取 + 大纲写入剧本
+- 若条件不满足，则进入完整规划
+
+这些例子说明：规划阶段不是“把用户话复述一遍”，而是把目标转为可以执行的系统契约。
+
 ---
 
 ## 4.3 检索阶段
 
 当规划判断当前任务需要知识支撑时，系统进入检索阶段。
 
-这个阶段的目标不是简单“搜文档”，而是把面向人类的问题整理成更适合系统检索的形式，并从知识库与记忆中提取有价值的信息。
+这个阶段负责把用户问题整理成适合系统检索的查询形式，并从知识库与记忆中提取高价值信息。
 
 ### 检索阶段的主要工作
 
@@ -646,7 +712,59 @@
 
 ### 检索的目标
 
-检索的核心目标不是尽量多找，而是尽量找对，并把可用证据组织好。最终真正进入模型上下文的内容，会经过后续上下文治理再次筛选和裁剪。
+检索的核心目标是提升命中准确性，并将可用证据组织为后续阶段可消费的材料。最终真正进入模型上下文的内容，会经过后续上下文治理再次筛选和裁剪。
+
+### 一个“文档切分”的具体例子
+
+假设用户上传了一份约 6000 字的写作规范，内容包含：
+
+- 语言风格要求
+- 叙事视角限制
+- 禁止事项
+- 章节节奏建议
+- 对人物对白的要求
+
+系统不会把整篇文档总是整体塞给模型，而通常会先做切分。一个直观例子如下：
+
+原始文档可能被切成 6 个片段：
+
+| 片段 | 字数 | 主要内容 |
+|---|---:|---|
+| 片段 1 | 900 | 总体风格与叙述语气 |
+| 片段 2 | 950 | 视角规则与时间顺序 |
+| 片段 3 | 880 | 人物设定约束 |
+| 片段 4 | 920 | 冲突节奏与高潮安排 |
+| 片段 5 | 860 | 禁止套路与禁用措辞 |
+| 片段 6 | 780 | 章节长度和收束方式 |
+
+当用户问的是：
+
+> 写第一章时人物对白要注意什么？
+
+真正被命中的往往不是整篇文档，而是：
+
+- 与“人物”“对白”最相关的 1~2 个片段
+- 可能再补 1 个关于风格的相邻片段
+- 然后这些命中结果再进入证据组织与预算裁剪
+
+这使得系统能把“长文档”转为“局部高相关证据”。
+
+### 一个“素材检索”的具体例子
+
+假设会话中已有一份长篇原始素材，共 8 万字。
+
+如果当前回合目标是：
+
+> 请写第三章主角第一次见到反派的桥段。
+
+系统不适合把 8 万字原文整段注入。更合理的方式是：
+
+1. 先用“第三章、主角、反派、初次见面”等意图整理查询
+2. 在素材域内召回若干相关片段
+3. 保留最相关的 2~4 段
+4. 再与素材卡、章节目标、大纲信息共同进入写作上下文
+
+因此“素材检索”是对长原文做局部证据提取，而不是全量搬运。
 
 ### 检索可选增强（配置开关，默认关）
 
@@ -658,9 +776,9 @@
 | `retrieval.query_rewrite_llm` | 准入全过滤或低召回时，LLM 改写查询并重试召回 |
 | `retrieval.multi_query_enabled` | 规则/LLM 扩展多条子查询合并召回 |
 | `retrieval.budget_link_context` | 证据 token 预算从上下文 `retrieved_knowledge` 桶 cap 推导 |
-| `rag.rerank_backend: cross_encoder \| cohere` | 升级重排（默认仍为 `lexical`） |
+| `rag.rerank_backend: cross_encoder \| cohere` | 升级重排 |
 
-证据管线在 envelope 组装时可写入 **evidence_fidelity**（检索层保留的高分证据 vs 最终进入 prompt 的比例），供观测与 CI 回归。RAG 链路细节见 `docs/rag_skills.md` §4。
+证据管线在 envelope 组装时可写入 **evidence_fidelity**（检索层保留的高分证据 vs 最终进入 prompt 的比例），供观测与回归。
 
 ---
 
@@ -668,7 +786,7 @@
 
 当任务需要动作能力时，系统进入工具执行阶段。
 
-这一阶段负责让 Agent 从“理解任务”转入“执行动作”。
+这一阶段负责将任务意图转换为受控动作执行。
 
 ### 工具执行阶段的职责
 
@@ -728,13 +846,49 @@
 +------------------------+
 ```
 
-**回合诚实性（turn_facts / turn_contract）。** 工具结果写入 `turn_facts` 后，推理必须以之为准，不得「口头承诺未执行的动作」：
+### 工具执行阶段的例子
 
-- `edit_artifact`：`replacements ≥ 1` 才记 `edit_applied`；否则收敛闸触发 replan（`contract_edit_not_applied`）。
-- `write_artifact`（覆盖写回）：若本回合先 `read` 后 `write` 且字节数未变，记 `write_verified=false`，契约校验报 `contract_write_unchanged`。
-- **output_guard 忠实度**：按 `answer_mode` 与回合契约判定是否跑 RAG 词面校验——写作交付轮无落盘、非事实问答类 `answer_mode` 时跳过或降级为 warning；硬 REJECT 保留给伪造引用与事实问答无证据。不再依赖「证据域仅 writing/common」或中文短语正则作为唯一闸门。
+#### 例 1：对单个产物做润色
 
-推理上下文（`reasoning_context_from_state`）与规划上下文均注入 **`artifact_manifest`**（当前任务磁盘产物清单），以支持「这篇 / 刚才那个文件」类指代。
+目标：
+
+> 把当前大纲改得更悬疑。
+
+典型动作可能是：
+
+1. 读取当前大纲
+2. 根据最新目标生成改写内容
+3. 写回大纲
+4. 记录“本轮已实际写回”这一事实
+
+如果只发生了“读取”而未发生“写回”，系统不应在结果中声称“已经修改完成”。
+
+#### 例 2：先查再算再回答
+
+目标：
+
+> 帮我对比两个方案的成本，并给个建议。
+
+典型动作可能是：
+
+1. 读取两份已有方案说明
+2. 提取关键字段
+3. 调用计算能力做成本汇总
+4. 将结构化结果交给后续推理阶段生成最终建议
+
+这里工具阶段不负责“给结论”，而负责把可依赖的事实准备好。
+
+### 回合诚实性
+
+工具结果写入事实层后，推理必须以事实为准，不得“口头承诺未执行的动作”。
+
+例如：
+
+- 只读未写，不能说“我已经帮你改好了”
+- 写入失败，不能说“结果已保存”
+- 工具执行返回空结果，不能伪装成已命中信息
+
+这类约束的意义在于：系统最终交付的是“真实完成了什么”，而不是“模型以为完成了什么”。
 
 ---
 
@@ -742,7 +896,7 @@
 
 当任务属于工程交付、代码生成、受限修改或需要校验的执行时，系统进入工程执行阶段。
 
-这个阶段与普通工具调用不同，它更强调“交付结果是否成立”。
+这个阶段强调交付结果的可验证性与可修复性。
 
 ### 工程执行阶段的职责
 
@@ -810,17 +964,33 @@
 +------------------------+
 ```
 
+### 工程执行阶段的例子
+
+假设用户说：
+
+> 生成一个简单前端页面，并确保语法可通过检查。
+
+工程执行阶段可能会：
+
+1. 先明确目标产物结构
+2. 生成页面文件与脚本文件
+3. 对核心入口做语法检查
+4. 若检查失败，进入有限修复循环
+5. 只有在校验通过时，才将其视为有效交付
+
+因此工程执行强调的是“可验证交付”，不是“模型写出了一段看起来像代码的文本”。
+
 ---
 
 ## 4.6 上下文治理阶段
 
-检索、工具与工程执行完成后，系统在进入推理生成前会经过**上下文治理阶段**。该阶段不替代检索或记忆，而是决定「哪些材料以何种优先级进入模型可见上下文」。
+检索、工具与工程执行完成后，系统在进入推理生成前会经过**上下文治理阶段**。该阶段不替代检索或记忆，而是决定“哪些材料以何种优先级进入模型可见上下文”。
 
 ### 上下文治理阶段的主要工作
 
 - 按当前 **purpose** 加载上下文策略（桶 cap、必保留桶、可丢弃桶、降级顺序）
 - 从会话、记忆、检索证据、工具结果、文件片段等多源**收集 ContextItem**
-- 解析本次 LLM 调用的 **prompt token 预算**（固定 purpose cap 或窗口自适应，见 §2.6）
+- 解析本次模型调用的 **prompt token 预算**
 - **组装 envelope**：分桶分配 → 超 cap 压缩 → 丢弃 → 全局降级
 - 产出 **composition_view**、桶 trace、**compression_receipts**、**evidence_fidelity** 等可观测字段
 
@@ -867,60 +1037,93 @@
 +------------------------+
 ```
 
-### 预算与配置要点
+### 七桶在实际中的用法
 
-**配置位置**：`config.yaml` → `context_governance`；Docker 部署可用 `config.docker.yaml` 覆盖。
+虽然系统内部会维护更细的上下文项，但理解七桶最有效的方式，是把它看成“有限预算下的不同材料仓位”。
+
+一个直观例子：假设某次 reasoning 回合可用预算约 12000 tokens，那么实际可能近似分配为：
+
+| 桶 | 可能放入什么 | 典型作用 |
+|---|---|---|
+| system_policy | 系统规则、模式契约、输出要求 | 保证模型知道本轮必须遵守什么 |
+| recent_messages | 最近几轮用户与系统对话 | 保持当前会话连续性 |
+| working_memory | 本轮目标、已完成步骤、待完成事项 | 保证模型记得“正在干什么” |
+| retrieval_evidence | 检索命中的知识片段、素材片段 | 提供外部证据与背景 |
+| tool_results | 读文件结果、计算结果、执行回执 | 提供真实动作结果 |
+| file_slices | 当前要编辑文件的关键片段 | 支撑精确修改与续写 |
+| response_reserve | 预留给模型输出 | 防止 prompt 塞满导致无法生成 |
+
+真实使用中并不是每个桶都平均占用。例如：
+
+- 纯问答回合可能 retrieval_evidence 更重
+- 写作续写回合可能 file_slices 与 working_memory 更重
+- 工程校验回合可能 tool_results 更重
+
+所以“七桶”不是七份固定配额，而是一组受 purpose 调整的治理框架。
+
+### 一个实际“桶使用”的例子
+
+假设当前回合目标是：
+
+> 基于素材写第一章，要求保持第三人称、节奏慢热，并沿用刚才的大纲。
+
+这时可能发生的上下文注入方式是：
+
+- **system_policy**：写作模式要求、不得虚构已写入结果、输出契约
+- **recent_messages**：用户刚提出“第三人称、慢热”的新增要求
+- **working_memory**：当前处于“首章起稿”，目标是正文而不是大纲
+- **retrieval_evidence**：写作规范命中片段、原素材补充片段
+- **tool_results**：刚读取到的大纲摘要、素材卡提取结果
+- **file_slices**：当前大纲的关键章节片段
+- **response_reserve**：预留给生成正文的空间
+
+最终模型看到的不是一个大杂烩，而是经过排序、裁剪、压缩后的组合体。
+
+### 预算与配置要点
 
 | 配置项 | 默认（仓库） | 作用 |
 |---|---|---|
 | `window_adaptive_budget` | `false` | 关：purpose 固定 cap；开：按模型窗口推导 prompt 预算 |
-| `window_utilization` | `0.6` | 窗口可用比例（预留输出与安全边际） |
+| `window_utilization` | `0.6` | 窗口可用比例 |
 | `prompt_budget_floor` / `prompt_budget_ceiling` | `12000` / `160000` | 单次 prompt 预算上下限 |
 | `bucket_caps_scale_with_budget` | `true` | adaptive 开时按 budget 等比放大各桶 cap |
-| `default_token_budget` | `64800` | 七桶初始化、会话占用条、API `token_budget` 上限；**非** adaptive 下单次 prompt 上限 |
+| `default_token_budget` | `64800` | 七桶初始化、会话占用条、API `token_budget` 上限 |
 
 **窗口自适应公式**：
 
-```
+```text
 budget = clamp(window × window_utilization − tokens_used − output_reserve, floor, ceiling)
 ```
 
-仅当请求显式传入 `token_budget`（state 中 `token_limit > 0`）时，再执行 `budget = min(budget, token_limit − tokens_used)`。典型路径未传 `token_budget` 时，adaptive 结果**不受 64800 封顶**，只受 ceiling 与窗口公式约束。
+一个直观数值例子：
 
-**数值示例**（200K 窗口、`utilization=0.6`、reasoning、输出预留约 8192、尚未消耗）：
+- 模型窗口：200000
+- 利用率：0.6
+- 输出预留：8192
+- 当前尚未消耗明显预算
 
+那么可用 prompt 预算大约为：
+
+```text
+budget ≈ 200000 × 0.6 − 8192 ≈ 111808
 ```
-budget ≈ clamp(200000 × 0.6 − 8192, 12000, 160000) ≈ 111808
-```
 
-这不是「整窗 200K 全给 prompt」；总窗口仍由 prompt、输出与历史消耗共享。
+这意味着：
 
-**模型窗口 `window` 解析优先级**：
+- 系统不会把整窗都塞满
+- 仍会为输出留空间
+- 再由七桶治理决定这 11 万左右预算如何分配
 
-1. 模型 catalog 的 `context_window_tokens`
-2. 按 `MODEL_NAME` 推断（如含 `opus` / `claude-4` → 200000；`gpt-4` → 128000）
-3. `model.context_window`
-4. 均无时 → 128000
+### 压缩与降级
 
-操作原则：模型确支持 200K 且 catalog/名称可识别时，**不必**强行写死配置；模型**不支持** 200K 时**不要**虚配 `200000`，否则 budget 偏大可能导致 API 拒收或截断；自定义 endpoint/别名模型应在 catalog 或 `model.context_window` 写明**真实**窗口。
+当某些桶超出上限时，系统不会直接把全部内容丢弃，而是优先：
 
-**64800 在 adaptive 开启后仍用于**：会话占用条分母、七桶 `total_budget` 初始化、API 校验、预算解析异常时的 gateway 回退；purpose 策略中的 `default_token_budget`（如 reasoning 32000）仅作桶 cap **缩放比例参考**，不再直接 cap 单次 prompt。
+1. 做结构化裁剪
+2. 对知识/工具类内容做抽取式句子保留
+3. 在必要时做更激进的降级
+4. 记录压缩回执，便于回溯“删掉了什么、保留了什么”
 
-**压缩相关**（`context_compress`）：`extractive_enabled` 默认开（知识/工具桶抽取式句子保留）；`semantic_enabled` 默认关；压缩回执写入 `compression_receipts` trace。
-
-**回滚**：关 `window_adaptive_budget` 即恢复 purpose 固定 cap；其余 RAG/检索开关（FTS、LLM 改写、`budget_link_context` 等）与 P0-1 独立，可逐项关闭。
-
-### 灰度与 CI 回归
-
-长上下文与 RAG 增强均走配置开关，**默认不改变现有行为**。灰度时建议观察 envelope trace 中的 `token_budget_total`、延迟与 token 成本，再考虑改仓库默认值。
-
-| 回归门 | 覆盖 |
-|---|---|
-| `tests/eval/test_long_context_governance.py` | 窗口自适应预算档、NIH 类用例、预算-保真 |
-| `tests/eval/test_context_governance_dod.py` | 32k/64k/128k/200k 分档与 adaptive 利用率 |
-| `tests/eval/test_context_compress_gate.py` | 压缩比与实体保留 |
-| `tests/eval/test_evidence_conflict_gate.py` | 冲突证据标记 |
-| `tests/eval/open_rag` + `eval_thresholds` | RAG recall/MRR/faithfulness 基线不回退 |
+因此上下文治理的目标不是“少给模型内容”，而是“把最值得给模型的内容保住”。
 
 ---
 
@@ -928,47 +1131,42 @@ budget ≈ clamp(200000 × 0.6 − 8192, 12000, 160000) ≈ 111808
 
 当前项目不是为每个任务类型单独维护一套完全不同的用户入口，而是在统一运行时下表现出不同执行形态。
 
-## 5.1 单轮问答模式（`qa_mode`）
+## 5.1 单轮问答模式
 
-适合解释、说明、分析、知识问答类任务；**也可在用户对已有产物提出改写时执行 read/write 工具链**（与 Cursor Agent 对齐：能力常驻、由 Action 决定是否动手）。
+适合解释、说明、分析、知识问答类任务；也可在用户对已有产物提出改写时执行读写工具链。
 
 特点：
 
 - 事件进入后先做首响确认
-- 纯寒暄/能力询问 → QA 薄路径（无工具、低延迟）
-- 产物改写意图 + 已有文件 → 产物编辑薄路径或 LLM 规划（有工具）
-- 检索可选；`allowed_tools` 含产物读写与轻量工具，不含工程目录操作
-- 推理为主；`turn_facts` 约束总结不得虚构未发生的写回
+- 纯寒暄或能力询问时可走薄路径
+- 产物改写意图成立时可使用轻量读写动作
+- 检索可选
+- 更强调解释性结果而不是工程交付
+- 推理必须服从本轮事实，不得虚构已完成动作
 
-配置：`config.yaml` → `mode_contracts.qa_mode`；开关 `performance.qa_mode_tools_resident` / `artifact_edit_fast_path`。
+## 5.2 文稿模式
 
-## 5.2 文稿模式（`manuscript_mode`）
-
-适合长文创作、续写、大纲与正文等多轮写作任务（`mode_routing.by_intent.manuscript`）。
+适合长文创作、续写、大纲与正文等多轮写作任务。
 
 特点：
 
-- 独立 `mode_contracts.manuscript_mode`（产物读写工具）；执行路径为 `reasoning`（`max_steps` 不对写作回合硬限制，真正约束来自写预算与收敛契约）
-- **写预算**：`max_write_actions`（默认 4）限制每回合写副作用次数；读动作不计入
-- **写作算子化**：规划前 `writing_intent_classifier` 分类，`writing_playbook` 绑定固定 playbook（`writing_intent.enabled` 在 unified-actions 路径保持开启）
+- 使用独立的写作模式契约
+- 更重视素材、大纲、正文之间的关系
+- 强调写预算与写回契约
+- 可以在多轮里持续推进一个写作项目
+- 支持写作算子化，以降低首轮规划延迟
 
-  | 算子 | 典型意图 | Playbook |
-  |---|---|---|
-  | `kickoff_novel` | 首轮开写 / 基于素材写小说（大纲仍为占位） | `read_artifact(素材卡)` → `write_artifact(大纲)` |
-  | `kickoff_body` | 大纲完成后开写正文 / 写第一章 | `read_artifact(大纲)` → `write_artifact(正文)` |
-  | `replot` | 改大纲、调剧情 | `read_artifact(大纲)` → `write_artifact(大纲)` |
-  | `append` | 续写下一章 | `append_text_artifact(正文)` |
-  | `rewrite` / `polish` / `character` | 全文重写、润色、改人物 | `read` → `write_artifact(正文)` |
+### 写作项目契约
 
-- **pending 与确认**：模型因缺素材等做**真实追问**时记录 `pending_writing_delivery`；用户 `confirm` 或「确认/好的」继承算子与 goal 并 `force_write`，避免空转确认轮
-- **回合契约**：交付轮须落盘或真实追问收尾；读满 3 次仍无写计划 → `NEXT_FORCE_WRITE`（见 §4.4）；`replot` 仅约束大纲文件，不强制写正文
-- **写作生成（LLM gateway）**：Thinking 模式不支持 `tool_choice` 时自动改 `json_text`（`{"content":...}`）输出；占位符（含「推理模块」「根据大纲生成」等）不直接落盘，强制走 gateway 重新生成
-- **RAG 注入**：写作回合默认开检索（域 `{writing, common}`，会话素材可为 `source`）；`writing_context` 组装 guidelines / session excerpt；写回可记录 `applied_guidelines` / `applied_sources` 归因（详见 `docs/rag_skills.md` §4.1、§5.2）
-- 工程工具被契约过滤；与 `qa_mode` 共用 Action 词汇表（`read_artifact` / `write_artifact` / `edit_artifact`）
+长文写作不是零散文件堆叠，而是围绕一个稳定的写作项目结构推进。这个结构的核心目的是：
 
-### 写作项目契约（`writing_project`）
+- 明确哪个文件是大纲
+- 明确哪个文件是素材卡
+- 明确正文如何分章
+- 明确下一章编号与章节目标字数
+- 避免系统把大纲误当正文、把正文误当素材
 
-长文写作在产物目录内维护权威清单 `data/artifacts/{task_id}/project.json`，固定布局，避免「仅有大纲文件时把大纲当正文」等启发式歧义。
+一个抽象例子如下：
 
 ```json
 {
@@ -983,65 +1181,125 @@ budget ≈ clamp(200000 × 0.6 − 8192, 12000, 160000) ≈ 111808
 }
 ```
 
-- **首次进入 `manuscript_mode`**：`apply_manuscript_mode_contract` 调用 `ensure_writing_project()`，创建 `大纲.md`（占位）、`素材卡.md`、`正文/` 与 `project.json`（纯本地操作）。
-- **文件名解析**：`resolve_body_target` / `resolve_outline_target` 以 `project.json` 为准；`append` / `kickoff_body` 写入 `正文/第{n:03d}章.md`；`replot` 仅写 `outline` 字段；无 manifest 的旧会话走 `migrate_legacy_layout()` 惰性迁移。
-- **正文写保护**：`artifact_tools` 在 `writing_operator ∈ {append, kickoff_body}` 且目标路径含 `大纲`/`outline` 时拒绝写入（`body_write_targets_outline`），由 playbook 按 `chapter_pattern` 重试。
-- **大纲占位判定**：`outline_needs_kickoff()` 区分自动占位大纲与已有实质内容（非标题正文 ≥80 字或全文 ≥400 字），供 `kickoff_novel` 算子命中与否使用。
+它的意义不是格式本身，而是让运行时始终知道：
+
+- 当前写作对象是谁
+- 下一次 append 应落到哪里
+- 哪个文件只能被改大纲、哪个文件只能被写正文
 
 ### 素材卡（Story Bible）
 
-用户上传 `domain=source` 的改编素材后，后台异步蒸馏（`purpose=summarization`）为 `素材卡.md`（≤2500 字，含改编要求/人物/情节点/世界观等章节）；UI 轮询 `GET /knowledge/sessions/{id}/story-bible` 展示「素材卡已生成（N 字）」。
+素材卡是写作链路中的关键中介层。它的作用不是替代原始素材，而是把长素材中的稳定约束先抽取出来，形成更高确定性的写作输入。
 
-- **确定性注入**：`artifact_content.generate_artifact_content()` 直接读取 `素材卡.md` 全文写入写作 prompt（不经向量检索）；素材原文超长（>5 万字）时，以当前章节/大纲为 query 对 `source` 域做 RAG 补充。
-- **可观测性**：`final_answer` 尾部输出「本轮素材使用：素材卡 N 字 + 原文检索 M 段」；检索 0 命中但库内存在 `source` 文档时记 `source_recall_miss` 指标。
+一个典型素材卡可能包含：
 
-硬约束（改编要求等）要求 100% 进 prompt，故以文件注入为主、RAG 为辅。RAG 与写作 payload 组装细节见 `docs/rag_skills.md` §5.2。
+- 改编要求
+- 世界观
+- 主要角色
+- 关键关系
+- 核心冲突
+- 已确定的情节边界
+- 禁止违背的设定
 
-### 算子分类与薄路径（`kickoff_novel` 等）
+#### 素材卡切分与蒸馏示例
 
-`writing_intent_classifier` 用正则将 goal 映射为 7 类算子；`planning_node` 在调用规划 LLM **之前**（§4.2 写作 playbook 薄路径）若算子命中且 `project.json` 存在，则 `apply_writing_playbook` 产出固定 `planned_actions`（`audit_action=writing_playbook_thin`，`skip_retrieval=False`）。未命中时才走全量规划 LLM；规划结果仍可由 `classify_and_apply_playbook` 在后段归一化。
+假设用户上传一份 4 万字素材，包含：
 
-**`kickoff_novel`（首轮起纲）** — 解决「基于现有素材写一篇小说」等开放式首轮目标卡在规划 LLM 的问题：
+- 故事背景 8000 字
+- 主角人物小传 6000 字
+- 反派与配角设定 5000 字
+- 主线剧情梗概 12000 字
+- 风格与改编要求 9000 字
 
-| 项 | 说明 |
-|---|---|
-| 典型话术 | 「写一篇小说」「基于素材写小说」「我们来写个小说」等 |
-| 命中条件 | 手稿路由上下文（`manuscript_mode` 或 `route_audit.inferred_kind` 为 manuscript/writing）且 `outline_needs_kickoff()` 为真 |
-| Playbook | `read_artifact(素材卡.md)` → `write_artifact(大纲.md)` |
-| 意图观测 | turn1 命中时跳过 L2（`skip_reason=novel_kickoff_thin_path`） |
-| 不命中时 | 大纲已有实质内容、或非手稿上下文 → 落入全量规划 LLM |
+运行时不会在每轮生成时都原样灌入 4 万字。更合理的做法是：
 
-算子分类按固定顺序试探：`character` → `kickoff_novel` → `kickoff_body` → `replot` → `append` → `rewrite` → `polish`。`kickoff_novel` 额外要求手稿路由上下文且 `outline_needs_kickoff()`；故「写第一章」「开始写正文」通常只命中 `kickoff_body`，「写一篇小说」在占位大纲时命中 `kickoff_novel`。
+1. 先蒸馏成一份较短的素材卡
+2. 素材卡中保留高确定性约束，例如：
+   - 主角年龄、身份、核心性格
+   - 反派目标与行为禁区
+   - 故事必须保留的情节点
+   - 叙事风格和改编限制
+3. 在具体写某一章时，再用章节目标去检索原始素材的局部片段补充细节
 
-mission 活跃且 `project.json` 存在且算子已分类时，意图观测亦走 `writing_playbook_prune` 跳过 L2。
+可以把它理解为：
 
-### 规划延迟、反思与重规划
+- **素材卡**负责“硬约束、总设定、稳定共识”
+- **原文检索**负责“局部细节、章节相关信息、长文补充”
 
-- **规划 / 反思超时**：`config.yaml` → `model.timeout_by_purpose` 中 `planning: 45`、`reflection: 30`（秒）；规划超时对写作算子降级为 playbook，否则 `answer` 单动作兜底。
-- **重规划预算**：`planning_revision_count` 全轮共享，上限 1；`route_audit` 与 `plan_validator` 不再叠乘独立计数；超限 `degrade_to_writing_playbook_state` 继续执行而非失败。
-- **写作轮反思**：`writing_intent.enabled` 时 `reflection_node` 走结构化检查（目标文件、字数、大纲是否被误改），替代 reflection LLM；失败时给出确定性修正而非整条链 `retry_planning`。
+这样做的好处是：
 
-### 章节字数契约
+- 稳定约束每轮都能确定进入 prompt
+- 超长素材不用每轮全量塞入
+- 局部细节仍能按章节需要动态召回
 
-- `project.json.words_per_chapter` 默认 3000，可从 goal 解析（如「每章五千字」）。
-- 生成 prompt 注入本章目标字数与当前已写字数；章末 `len(text)` &lt; 70% 目标时**同轮**最多续写 2 次并追加同一章文件；未达标则 `current_chapter_incomplete` 保持，`append` 续当前章而非开新章。
-- 回复尾部可提示「本章 X 字，低于目标 Y 字」。
+### 写作时运行时如何注入材料
 
-### 写作回合延迟预算（参考）
+在一个典型写作回合中，运行时往往不会只注入一种材料，而是把多种来源拼成一个受治理的写作 envelope。一个直观例子：
 
-| 场景 | 目标 P50 | 目标 P95 | LLM 调用数 |
-|---|---|---|---|
-| 闲聊 / QA 薄路径 | &lt;2s | &lt;5s | 0~1 |
-| 素材问答 | &lt;6s | &lt;12s | 1 |
-| 首轮起纲（`kickoff_novel`） | &lt;15s | &lt;60s | 1（生成写大纲） |
-| 续写一章（~3000 字） | &lt;60s | &lt;120s | 1（生成）+0~1（观测） |
-| 首轮起稿（薄路径未命中） | &lt;90s | &lt;150s | 2（规划 45s 封顶 + 生成） |
-| 取消生效 | &lt;1s | &lt;3s | — |
-| 单轮绝对上限（看门狗） | — | 480s | — |
+当前目标：
 
-验收用例：`tests/services/test_kickoff_novel.py`（起纲薄路径）、`tests/services/test_writing_overhaul_acceptance.py`（素材注入、取消、删除幂等等）。
+> 写第一章，主角在雨夜第一次抵达旧城。
 
-配置汇总：`mode_contracts.manuscript_mode`、`intent_observation`、`model.timeout_by_purpose`、`graph_runner.turn_wall_clock_budget_sec`（默认 480，超时 `TIMED_OUT`）。
+此时可能注入的内容是：
+
+1. **系统策略**
+   - 本轮是写作交付，不是说明文
+   - 不得伪造已写入状态
+   - 输出要与当前目标一致
+
+2. **写作工作记忆**
+   - 当前章节号
+   - 本轮目标字数
+   - 当前处于起稿而不是续写
+   - 已确认使用第三人称、慢节奏
+
+3. **素材卡摘要**
+   - 主角性格
+   - 世界观
+   - 必须遵守的改编要求
+
+4. **大纲片段**
+   - 第一章的目标事件
+   - 本章应完成的推进点
+
+5. **素材检索片段**
+   - 与“旧城”“雨夜”“第一次到来”最相关的原始素材片段
+
+6. **输出预留**
+   - 留出足够篇幅让模型生成章节正文
+
+这说明写作生成不是“把素材卡丢给模型”，而是由运行时对多源材料做组合、裁剪与注入。
+
+### 写作算子与薄路径
+
+为了降低首轮延迟并减少不必要的完整规划，写作场景会把一些高频意图抽象成算子。例如：
+
+| 算子 | 典型目标 | 典型动作 |
+|---|---|---|
+| 起纲 | 先写出整体大纲 | 读素材卡 → 写大纲 |
+| 起稿 | 根据大纲开始正文 | 读大纲 → 写正文 |
+| 续写 | 接着写下一章或下一段 | 追加正文 |
+| 重写 | 重新组织已有正文 | 读正文 → 写正文 |
+| 润色 | 在保持剧情前提下优化表达 | 读正文 → 写正文 |
+| 改大纲 | 调整剧情骨架 | 读大纲 → 写大纲 |
+
+算子化的意义在于：
+
+- 减少不必要的完整规划成本
+- 让高频写作动作更稳定
+- 让系统更容易保证写回契约
+
+### 章节字数契约示例
+
+假设设定为每章目标 3000 字，而当前章节只生成了 1700 字。
+
+在这种情况下，运行时不一定直接视为“本章完成”，而可能：
+
+- 标记当前章仍未完成
+- 允许同轮或下一轮继续补写同一章
+- 暂不推进到下一章编号
+
+该类契约用于以章节完成度而非模型停止位置作为交付判定依据。
 
 ## 5.3 工程执行模式
 
@@ -1127,10 +1385,35 @@ mission 活跃且 `project.json` 存在且算子已分类时，意图观测亦�
 
 执行链路中的阶段状态、动作结果、验证结论和最终输出都可以被记录与追踪。
 
+### 6.6 可治理
+
+系统不是只看“模型输出了什么”，而是持续检查：
+
+- 有没有真正执行动作
+- 证据是否足够
+- 上下文是否超过预算
+- 当前模式是否允许该路径
+- 最终结果是否符合交付契约
+
+这使它天然适合复杂任务，而不只是开放式闲聊。
+
 ---
 
 ## 7. 总结
 
-当前项目的本质，不是一个单纯“问一句答一句”的聊天系统，而是一个统一的 Agent Runtime。
+当前项目是一个统一的 Agent Runtime。
 
-它通过事件分类、前台反馈、中断控制、增量规划、检索（混合召回与证据管线）、工具执行、工程交付、上下文治理（统一 envelope、可选窗口自适应预算与压缩回执）、推理生成、验证检查、输出收束和记忆沉淀，把用户任务组织成完整、稳定、可治理的执行闭环。上下文治理预算语义、可选 RAG 开关与 CI 回归见 §2.6、§4.3、§4.6。
+它通过事件分类、前台反馈、中断控制、增量规划、检索（混合召回与证据管线）、工具执行、工程交付、上下文治理（统一 envelope、可选窗口自适应预算与压缩回执）、推理生成、验证检查、输出收束和记忆沉淀，把用户任务组织成完整、稳定、可治理的执行闭环。
+
+从工程视角看，系统的核心价值在于已经将以下能力系统化：
+
+- 统一事件受理
+- 多模式执行
+- 检索与证据治理
+- 写作与工程交付
+- 会话连续性与长期记忆
+- 上下文预算控制
+- 真实动作约束
+- 中断、恢复、审核与流式交付
+
+该系统围绕**任务闭环**进行设计，回复生成也纳入统一运行时流程。
